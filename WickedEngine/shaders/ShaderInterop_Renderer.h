@@ -699,6 +699,8 @@ struct ShaderMeshInstancePointer
 		data |= (camera_index & 0xF) << 24u;
 		data |= (uint(dither * 15.0f) & 0xF) << 28u;
 	}
+
+#ifndef __cplusplus
 	uint GetInstanceIndex()
 	{
 		return data & 0xFFFFFF;
@@ -707,10 +709,11 @@ struct ShaderMeshInstancePointer
 	{
 		return (data >> 24u) & 0xF;
 	}
-	float GetDither()
+	half GetDither()
 	{
-		return float((data >> 28u) & 0xF) / 15.0f;
+		return half((data >> 28u) & 0xF) / 15.0;
 	}
+#endif // __cplusplus
 };
 
 struct ObjectPushConstants
@@ -742,11 +745,11 @@ struct alignas(16) ShaderEntity
 
 #ifndef __cplusplus
 	// Shader-side:
-	inline uint GetType()
+	inline min16uint GetType()
 	{
 		return type8_flags8_range16 & 0xFF;
 	}
-	inline uint GetFlags()
+	inline min16uint GetFlags()
 	{
 		return (type8_flags8_range16 >> 8u) & 0xFF;
 	}
@@ -774,7 +777,7 @@ struct alignas(16) ShaderEntity
 	{
 		return (half)f16tof32(direction16_coneAngleCos16.y >> 16u);
 	}
-	inline uint GetShadowCascadeCount()
+	inline min16uint GetShadowCascadeCount()
 	{
 		return direction16_coneAngleCos16.y >> 16u;
 	}
@@ -803,11 +806,11 @@ struct alignas(16) ShaderEntity
 		retVal.w = (half)f16tof32(color.y >> 16u);
 		return retVal;
 	}
-	inline uint GetMatrixIndex()
+	inline min16uint GetMatrixIndex()
 	{
 		return indices & 0xFFFF;
 	}
-	inline uint GetTextureIndex()
+	inline min16uint GetTextureIndex()
 	{
 		return indices >> 16u;
 	}
@@ -926,6 +929,32 @@ struct alignas(16) ShaderFrustum
 #endif // __cplusplus
 };
 
+struct alignas(16) ShaderFrustumCorners
+{
+	// topleft, topright, bottomleft, bottomright
+	float4 cornersNEAR[4];
+	float4 cornersFAR[4];
+
+#ifndef __cplusplus
+	inline float3 screen_to_nearplane(float2 uv)
+	{
+		float3 posTOP = lerp(cornersNEAR[0], cornersNEAR[1], uv.x);
+		float3 posBOTTOM = lerp(cornersNEAR[2], cornersNEAR[3], uv.x);
+		return lerp(posTOP, posBOTTOM, uv.y);
+	}
+	inline float3 screen_to_farplane(float2 uv)
+	{
+		float3 posTOP = lerp(cornersFAR[0], cornersFAR[1], uv.x);
+		float3 posBOTTOM = lerp(cornersFAR[2], cornersFAR[3], uv.x);
+		return lerp(posTOP, posBOTTOM, uv.y);
+	}
+	inline float3 screen_to_world(float2 uv, float lineardepthNormalized)
+	{
+		return lerp(screen_to_nearplane(uv), screen_to_farplane(uv), lineardepthNormalized);
+	}
+#endif // __cplusplus
+};
+
 enum SHADER_ENTITY_TYPE
 {
 	ENTITY_TYPE_DIRECTIONALLIGHT,
@@ -964,10 +993,6 @@ struct ShaderEntityIterator
 	constexpr operator uint() const { return value; }
 #endif // __cplusplus
 
-	inline bool empty()
-	{
-		return value == 0;
-	}
 	inline uint item_offset()
 	{
 		return value & 0xFFFF;
@@ -976,13 +1001,21 @@ struct ShaderEntityIterator
 	{
 		return value >> 16u;
 	}
+	inline bool empty()
+	{
+		return item_count() == 0;
+	}
 	inline uint first_item()
 	{
 		return item_offset();
 	}
-	inline uint last_item()
+	inline uint last_item() // includes last valid item
 	{
 		return empty() ? 0 : (item_offset() + item_count() - 1);
+	}
+	inline uint end_item() // excludes last valid item
+	{
+		return empty() ? 0 : (item_offset() + item_count());
 	}
 	inline uint first_bucket()
 	{
@@ -1159,6 +1192,7 @@ struct alignas(16) ShaderCamera
 	float4x4	inverse_view_projection;
 
 	ShaderFrustum frustum;
+	ShaderFrustumCorners frustum_corners;
 
 	float2		temporalaa_jitter;
 	float2		temporalaa_jitter_prev;
@@ -1313,6 +1347,29 @@ struct alignas(16) ShaderCamera
 	inline bool is_pixel_inside_scissor(uint2 pixel)
 	{
 		return pixel.x >= scissor.x && pixel.x <= scissor.z && pixel.y >= scissor.y && pixel.y <= scissor.w;
+	}
+
+	inline bool IsOrtho() { return options & SHADERCAMERA_OPTION_ORTHO; }
+
+	inline float3 screen_to_nearplane(float4 svposition)
+	{
+		const float2 ScreenCoord = svposition.xy * internal_resolution_rcp;
+		return frustum_corners.screen_to_nearplane(ScreenCoord);
+	}
+	inline float3 screen_to_farplane(float4 svposition)
+	{
+		const float2 ScreenCoord = svposition.xy * internal_resolution_rcp;
+		return frustum_corners.screen_to_farplane(ScreenCoord);
+	}
+
+	// Convert raw screen coordinate from rasterizer to world position
+	//	Note: svposition is the SV_Position system value, the .w component can be different in different compilers
+	//	You need to ensure that the .w component is used for linear depth (Vulkan: -fvk-use-dx-position-w, Xbox: in case VRS, there is complication with this, read documentation)
+	inline float3 screen_to_world(float4 svposition)
+	{
+		const float2 ScreenCoord = svposition.xy * internal_resolution_rcp;
+		const float z = IsOrtho() ? (1 - svposition.z) : ((svposition.w - z_near) * z_range_rcp);
+		return frustum_corners.screen_to_world(ScreenCoord, z);
 	}
 #endif // __cplusplus
 };
