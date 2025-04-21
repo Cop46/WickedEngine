@@ -27,6 +27,7 @@
 #include "wiAsync_BindLua.h"
 #include "wiTimer.h"
 #include "wiVector.h"
+#include "wiVersion.h"
 
 #include <memory>
 
@@ -51,6 +52,24 @@ namespace wi::lua
 		return luainternal;
 	}
 
+	wi::Application* editorApplication = nullptr;
+	wi::RenderPath* editorRenderPath = nullptr;
+	int IsThisEditor(lua_State* L)
+	{
+		bool ret = editorApplication != nullptr && editorRenderPath != nullptr;
+		wi::lua::SSetBool(L, ret);
+		return 1;
+	}
+	int ReturnToEditor(lua_State* L)
+	{
+		if (editorApplication != nullptr && editorRenderPath != nullptr)
+		{
+			KillProcesses();
+			editorApplication->ActivatePath(editorRenderPath);
+		}
+		return 0;
+	}
+
 	void PostErrorMsg(lua_State* L)
 	{
 		const char* str = lua_tostring(L, -1);
@@ -63,6 +82,8 @@ namespace wi::lua
 		ss += str;
 		wi::backlog::post(ss, wi::backlog::LogLevel::Error);
 		lua_pop(L, 1); // remove error message
+
+		ReturnToEditor(L);
 	}
 
 	void PostErrorMsg()
@@ -200,6 +221,47 @@ namespace wi::lua
 		return 0;
 	}
 
+	int IsThisDebugBuild(lua_State* L)
+	{
+#ifdef _DEBUG
+		SSetBool(L, true);
+#else
+		SSetBool(L, false);
+#endif
+		return 1;
+	}
+
+	int GetVersionMajor(lua_State* L)
+	{
+		SSetInt(L, wi::version::GetMajor());
+		return 1;
+	}
+	int GetVersionMinor(lua_State* L)
+	{
+		SSetInt(L, wi::version::GetMinor());
+		return 1;
+	}
+	int GetVersionRevision(lua_State* L)
+	{
+		SSetInt(L, wi::version::GetRevision());
+		return 1;
+	}
+	int GetVersionString(lua_State* L)
+	{
+		SSetString(L, wi::version::GetVersionString());
+		return 1;
+	}
+	int GetCreditsString(lua_State* L)
+	{
+		SSetString(L, wi::version::GetCreditsString());
+		return 1;
+	}
+	int GetSupportersString(lua_State* L)
+	{
+		SSetString(L, wi::version::GetSupportersString());
+		return 1;
+	}
+
 	void Initialize()
 	{
 		if (lua_internal().m_luaState != nullptr)
@@ -213,6 +275,17 @@ namespace wi::lua
 		RegisterFunc("dobinaryfile", Internal_DoBinaryFile);
 		RegisterFunc("compilebinaryfile", Internal_CompileBinaryFile);
 		RunText(wiLua_Globals);
+
+		RegisterFunc("IsThisEditor", IsThisEditor);
+		RegisterFunc("ReturnToEditor", ReturnToEditor);
+		RegisterFunc("IsThisDebugBuild", IsThisDebugBuild);
+
+		RegisterFunc("GetVersionMajor", GetVersionMajor);
+		RegisterFunc("GetVersionMinor", GetVersionMinor);
+		RegisterFunc("GetVersionRevision", GetVersionRevision);
+		RegisterFunc("GetVersionString", GetVersionString);
+		RegisterFunc("GetCreditsString", GetCreditsString);
+		RegisterFunc("GetSupportersString", GetSupportersString);
 
 		Vector_BindLua::Bind();
 		Matrix_BindLua::Bind();
@@ -240,7 +313,7 @@ namespace wi::lua
 		TrailRenderer_BindLua::Bind();
 		Async_BindLua::Bind();
 
-		wi::backlog::post("wi::lua Initialized (" + std::to_string((int)std::round(timer.elapsed())) + " ms)");
+		wilog("wi::lua Initialized [Lua %s.%s] (%d ms)", LUA_VERSION_MAJOR, LUA_VERSION_MINOR, (int)std::round(timer.elapsed()));
 	}
 
 	lua_State* GetLuaState()
@@ -565,6 +638,8 @@ namespace wi::lua
 			ss += error;
 		}
 		wi::backlog::post(ss, wi::backlog::LogLevel::Error);
+
+		ReturnToEditor(L);
 	}
 
 	bool CompileFile(const char* filename, wi::vector<uint8_t>& dst)
@@ -604,4 +679,11 @@ namespace wi::lua
 		lua_pop(lua_internal().m_luaState, 1); // lua_dump does not pop the dumped function from stack
 		return true;
 	}
+
+	void EnableEditorFunctionality(wi::Application* application, wi::RenderPath* renderpath)
+	{
+		editorApplication = application;
+		editorRenderPath = renderpath;
+	}
+
 }

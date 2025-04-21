@@ -11,6 +11,8 @@
 #include "wiUnorderedMap.h"
 #include "wiVector.h"
 #include "wiSpinLock.h"
+#include "wiBacklog.h"
+#include "wiHelper.h"
 
 #ifdef _WIN32
 #define VK_USE_PLATFORM_WIN32_KHR
@@ -20,11 +22,89 @@
 #include "Utility/vulkan/vulkan.h"
 #include "Utility/volk.h"
 #include "Utility/vk_mem_alloc.h"
+#include "Utility/vk_enum_string_helper.h"
 
 #include <deque>
 #include <atomic>
 #include <mutex>
 #include <algorithm>
+
+#define vulkan_assert(cond, fname) { wilog_assert(cond, "Vulkan error: %s failed with %s (%s:%d)", fname, string_VkResult(res), relative_path(__FILE__), __LINE__); }
+#define vulkan_check(call) [&]() { VkResult res = call; vulkan_assert((res >= VK_SUCCESS), extract_function_name(#call).c_str()); return res; }()
+
+namespace wi::graphics
+{
+	struct PSOLayoutHash
+	{
+		VkPushConstantRange push = {};
+		struct Item
+		{
+			bool used = true;
+			VkImageViewType viewType = VK_IMAGE_VIEW_TYPE_2D;
+			VkDescriptorSetLayoutBinding binding = {};
+		};
+		wi::vector<Item> items;
+		size_t hash = 0;
+
+		inline bool operator==(const PSOLayoutHash& other) const
+		{
+			if (hash != other.hash)
+				return false;
+			if (items.size() != other.items.size())
+				return false;
+			for (size_t i = 0; i < items.size(); ++i)
+			{
+				const Item& a = items[i];
+				const Item& b = other.items[i];
+				if (
+					a.used != b.used ||
+					a.viewType != b.viewType ||
+					a.binding.binding != b.binding.binding ||
+					a.binding.descriptorCount != b.binding.descriptorCount ||
+					a.binding.descriptorType != b.binding.descriptorType ||
+					a.binding.stageFlags != b.binding.stageFlags ||
+					a.binding.pImmutableSamplers != b.binding.pImmutableSamplers
+					)
+					return false;
+			}
+			return
+				push.offset == other.push.offset &&
+				push.size == other.push.size &&
+				push.stageFlags == other.push.stageFlags;
+		}
+		inline void embed_hash()
+		{
+			hash = 0;
+			for (auto& x : items)
+			{
+				wi::helper::hash_combine(hash, x.used);
+				wi::helper::hash_combine(hash, x.viewType);
+				wi::helper::hash_combine(hash, x.binding.binding);
+				wi::helper::hash_combine(hash, x.binding.descriptorCount);
+				wi::helper::hash_combine(hash, x.binding.descriptorType);
+				wi::helper::hash_combine(hash, x.binding.stageFlags);
+			}
+			wi::helper::hash_combine(hash, push.offset);
+			wi::helper::hash_combine(hash, push.size);
+			wi::helper::hash_combine(hash, push.stageFlags);
+		}
+		constexpr size_t get_hash() const
+		{
+			return hash;
+		}
+	};
+}
+namespace std
+{
+	template <>
+	struct hash<wi::graphics::PSOLayoutHash>
+	{
+		constexpr size_t operator()(const wi::graphics::PSOLayoutHash& hash) const
+		{
+			return hash.get_hash();
+		}
+	};
+}
 
 namespace wi::graphics
 {
@@ -32,7 +112,6 @@ namespace wi::graphics
 	{
 		friend struct CommandQueue;
 	protected:
-		bool debugUtils = false;
 		VkInstance instance = VK_NULL_HANDLE;
 	    VkDebugUtilsMessengerEXT debugUtilsMessenger = VK_NULL_HANDLE;
 		VkPhysicalDevice physicalDevice = VK_NULL_HANDLE;
@@ -41,13 +120,20 @@ namespace wi::graphics
 		wi::vector<VkQueueFamilyVideoPropertiesKHR> queueFamiliesVideo;
 		uint32_t graphicsFamily = VK_QUEUE_FAMILY_IGNORED;
 		uint32_t computeFamily = VK_QUEUE_FAMILY_IGNORED;
+		uint32_t computeFamilyCount = 0;
 		uint32_t copyFamily = VK_QUEUE_FAMILY_IGNORED;
 		uint32_t videoFamily = VK_QUEUE_FAMILY_IGNORED;
+		uint32_t initFamily = VK_QUEUE_FAMILY_IGNORED;
+		uint32_t sparseFamily = VK_QUEUE_FAMILY_IGNORED;
 		wi::vector<uint32_t> families;
 		VkQueue graphicsQueue = VK_NULL_HANDLE;
 		VkQueue computeQueue = VK_NULL_HANDLE;
 		VkQueue copyQueue = VK_NULL_HANDLE;
 		VkQueue videoQueue = VK_NULL_HANDLE;
+		VkQueue initQueue = VK_NULL_HANDLE;
+		VkQueue transitionQueue = VK_NULL_HANDLE;
+		VkQueue sparseQueue = VK_NULL_HANDLE;
+		bool debugUtils = false;
 
 		VkPhysicalDeviceProperties2 properties2 = {};
 		VkPhysicalDeviceVulkan11Properties properties_1_1 = {};
@@ -110,6 +196,7 @@ namespace wi::graphics
 		struct CommandQueue
 		{
 			VkQueue queue = VK_NULL_HANDLE;
+			VkSemaphore frame_semaphores[BUFFERCOUNT][QUEUE_COUNT] = {};
 			wi::vector<SwapChain> swapchain_updates;
 			wi::vector<VkSwapchainKHR> submit_swapchains;
 			wi::vector<uint32_t> submit_swapChainImageIndices;
@@ -127,6 +214,10 @@ namespace wi::graphics
 
 		} queues[QUEUE_COUNT];
 
+		CommandQueue queue_init;
+		CommandQueue queue_transition;
+		CommandQueue queue_sparse;
+
 		struct CopyAllocator
 		{
 			GraphicsDevice_Vulkan* device = nullptr;
@@ -138,16 +229,18 @@ namespace wi::graphics
 				VkCommandBuffer transferCommandBuffer = VK_NULL_HANDLE;
 				VkCommandPool transitionCommandPool = VK_NULL_HANDLE;
 				VkCommandBuffer transitionCommandBuffer = VK_NULL_HANDLE;
+				bool transfer = false;
+				bool transition = false;
 				VkFence fence = VK_NULL_HANDLE;
-				VkSemaphore semaphores[3] = { VK_NULL_HANDLE, VK_NULL_HANDLE, VK_NULL_HANDLE }; // graphics, compute, video
+				VkSemaphore semaphore = VK_NULL_HANDLE;
 				GPUBuffer uploadbuffer;
-				inline bool IsValid() const { return transferCommandBuffer != VK_NULL_HANDLE; }
+				constexpr bool IsValid() const { return transferCommandBuffer != VK_NULL_HANDLE; }
 			};
 			wi::vector<CopyCMD> freelist;
 
 			void init(GraphicsDevice_Vulkan* device);
 			void destroy();
-			CopyCMD allocate(uint64_t staging_size);
+			CopyCMD allocate(uint64_t staging_size, bool require_transfer, bool require_transition);
 			void submit(CopyCMD cmd);
 		};
 		mutable CopyAllocator copyAllocator;
@@ -206,8 +299,8 @@ namespace wi::graphics
 				VkSemaphore& sema = semaphore_pool.emplace_back();
 				VkSemaphoreCreateInfo info = {};
 				info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-				VkResult res = vkCreateSemaphore(device, &info, nullptr, &sema);
-				assert(res == VK_SUCCESS);
+				vulkan_check(vkCreateSemaphore(device, &info, nullptr, &sema));
+				set_semaphore_name(sema, "DependencySemaphore");
 			}
 			VkSemaphore semaphore = semaphore_pool.back();
 			semaphore_pool.pop_back();
@@ -227,7 +320,6 @@ namespace wi::graphics
 
 			QUEUE_TYPE queue = {};
 			uint32_t id = 0;
-			wi::vector<std::pair<QUEUE_TYPE, VkSemaphore>> wait_queues;
 			wi::vector<VkSemaphore> waits;
 			wi::vector<VkSemaphore> signals;
 
@@ -235,12 +327,13 @@ namespace wi::graphics
 			DescriptorBinderPool binder_pools[BUFFERCOUNT];
 			GPULinearAllocator frame_allocators[BUFFERCOUNT];
 
-			wi::vector<std::pair<size_t, VkPipeline>> pipelines_worker;
-			size_t prev_pipeline_hash = {};
+			wi::vector<std::pair<PipelineHash, VkPipeline>> pipelines_worker;
+			PipelineHash prev_pipeline_hash = {};
 			const PipelineState* active_pso = {};
 			const Shader* active_cs = {};
 			const RaytracingPipelineState* active_rt = {};
 			ShadingRate prev_shadingrate = {};
+			uint32_t prev_stencilref = 0;
 			wi::vector<SwapChain> prev_swapchains;
 			bool dirty_pso = {};
 			wi::vector<VkMemoryBarrier2> frame_memoryBarriers;
@@ -255,18 +348,18 @@ namespace wi::graphics
 			void reset(uint32_t bufferindex)
 			{
 				buffer_index = bufferindex;
-				wait_queues.clear();
 				waits.clear();
 				signals.clear();
 				binder_pools[buffer_index].reset();
 				binder.reset();
 				frame_allocators[buffer_index].reset();
-				prev_pipeline_hash = 0;
+				prev_pipeline_hash = {};
 				active_pso = nullptr;
 				active_cs = nullptr;
 				active_rt = nullptr;
 				dirty_pso = false;
 				prev_shadingrate = ShadingRate::RATE_INVALID;
+				prev_stencilref = 0;
 				prev_swapchains.clear();
 				renderpass_info = {};
 				renderpass_barriers_begin.clear();
@@ -299,11 +392,11 @@ namespace wi::graphics
 			wi::vector<VkDescriptorSet> bindlessSets;
 			uint32_t bindlessFirstSet = 0;
 		};
-		mutable wi::unordered_map<size_t, PSOLayout> pso_layout_cache;
+		mutable wi::unordered_map<PSOLayoutHash, PSOLayout> pso_layout_cache;
 		mutable std::mutex pso_layout_cache_mutex;
 
 		VkPipelineCache pipelineCache = VK_NULL_HANDLE;
-		wi::unordered_map<size_t, VkPipeline> pipelines_global;
+		wi::unordered_map<PipelineHash, VkPipeline> pipelines_global;
 
 		void pso_validate(CommandList cmd);
 
@@ -312,6 +405,9 @@ namespace wi::graphics
 
 		static constexpr uint32_t immutable_sampler_slot_begin = 100;
 		wi::vector<VkSampler> immutable_samplers;
+
+		void set_fence_name(VkFence fence, const char* name);
+		void set_semaphore_name(VkSemaphore semaphore, const char* name);
 
 	public:
 		GraphicsDevice_Vulkan(wi::platform::window_type window, ValidationMode validationMode = ValidationMode::Disabled, GPUPreference preference = GPUPreference::Discrete);
@@ -398,7 +494,6 @@ namespace wi::graphics
 		///////////////Thread-sensitive////////////////////////
 
 		void WaitCommandList(CommandList cmd, CommandList wait_for) override;
-		void WaitQueue(CommandList cmd, QUEUE_TYPE wait_for) override;
 		void RenderPassBegin(const SwapChain* swapchain, CommandList cmd) override;
 		void RenderPassBegin(const RenderPassImage* images, uint32_t image_count, CommandList cmd, RenderPassFlags flags = RenderPassFlags::NONE) override;
 		void RenderPassEnd(CommandList cmd) override;
@@ -486,7 +581,7 @@ namespace wi::graphics
 				wi::vector<int> freelist;
 				std::mutex locker;
 
-				void init(VkDevice device, VkDescriptorType type, uint32_t descriptorCount)
+				void init(GraphicsDevice_Vulkan* device, VkDescriptorType type, uint32_t descriptorCount)
 				{
 					descriptorCount = std::min(descriptorCount, 500000u);
 
@@ -501,8 +596,16 @@ namespace wi::graphics
 					poolInfo.maxSets = 1;
 					poolInfo.flags = VK_DESCRIPTOR_POOL_CREATE_UPDATE_AFTER_BIND_BIT;
 
-					VkResult res = vkCreateDescriptorPool(device, &poolInfo, nullptr, &descriptorPool);
-					assert(res == VK_SUCCESS);
+					vulkan_check(vkCreateDescriptorPool(device->device, &poolInfo, nullptr, &descriptorPool));
+
+#if 0
+					VkDebugUtilsObjectNameInfoEXT info{ VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT };
+					info.pObjectName = "BindlessDescriptorHeap";
+					info.objectType = VK_OBJECT_TYPE_DESCRIPTOR_POOL;
+					info.objectHandle = (uint64_t)descriptorPool;
+					res = vkSetDebugUtilsObjectNameEXT(device->device, &info);
+					vulkan_check(res);
+#endif
 
 					VkDescriptorSetLayoutBinding binding = {};
 					binding.descriptorType = type;
@@ -528,20 +631,69 @@ namespace wi::graphics
 					bindingFlagsInfo.pBindingFlags = &bindingFlags;
 					layoutInfo.pNext = &bindingFlagsInfo;
 
-					res = vkCreateDescriptorSetLayout(device, &layoutInfo, nullptr, &descriptorSetLayout);
-					assert(res == VK_SUCCESS);
+					vulkan_check(vkCreateDescriptorSetLayout(device->device, &layoutInfo, nullptr, &descriptorSetLayout));
 
 					VkDescriptorSetAllocateInfo allocInfo = {};
 					allocInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
 					allocInfo.descriptorPool = descriptorPool;
 					allocInfo.descriptorSetCount = 1;
 					allocInfo.pSetLayouts = &descriptorSetLayout;
-					res = vkAllocateDescriptorSets(device, &allocInfo, &descriptorSet);
-					assert(res == VK_SUCCESS);
+					vulkan_check(vkAllocateDescriptorSets(device->device, &allocInfo, &descriptorSet));
 
 					for (int i = 0; i < (int)descriptorCount; ++i)
 					{
 						freelist.push_back((int)descriptorCount - i - 1);
+					}
+
+					if (type != VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR)
+					{
+						// Descriptor safety feature:
+						//	We init null descriptors for bindless index = 0 for access safety
+						//	Because shader compiler sometimes incorrectly loads descriptor outside of safety branch
+						//	Note: these are never freed, this is intentional
+						int index = allocate();
+						wilog_assert(index == 0, "Descriptor safety feature error: descriptor index must be 0!");
+						VkWriteDescriptorSet write = {};
+						write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+						write.descriptorType = type;
+						write.dstBinding = 0;
+						write.dstArrayElement = index;
+						write.descriptorCount = 1;
+						write.dstSet = descriptorSet;
+
+						VkDescriptorImageInfo image_info = {};
+						VkDescriptorBufferInfo buffer_info = {};
+
+						switch (type)
+						{
+						case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+							image_info.imageView = device->nullImageView2D;
+							image_info.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+							write.pImageInfo = &image_info;
+							break;
+						case VK_DESCRIPTOR_TYPE_UNIFORM_TEXEL_BUFFER:
+						case VK_DESCRIPTOR_TYPE_STORAGE_TEXEL_BUFFER:
+							write.pTexelBufferView = &device->nullBufferView;
+							break;
+						case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+							buffer_info.buffer = device->nullBuffer;
+							buffer_info.range = VK_WHOLE_SIZE;
+							write.pBufferInfo = &buffer_info;
+							break;
+						case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+							image_info.imageView = device->nullImageView2D;
+							image_info.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+							write.pImageInfo = &image_info;
+							break;
+						case VK_DESCRIPTOR_TYPE_SAMPLER:
+							image_info.sampler = device->nullSampler;
+							write.pImageInfo = &image_info;
+							break;
+						default:
+							wilog_assert(0, "Descriptor safety feature error: descriptor type not handled!");
+							break;
+						}
+						vkUpdateDescriptorSets(device->device, 1, &write, 0, nullptr);
 					}
 				}
 				void destroy(VkDevice device)
@@ -626,7 +778,7 @@ namespace wi::graphics
 				bindlessStorageTexelBuffers.destroy(device);
 				bindlessSamplers.destroy(device);
 				bindlessAccelerationStructures.destroy(device);
-				Update(~0, 0); // destroy all remaining
+				Update(~0ull, 0); // destroy all remaining
 				vmaDestroyAllocator(allocator);
 				vmaDestroyAllocator(externalAllocator);
 				vkDestroyDevice(device, nullptr);
@@ -653,7 +805,7 @@ namespace wi::graphics
 
 				framecount = FRAMECOUNT;
 
-				destroylocker.lock();
+				std::scoped_lock lck(destroylocker);
 
 				destroy(destroyer_allocations, [&](auto& item) {
 					vmaFreeMemory(allocator, item);
@@ -733,12 +885,9 @@ namespace wi::graphics
 				destroy(destroyer_bindlessAccelerationStructures, [&](auto& item) {
 					bindlessAccelerationStructures.free(item);
 				});
-
-				destroylocker.unlock();
 			}
 		};
 		std::shared_ptr<AllocationHandler> allocationhandler;
-
 	};
 }
 

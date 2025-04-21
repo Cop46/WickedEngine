@@ -53,17 +53,17 @@ namespace wi::graphics
 	protected:
 		static constexpr uint32_t BUFFERCOUNT = 2;
 		uint64_t FRAMECOUNT = 0;
-		ValidationMode validationMode = ValidationMode::Disabled;
-		GraphicsDeviceCapability capabilities = GraphicsDeviceCapability::NONE;
 		size_t SHADER_IDENTIFIER_SIZE = 0;
 		size_t TOPLEVEL_ACCELERATION_STRUCTURE_INSTANCE_SIZE = 0;
-		uint32_t VARIABLE_RATE_SHADING_TILE_SIZE = 0;
 		uint64_t TIMESTAMP_FREQUENCY = 0;
 		uint64_t VIDEO_DECODE_BITSTREAM_ALIGNMENT = 1u;
+		GraphicsDeviceCapability capabilities = GraphicsDeviceCapability::NONE;
+		uint32_t VARIABLE_RATE_SHADING_TILE_SIZE = 0;
 		uint32_t vendorId = 0;
 		uint32_t deviceId = 0;
 		std::string adapterName;
 		std::string driverDescription;
+		ValidationMode validationMode = ValidationMode::Disabled;
 		AdapterType adapterType = AdapterType::Other;
 
 	public:
@@ -184,9 +184,6 @@ namespace wi::graphics
 		//	The granularity of this is at least that the beginning of the command list will wait for the end of the other command list
 		//	On some platform like PS5 this can be implemented by waiting exactly at the wait insertion point within the command lists which is more precise
 		virtual void WaitCommandList(CommandList cmd, CommandList wait_for) = 0;
-		// Tell the command list to wait for the specified queue to finish processing
-		//	It is useful when you want to wait for a previous frame, or just don't know which command list to wait for
-		virtual void WaitQueue(CommandList cmd, QUEUE_TYPE wait_for) = 0;
 		virtual void RenderPassBegin(const SwapChain* swapchain, CommandList cmd) = 0;
 		virtual void RenderPassBegin(const RenderPassImage* images, uint32_t image_count, CommandList cmd, RenderPassFlags flags = RenderPassFlags::NONE) = 0;
 		virtual void RenderPassEnd(CommandList cmd) = 0;
@@ -251,6 +248,16 @@ namespace wi::graphics
 				return CreateBuffer2(desc, nullptr, buffer, alias, alias_offset);
 			}
 			return CreateBuffer2(desc, [&](void* dest) { std::memcpy(dest, initial_data, desc->size); }, buffer, alias, alias_offset);
+		}
+
+		bool CreateBufferCleared(const GPUBufferDesc* desc, uint8_t value, GPUBuffer* buffer) const
+		{
+			return CreateBuffer2(desc, [&](void* dest) { std::memset(dest, value, desc->size); }, buffer);
+		}
+
+		bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer) const
+		{
+			return CreateBufferCleared(desc, 0, buffer);
 		}
 
 		void Barrier(const GPUBarrier& barrier, CommandList cmd)
@@ -338,6 +345,14 @@ namespace wi::graphics
 			GPUAllocation allocation = AllocateGPU(sizeof(T), cmd);
 			std::memcpy(allocation.data, &data, sizeof(T));
 			BindConstantBuffer(&allocation.buffer, slot, cmd, allocation.offset);
+		}
+
+		void RenderPassBegin(const Texture* rendertarget, CommandList cmd, bool clear = true)
+		{
+			RenderPassImage rp[] = {
+				RenderPassImage::RenderTarget(rendertarget, clear ? RenderPassImage::LoadOp::CLEAR : RenderPassImage::LoadOp::LOAD),
+			};
+			RenderPassBegin(rp, arraysize(rp), cmd);
 		}
 
 		// Deprecated, kept for back-compat:

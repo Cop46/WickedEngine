@@ -32,22 +32,22 @@ namespace wi::scene
 		wi::ecs::ComponentManager<LayerComponent>& layers = componentLibrary.Register<LayerComponent>("wi::scene::Scene::layers");
 		wi::ecs::ComponentManager<TransformComponent>& transforms = componentLibrary.Register<TransformComponent>("wi::scene::Scene::transforms");
 		wi::ecs::ComponentManager<HierarchyComponent>& hierarchy = componentLibrary.Register<HierarchyComponent>("wi::scene::Scene::hierarchy");
-		wi::ecs::ComponentManager<MaterialComponent>& materials = componentLibrary.Register<MaterialComponent>("wi::scene::Scene::materials", 8); // version = 8
+		wi::ecs::ComponentManager<MaterialComponent>& materials = componentLibrary.Register<MaterialComponent>("wi::scene::Scene::materials", 10); // version = 10
 		wi::ecs::ComponentManager<MeshComponent>& meshes = componentLibrary.Register<MeshComponent>("wi::scene::Scene::meshes", 4); // version = 4
 		wi::ecs::ComponentManager<ImpostorComponent>& impostors = componentLibrary.Register<ImpostorComponent>("wi::scene::Scene::impostors");
 		wi::ecs::ComponentManager<ObjectComponent>& objects = componentLibrary.Register<ObjectComponent>("wi::scene::Scene::objects", 4); // version = 4
-		wi::ecs::ComponentManager<RigidBodyPhysicsComponent>& rigidbodies = componentLibrary.Register<RigidBodyPhysicsComponent>("wi::scene::Scene::rigidbodies", 4); // version = 4
+		wi::ecs::ComponentManager<RigidBodyPhysicsComponent>& rigidbodies = componentLibrary.Register<RigidBodyPhysicsComponent>("wi::scene::Scene::rigidbodies", 5); // version = 5
 		wi::ecs::ComponentManager<SoftBodyPhysicsComponent>& softbodies = componentLibrary.Register<SoftBodyPhysicsComponent>("wi::scene::Scene::softbodies", 3); // version = 3
 		wi::ecs::ComponentManager<ArmatureComponent>& armatures = componentLibrary.Register<ArmatureComponent>("wi::scene::Scene::armatures");
 		wi::ecs::ComponentManager<LightComponent>& lights = componentLibrary.Register<LightComponent>("wi::scene::Scene::lights", 3); // version = 3
-		wi::ecs::ComponentManager<CameraComponent>& cameras = componentLibrary.Register<CameraComponent>("wi::scene::Scene::cameras", 1); // version = 1
+		wi::ecs::ComponentManager<CameraComponent>& cameras = componentLibrary.Register<CameraComponent>("wi::scene::Scene::cameras", 2); // version = 2
 		wi::ecs::ComponentManager<EnvironmentProbeComponent>& probes = componentLibrary.Register<EnvironmentProbeComponent>("wi::scene::Scene::probes", 1); // version = 1
 		wi::ecs::ComponentManager<ForceFieldComponent>& forces = componentLibrary.Register<ForceFieldComponent>("wi::scene::Scene::forces", 1); // version = 1
 		wi::ecs::ComponentManager<DecalComponent>& decals = componentLibrary.Register<DecalComponent>("wi::scene::Scene::decals", 1); // version = 1
 		wi::ecs::ComponentManager<AnimationComponent>& animations = componentLibrary.Register<AnimationComponent>("wi::scene::Scene::animations", 2); // version = 2
 		wi::ecs::ComponentManager<AnimationDataComponent>& animation_datas = componentLibrary.Register<AnimationDataComponent>("wi::scene::Scene::animation_datas");
-		wi::ecs::ComponentManager<EmittedParticleSystem>& emitters = componentLibrary.Register<EmittedParticleSystem>("wi::scene::Scene::emitters");
-		wi::ecs::ComponentManager<HairParticleSystem>& hairs = componentLibrary.Register<HairParticleSystem>("wi::scene::Scene::hairs", 1); // version = 1
+		wi::ecs::ComponentManager<EmittedParticleSystem>& emitters = componentLibrary.Register<EmittedParticleSystem>("wi::scene::Scene::emitters", 2); // version = 2
+		wi::ecs::ComponentManager<HairParticleSystem>& hairs = componentLibrary.Register<HairParticleSystem>("wi::scene::Scene::hairs", 3); // version = 3
 		wi::ecs::ComponentManager<WeatherComponent>& weathers = componentLibrary.Register<WeatherComponent>("wi::scene::Scene::weathers", 6); // version = 6
 		wi::ecs::ComponentManager<SoundComponent>& sounds = componentLibrary.Register<SoundComponent>("wi::scene::Scene::sounds", 1); // version = 1
 		wi::ecs::ComponentManager<VideoComponent>& videos = componentLibrary.Register<VideoComponent>("wi::scene::Scene::videos");
@@ -56,13 +56,15 @@ namespace wi::scene
 		wi::ecs::ComponentManager<ColliderComponent>& colliders = componentLibrary.Register<ColliderComponent>("wi::scene::Scene::colliders", 2); // version = 2
 		wi::ecs::ComponentManager<ScriptComponent>& scripts = componentLibrary.Register<ScriptComponent>("wi::scene::Scene::scripts");
 		wi::ecs::ComponentManager<ExpressionComponent>& expressions = componentLibrary.Register<ExpressionComponent>("wi::scene::Scene::expressions");
-		wi::ecs::ComponentManager<HumanoidComponent>& humanoids = componentLibrary.Register<HumanoidComponent>("wi::scene::Scene::humanoids", 1); // version = 1
+		wi::ecs::ComponentManager<HumanoidComponent>& humanoids = componentLibrary.Register<HumanoidComponent>("wi::scene::Scene::humanoids", 2); // version = 2
 		wi::ecs::ComponentManager<wi::terrain::Terrain>& terrains = componentLibrary.Register<wi::terrain::Terrain>("wi::scene::Scene::terrains", 5); // version = 5
-		wi::ecs::ComponentManager<wi::Sprite>& sprites = componentLibrary.Register<wi::Sprite>("wi::scene::Scene::sprites", 1); // version = 1
+		wi::ecs::ComponentManager<wi::Sprite>& sprites = componentLibrary.Register<wi::Sprite>("wi::scene::Scene::sprites", 2); // version = 2
 		wi::ecs::ComponentManager<wi::SpriteFont>& fonts = componentLibrary.Register<wi::SpriteFont>("wi::scene::Scene::fonts");
 		wi::ecs::ComponentManager<wi::VoxelGrid>& voxel_grids = componentLibrary.Register<wi::VoxelGrid>("wi::scene::Scene::voxel_grids");
 		wi::ecs::ComponentManager<MetadataComponent>& metadatas = componentLibrary.Register<MetadataComponent>("wi::scene::Scene::metadatas");
 		wi::ecs::ComponentManager<CharacterComponent>& characters = componentLibrary.Register<CharacterComponent>("wi::scene::Scene::characters");
+		wi::ecs::ComponentManager<PhysicsConstraintComponent>& constraints = componentLibrary.Register<PhysicsConstraintComponent>("wi::scene::Scene::constraints", 5); // version = 5
+		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 1); // version = 1
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -86,14 +88,18 @@ namespace wi::scene
 		mutable bool acceleration_structure_update_requested = false;
 		void SetAccelerationStructureUpdateRequested(bool value = true) { acceleration_structure_update_requested = value; }
 		bool IsAccelerationStructureUpdateRequested() const { return acceleration_structure_update_requested; }
+		bool IsLightmapUpdateRequested() const { return lightmap_request_allocator.load() > 0; }
 		wi::Archive optimized_instatiation_data;
 		wi::vector<wi::primitive::Capsule> character_capsules;
+		wi::unordered_map<wi::ecs::Entity, wi::vector<wi::ecs::Entity>> topdown_hierarchy; // managed by BuildTopDownHierarchy() in every Update(), allows parent->children traversal
+		wi::jobsystem::context topdown_hierarchy_workload;
 
 		// AABB culling streams:
 		wi::vector<wi::primitive::AABB> aabb_objects;
 		wi::vector<wi::primitive::AABB> aabb_lights;
 		wi::vector<wi::primitive::AABB> aabb_probes;
 		wi::vector<wi::primitive::AABB> aabb_decals;
+		wi::vector<wi::primitive::AABB> aabb_fonts;
 
 		// Separate stream of world matrices:
 		wi::vector<XMFLOAT4X4> matrix_objects;
@@ -183,9 +189,6 @@ namespace wi::scene
 			wi::graphics::GPUBuffer cellBuffer;
 			wi::graphics::GPUBuffer rayBuffer;
 			wi::graphics::Texture momentsTexture;
-			wi::graphics::Texture irradianceTexture;
-			wi::graphics::Texture irradianceTexture_rw;
-			wi::graphics::GPUBuffer sparse_tile_pool;
 		} surfelgi;
 
 		// DDGI resources:
@@ -200,11 +203,8 @@ namespace wi::scene
 			wi::graphics::GPUBuffer variance_buffer;
 			wi::graphics::GPUBuffer raycount_buffer;
 			wi::graphics::GPUBuffer rayallocation_buffer;
-			wi::graphics::GPUBuffer sparse_tile_pool;
-			wi::graphics::Texture color_texture;
-			wi::graphics::Texture color_texture_rw; // alias of color_texture
+			wi::graphics::GPUBuffer probe_buffer;
 			wi::graphics::Texture depth_texture;
-			wi::graphics::Texture offset_texture;
 
 			void Serialize(wi::Archive& archive);
 		} ddgi;
@@ -276,6 +276,7 @@ namespace wi::scene
 		uint32_t collider_count_cpu = 0;
 		uint32_t collider_count_gpu = 0;
 		wi::primitive::AABB* aabb_colliders_cpu = nullptr;
+		wi::primitive::AABB* aabb_colliders_gpu = nullptr;
 		ColliderComponent* colliders_cpu = nullptr;
 		ColliderComponent* colliders_gpu = nullptr;
 		wi::BVH collider_bvh;
@@ -310,6 +311,10 @@ namespace wi::scene
 
 		float wetmap_fadeout_time = 0;
 		bool IsWetmapProcessingRequired() const;
+
+		void StartBuildTopDownHierarchy();
+		void WaitBuildTopDownHierarchy() const;
+		void RefreshHierarchyTopdownFromParent(wi::ecs::Entity entity);
 
 		// Update all components by a given timestep (in seconds):
 		//	This is an expensive function, prefer to call it only once per frame!
@@ -446,6 +451,10 @@ namespace wi::scene
 		void Component_Detach(wi::ecs::Entity entity);
 		// Detaches all children from an entity (if there are any):
 		void Component_DetachChildren(wi::ecs::Entity parent);
+		// Bakes the transform's current world matrix back to hierarchy local space (if it is part of a hierarchy)
+		void Component_TransformWorldToHierarchy(wi::ecs::Entity entity);
+
+		void GatherChildren(wi::ecs::Entity parent, wi::vector<wi::ecs::Entity>& children) const;
 
 		// Read/write whole scene into an archive
 		void Serialize(wi::Archive& archive);
@@ -473,6 +482,7 @@ namespace wi::scene
 		void RunSpriteUpdateSystem(wi::jobsystem::context& ctx);
 		void RunFontUpdateSystem(wi::jobsystem::context& ctx);
 		void RunCharacterUpdateSystem(wi::jobsystem::context& ctx);
+		void RunSplineUpdateSystem(wi::jobsystem::context& ctx);
 
 
 		struct RayIntersectionResult
@@ -527,6 +537,9 @@ namespace wi::scene
 		using CapsuleIntersectionResult = SphereIntersectionResult;
 		CapsuleIntersectionResult Intersects(const wi::primitive::Capsule& capsule, uint32_t filterMask = wi::enums::FILTER_OPAQUE, uint32_t layerMask = ~0, uint32_t lod = 0) const;
 
+		// Goes through the hierarchy backwards and computes entity's world space matrix:
+		XMMATRIX ComputeEntityMatrixRecursive(wi::ecs::Entity entity) const;
+
 		// Goes through the hierarchy backwards and computes parent's world space matrix:
 		XMMATRIX ComputeParentMatrixRecursive(wi::ecs::Entity entity) const;
 
@@ -541,7 +554,7 @@ namespace wi::scene
 		//	returns entity ID of the new animation or INVALID_ENTITY if retargeting was not successful
 		wi::ecs::Entity RetargetAnimation(wi::ecs::Entity dst, wi::ecs::Entity src, bool bake_data, const Scene* src_scene = nullptr);
 
-		// If you don't know which armature the bone is contained int, this function can be used to find the first such armature and return the bone's rest matrix
+		// If you don't know which armature the bone is contained in, this function can be used to find the first such armature and return the bone's rest matrix
 		//	If not found, and entity has a transform, it returns transform matrix
 		//	Otherwise, returns identity matrix
 		XMMATRIX GetRestPose(wi::ecs::Entity entity) const;
@@ -569,6 +582,15 @@ namespace wi::scene
 		//	The result position is approximate because it involves reading back from GPU to the CPU, so the result can be delayed compared to the current GPU simulation.
 		//	Note that the input position to this function will be taken on the XZ plane and modified by the displacement map's XZ value, and the Y (vertical) position will be taken from the ocean water height and displacement map only.
 		XMFLOAT3 GetOceanPosAt(const XMFLOAT3& worldPosition) const;
+
+		// Computes the LOD for an object AABB for a given view projection matrix
+		uint32_t ComputeObjectLODForView(const ObjectComponent& object, const wi::primitive::AABB& aabb, const MeshComponent& mesh, const XMMATRIX& ViewProjection) const;
+
+		// If somehow NANs happened in TransformComponents, this will clear them up and rename them with _nanfix postfix to help filtering them
+		void FixupNans();
+
+		// Duplicate colliders will be removed from the scene
+		void DeleteDuplicateColliders();
 
 	private:
 		void UpdateHumanoidFacings();

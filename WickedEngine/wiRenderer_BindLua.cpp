@@ -52,6 +52,11 @@ namespace wi::lua::renderer
 		wi::lua::SSetFloat(L, wi::renderer::GetGameSpeed());
 		return 1;
 	}
+	int IsRaytracingSupported(lua_State* L)
+	{
+		wi::lua::SSetBool(L, wi::graphics::GetDevice()->CheckCapability(GraphicsDeviceCapability::RAYTRACING));
+		return 1;
+	}
 
 	int SetShadowProps2D(lua_State* L)
 	{
@@ -185,6 +190,19 @@ namespace wi::lua::renderer
 		}
 		return 0;
 	}
+	int SetDDGIEnabled(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetDDGIEnabled(wi::lua::SGetBool(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetDDGIEnabled(bool enabled) not enough arguments!");
+		}
+		return 0;
+	}
 	int SetVSyncEnabled(lua_State* L)
 	{
 		int argc = wi::lua::SGetArgCount(L);
@@ -225,6 +243,32 @@ namespace wi::lua::renderer
 		}
 		return 0;
 	}
+	int SetTemporalAAEnabled(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetTemporalAAEnabled(wi::lua::SGetBool(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetTemporalAAEnabled(bool enabled) not enough arguments!");
+		}
+		return 0;
+	}
+	int SetRaytracedShadowsEnabled(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetRaytracedShadowsEnabled(wi::lua::SGetBool(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetRaytracedShadowsEnabled(bool enabled) not enough arguments!");
+		}
+		return 0;
+	}
 	int SetMeshShaderAllowed(lua_State* L)
 	{
 		int argc = wi::lua::SGetArgCount(L);
@@ -248,6 +292,58 @@ namespace wi::lua::renderer
 		else
 		{
 			wi::lua::SError(L, "SetMeshletOcclusionCullingEnabled(bool enabled) not enough arguments!");
+		}
+		return 0;
+	}
+	int SetCapsuleShadowEnabled(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetCapsuleShadowEnabled(wi::lua::SGetBool(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetCapsuleShadowEnabled(bool enabled) not enough arguments!");
+		}
+		return 0;
+	}
+	int SetCapsuleShadowFade(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetCapsuleShadowFade(wi::lua::SGetFloat(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetCapsuleShadowFade(float value) not enough arguments!");
+		}
+		return 0;
+	}
+	int SetCapsuleShadowAngle(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetCapsuleShadowAngle(wi::lua::SGetFloat(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetCapsuleShadowAngle(float value) not enough arguments!");
+		}
+		return 0;
+	}
+	int SetShadowLODOverrideEnabled(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			wi::renderer::SetShadowLODOverrideEnabled(wi::lua::SGetBool(L, 1));
+		}
+		else
+		{
+			wi::lua::SError(L, "SetShadowLODOverrideEnabled(bool value) not enough arguments!");
 		}
 		return 0;
 	}
@@ -939,6 +1035,7 @@ namespace wi::lua::renderer
 			wi::lua::RegisterFunc("SetGamma", SetGamma);
 			wi::lua::RegisterFunc("SetGameSpeed", SetGameSpeed);
 			wi::lua::RegisterFunc("GetGameSpeed", GetGameSpeed);
+			wi::lua::RegisterFunc("IsRaytracingSupported", IsRaytracingSupported);
 
 			wi::lua::RegisterFunc("SetShadowProps2D", SetShadowProps2D);
 			wi::lua::RegisterFunc("SetShadowPropsCube", SetShadowPropsCube);
@@ -952,12 +1049,19 @@ namespace wi::lua::renderer
 			wi::lua::RegisterFunc("SetDebugCollidersEnabled", SetDebugCollidersEnabled);
 			wi::lua::RegisterFunc("SetGridHelperEnabled", SetGridHelperEnabled);
 			wi::lua::RegisterFunc("SetDDGIDebugEnabled", SetDDGIDebugEnabled);
+			wi::lua::RegisterFunc("SetDDGIEnabled", SetDDGIEnabled);
 			wi::lua::RegisterFunc("SetVSyncEnabled", SetVSyncEnabled);
 			wi::lua::RegisterFunc("SetResolution", SetResolution);
 			wi::lua::RegisterFunc("SetDebugLightCulling", SetDebugLightCulling);
 			wi::lua::RegisterFunc("SetOcclusionCullingEnabled", SetOcclusionCullingEnabled);
+			wi::lua::RegisterFunc("SetTemporalAAEnabled", SetTemporalAAEnabled);
+			wi::lua::RegisterFunc("SetRaytracedShadowsEnabled", SetRaytracedShadowsEnabled);
 			wi::lua::RegisterFunc("SetMeshShaderAllowed", SetMeshShaderAllowed);
 			wi::lua::RegisterFunc("SetMeshletOcclusionCullingEnabled", SetMeshletOcclusionCullingEnabled);
+			wi::lua::RegisterFunc("SetCapsuleShadowEnabled", SetCapsuleShadowEnabled);
+			wi::lua::RegisterFunc("SetCapsuleShadowFade", SetCapsuleShadowFade);
+			wi::lua::RegisterFunc("SetCapsuleShadowAngle", SetCapsuleShadowAngle);
+			wi::lua::RegisterFunc("SetShadowLODOverrideEnabled", SetShadowLODOverrideEnabled);
 
 			wi::lua::RegisterFunc("DrawLine", DrawLine);
 			wi::lua::RegisterFunc("DrawPoint", DrawPoint);

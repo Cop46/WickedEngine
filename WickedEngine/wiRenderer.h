@@ -11,6 +11,7 @@
 #include "shaders/ShaderInterop_Renderer.h"
 #include "shaders/ShaderInterop_SurfelGI.h"
 #include "wiVector.h"
+#include "wiSpinLock.h"
 
 #include <memory>
 #include <limits>
@@ -117,9 +118,10 @@ namespace wi::renderer
 			ALLOW_ENVPROBES = 1 << 3,
 			ALLOW_EMITTERS = 1 << 4,
 			ALLOW_HAIRS = 1 << 5,
-			ALLOW_REQUEST_REFLECTION = 1 << 6,
-			ALLOW_OCCLUSION_CULLING = 1 << 7,
-			ALLOW_SHADOW_ATLAS_PACKING = 1 << 8,
+			ALLOW_COLLIDERS = 1 << 6,
+			ALLOW_REQUEST_REFLECTION = 1 << 7,
+			ALLOW_OCCLUSION_CULLING = 1 << 8,
+			ALLOW_SHADOW_ATLAS_PACKING = 1 << 9,
 
 			ALLOW_EVERYTHING = ~0u
 		};
@@ -133,6 +135,7 @@ namespace wi::renderer
 		wi::vector<uint32_t> visibleEmitters;
 		wi::vector<uint32_t> visibleHairs;
 		wi::vector<uint32_t> visibleLights;
+		wi::vector<wi::scene::ColliderComponent> visibleColliders;
 		wi::rectpacker::State shadow_packer;
 		wi::rectpacker::Rect rain_blocker_shadow_rect;
 		wi::vector<wi::rectpacker::Rect> visibleLightShadowRects;
@@ -145,6 +148,7 @@ namespace wi::renderer
 		float closestRefPlane = std::numeric_limits<float>::max();
 		XMFLOAT4 reflectionPlane = XMFLOAT4(0, 1, 0, 0);
 		std::atomic_bool volumetriclight_request{ false };
+		std::atomic_bool transparents_visible{ false };
 
 		void Clear()
 		{
@@ -154,6 +158,7 @@ namespace wi::renderer
 			visibleEnvProbes.clear();
 			visibleEmitters.clear();
 			visibleHairs.clear();
+			visibleColliders.clear();
 
 			object_counter.store(0);
 			light_counter.store(0);
@@ -161,6 +166,7 @@ namespace wi::renderer
 			closestRefPlane = std::numeric_limits<float>::max();
 			planar_reflection_visible = false;
 			volumetriclight_request.store(false);
+			transparents_visible.store(false);
 		}
 
 		bool IsRequestedPlanarReflections() const
@@ -170,6 +176,10 @@ namespace wi::renderer
 		bool IsRequestedVolumetricLights() const
 		{
 			return volumetriclight_request.load();
+		}
+		bool IsTransparentsVisible() const
+		{
+			return transparents_visible.load();
 		}
 	};
 
@@ -242,7 +252,7 @@ namespace wi::renderer
 		DRAWSCENE_MAINCAMERA = 1 << 9, // If this is active, then ObjectComponent with SetNotVisibleInMainCamera(true) won't be drawn
 	};
 
-	// Draw the world from a camera. You must call BindCameraCB() at least once in this frame prior to this
+	// Draw the world from a camera. You must call BindCameraCB() at least once in this command list prior to this
 	void DrawScene(
 		const Visibility& vis,
 		wi::enums::RENDERPASS renderPass,
@@ -741,6 +751,7 @@ namespace wi::renderer
 	};
 	void CreateMotionBlurResources(MotionBlurResources& res, XMUINT2 resolution);
 	void Postprocess_MotionBlur(
+		float dt, // delta time in seconds
 		const MotionBlurResources& res,
 		const wi::graphics::Texture& input,
 		const wi::graphics::Texture& output,
@@ -758,7 +769,7 @@ namespace wi::renderer
 	);
 	struct VolumetricCloudResources
 	{
-		mutable int frame = 0;
+		mutable int frame = -1;
 		XMUINT2 final_resolution = {};
 		wi::graphics::Texture texture_cloudRender;
 		wi::graphics::Texture texture_cloudDepth;
@@ -766,6 +777,11 @@ namespace wi::renderer
 		wi::graphics::Texture texture_reproject_depth[2];
 		wi::graphics::Texture texture_reproject_additional[2];
 		wi::graphics::Texture texture_cloudMask;
+
+		void ResetFrame() const { frame = -1; }
+		void AdvanceFrame() const { frame++; }
+		int GetTemporalOutputIndex() const { return frame % 2; }
+		int GetTemporalInputIndex() const { return 1 - GetTemporalOutputIndex(); }
 	};
 	void CreateVolumetricCloudResources(VolumetricCloudResources& res, XMUINT2 resolution);
 	void Postprocess_VolumetricClouds(
@@ -828,7 +844,8 @@ namespace wi::renderer
 		const wi::graphics::Texture* texture_bloom = nullptr,
 		wi::graphics::ColorSpace display_colorspace = wi::graphics::ColorSpace::SRGB,
 		Tonemap tonemap = Tonemap::Reinhard,
-		const wi::graphics::Texture* texture_distortion_overlay = nullptr
+		const wi::graphics::Texture* texture_distortion_overlay = nullptr,
+		float hdr_calibration = 1
 	);
 	void Postprocess_FSR(
 		const wi::graphics::Texture& input,
@@ -915,7 +932,8 @@ namespace wi::renderer
 	void Postprocess_Downsample4x(
 		const wi::graphics::Texture& input,
 		const wi::graphics::Texture& output,
-		wi::graphics::CommandList cmd
+		wi::graphics::CommandList cmd,
+		bool hdrToSRGB = false
 	);
 	void Postprocess_Lineardepth(
 		const wi::graphics::Texture& input,
@@ -962,6 +980,20 @@ namespace wi::renderer
 		wi::graphics::CommandList cmd,
 		uint8_t stencil_bits_to_copy = 0xFF,
 		bool depthstencil_already_cleared = false
+	);
+
+	// The input texture mask is scaled into the stencil of the current render pass with the specified viewport
+	void ScaleStencilMask(
+		const wi::graphics::Viewport& vp,
+		const wi::graphics::Texture& input,
+		wi::graphics::CommandList cmd
+	);
+
+	// Extract stencil from a depth stencil texture into a R8_UINT format texture
+	void ExtractStencil(
+		const wi::graphics::Texture& input_depthstencil,
+		const wi::graphics::Texture& output,
+		wi::graphics::CommandList cmd
 	);
 
 	// Render the scene with ray tracing
@@ -1116,12 +1148,22 @@ namespace wi::renderer
 	void SetMeshletOcclusionCullingEnabled(bool value);
 	bool IsMeshletOcclusionCullingEnabled();
 	void Workaround( const int bug, wi::graphics::CommandList cmd);
+	void SetCapsuleShadowEnabled(bool value);
+	bool IsCapsuleShadowEnabled();
+	void SetCapsuleShadowAngle(float value); // cone angle in radians
+	float GetCapsuleShadowAngle();
+	void SetCapsuleShadowFade(float value);
+	float GetCapsuleShadowFade();
+	void SetShadowLODOverrideEnabled(bool value); // Allow shadowmap rendering to request custom LOD for objects (can result in shadow mismatch, but increased GPU performance)
+	bool IsShadowLODOverrideEnabled();
 
 	// Gets pick ray according to the current screen resolution and pointer coordinates. Can be used as input into RayIntersectWorld()
 	wi::primitive::Ray GetPickRay(long cursorX, long cursorY, const wi::Canvas& canvas, const wi::scene::CameraComponent& camera = wi::scene::GetCamera());
 
 
 	// Add box to render in next frame. It will be rendered in DrawDebugWorld()
+	void DrawBox(const wi::primitive::AABB& aabb, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
+	void DrawBox(const XMMATRIX& boxMatrix, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
 	void DrawBox(const XMFLOAT4X4& boxMatrix, const XMFLOAT4& color = XMFLOAT4(1,1,1,1), bool depth = true);
 	// Add sphere to render in next frame. It will be rendered in DrawDebugWorld()
 	void DrawSphere(const wi::primitive::Sphere& sphere, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);

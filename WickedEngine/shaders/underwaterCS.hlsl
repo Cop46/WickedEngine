@@ -15,7 +15,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	float2 uv = (DTid.xy + 0.5f) * postprocess.resolution_rcp;
 
 	// Unproject near plane and determine for every pixel if it's below water surface:
-	float4 clipspace = float4(uv_to_clipspace(uv), 1, 1);
+	float4 clipspace = float4(uv_to_clipspace(uv), 0.2, 1); // push further away from near plane
 	float4 unproj = mul(GetCamera().inverse_view_projection, clipspace);
 	unproj.xyz /= unproj.w;
 	float3 world_pos = unproj.xyz;
@@ -25,7 +25,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	if (ocean.texture_displacementmap >= 0)
 	{
 		const float2 ocean_uv = ocean_pos.xz * ocean.patch_size_rcp;
-		Texture2D texture_displacementmap = bindless_textures[ocean.texture_displacementmap];
+		Texture2D texture_displacementmap = bindless_textures[descriptor_index(ocean.texture_displacementmap)];
 		const float3 displacement = texture_displacementmap.SampleLevel(sampler_linear_wrap, ocean_uv, 0).xzy;
 		ocean_pos += displacement;
 	}
@@ -50,7 +50,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		//	Otherwise the ocean surface could be same as infinite depth and incorrectly fogged
 		float3 ocean_surface_pos = intersectPlaneClampInfinite(GetCamera().position, V, float3(0, 1, 0), ocean.water_height);
 		float2 ocean_surface_uv = ocean_surface_pos.xz * ocean.patch_size_rcp;
-		Texture2D texture_displacementmap = bindless_textures[ocean.texture_displacementmap];
+		Texture2D texture_displacementmap = bindless_textures[descriptor_index(ocean.texture_displacementmap)];
 		const float3 displacement = texture_displacementmap.SampleLevel(sampler_linear_wrap, ocean_surface_uv, 0).xzy;
 		ocean_surface_pos += displacement;
 		const float ocean_dist = length(ocean_surface_pos - GetCamera().position);
@@ -59,11 +59,11 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		if (ocean.texture_displacementmap >= 0)
 		{
 			const float2 ocean_uv = surface_position.xz * ocean.patch_size_rcp;
-			Texture2D texture_displacementmap = bindless_textures[ocean.texture_displacementmap];
+			Texture2D texture_displacementmap = bindless_textures[descriptor_index(ocean.texture_displacementmap)];
 			const float3 displacement = texture_displacementmap.SampleLevel(sampler_linear_wrap, ocean_uv, 0).xzy;
 			surface_position += displacement;
 		}
-		const float distance_from_surface = distance(GetCamera().position, surface_position);
+		const float distance_from_surface = distance(GetCamera().position, surface_position) * 0.1;
 		float water_depth = ocean_pos.y - surface_position.y;
 		water_depth = max(min(distance_from_surface, ocean_dist), water_depth);
 

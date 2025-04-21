@@ -1,3 +1,4 @@
+cmake_minimum_required(VERSION 3.19)
 set (SOURCE_FILES
 	stdafx.cpp
 	Tests.cpp
@@ -50,6 +51,6 @@ add_custom_command(
 	# Copy font test resources
 	COMMAND ${CMAKE_COMMAND} -E copy_if_different ${CMAKE_CURRENT_SOURCE_DIR}/yumin.ttf ${CMAKE_CURRENT_BINARY_DIR}/
 
-	COMMENT Copying Tests resources
+	COMMENT "Copying Tests resources"
 	VERBATIM
 )

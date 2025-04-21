@@ -93,11 +93,14 @@ struct Surface
 	half3 bumpColor;
 	half3 ssgi;
 	half3 extinction;
+	half3 dominant_lightdir;
+	half3 dominant_lightcolor;
 
 	// It's good to use bools instead of flags in shaders, because bools of all lanes can be combined into one SGPR
 	bool receiveshadow;
 	bool is_backface;
 	bool gi_applied;
+	bool capsuleshadow_disabled;
 
 	// These will be computed when calling Update():
 	half NdotV;				// cos(angle between normal and view vector)
@@ -146,10 +149,13 @@ struct Surface
 		bumpColor = 0;
 		ssgi = 0;
 		extinction = 0;
+		dominant_lightdir = GetSunDirection() * half3(-1, 1, -1);
+		dominant_lightcolor = 0;
 		
 		receiveshadow = true;
 		is_backface = false;
 		gi_applied = false;
+		capsuleshadow_disabled = true;
 
 		uid_validate = 0;
 		hit_depth = 0;
@@ -181,6 +187,7 @@ struct Surface
 		sss = material.GetSSS();
 		sss_inv = material.GetSSSInverse();
 		SetReceiveShadow(material.IsReceiveShadow());
+		SetCapsuleShadowDisabled(material.IsCapsuleShadowDisabled());
 	}
 
 	inline void create(
@@ -264,7 +271,7 @@ struct Surface
 
 #ifdef SHEEN
 		// Sheen energy compensation: https://dassaultsystemes-technology.github.io/EnterprisePBRShadingModel/spec-2021x.md.html#figure_energy-compensation-sheen-e
-		sheen.DFG = texture_sheenlut.SampleLevel(sampler_linear_clamp, float2(NdotV, sheen.roughness), 0).r;
+		sheen.DFG = texture_sheenlut.SampleLevel(sampler_linear_clamp, half2(NdotV, sheen.roughness), 0).r;
 		sheen.albedoScaling = 1.0 - max3(sheen.color) * sheen.DFG;
 #endif // SHEEN
 
@@ -305,10 +312,12 @@ struct Surface
 	inline bool IsReceiveShadow() { return receiveshadow; }
 	inline bool IsBackface() { return is_backface; }
 	inline bool IsGIApplied() { return gi_applied; }
+	inline bool IsCapsuleShadowDisabled() { return capsuleshadow_disabled; }
 	
 	inline void SetReceiveShadow(bool value) { receiveshadow = value; }
 	inline void SetBackface(bool value) { is_backface = value; }
 	inline void SetGIApplied(bool value) { gi_applied = value; }
+	inline void SetCapsuleShadowDisabled(bool value) { capsuleshadow_disabled = value; }
 
 
 	ShaderMeshInstance inst;
@@ -355,7 +364,7 @@ struct Surface
 		i1 = prim.i1();
 		i2 = prim.i2();
 
-		Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_pos_wind)];
+		Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(descriptor_index(geometry.vb_pos_wind))];
 		data0 = buf[i0];
 		data1 = buf[i1];
 		data2 = buf[i2];
@@ -364,7 +373,7 @@ struct Surface
 	}
 	void load_internal(uint flatTileIndex = 0)
 	{
-		SamplerState sam = bindless_samplers[NonUniformResourceIndex(material.sampler_descriptor)];
+		SamplerState sam = bindless_samplers[NonUniformResourceIndex(descriptor_index(material.sampler_descriptor))];
 
 		const bool is_hairparticle = geometry.flags & SHADERMESH_FLAG_HAIRPARTICLE;
 		const bool is_emittedparticle = geometry.flags & SHADERMESH_FLAG_EMITTEDPARTICLE;
@@ -375,10 +384,10 @@ struct Surface
 		[branch]
 		if (geometry.vb_nor >= 0)
 		{
-			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_nor)];
-			half3 n0 = rotate_vector(buf[i0].xyz, (half4)inst.quaternion);
-			half3 n1 = rotate_vector(buf[i1].xyz, (half4)inst.quaternion);
-			half3 n2 = rotate_vector(buf[i2].xyz, (half4)inst.quaternion);
+			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(descriptor_index(geometry.vb_nor))];
+			float3 n0 = mul(inst.transformRaw.GetMatrixAdjoint(), buf[i0].xyz);
+			float3 n1 = mul(inst.transformRaw.GetMatrixAdjoint(), buf[i1].xyz);
+			float3 n2 = mul(inst.transformRaw.GetMatrixAdjoint(), buf[i2].xyz);
 			n0 = any(n0) ? normalize(n0) : 0;
 			n1 = any(n1) ? normalize(n1) : 0;
 			n2 = any(n2) ? normalize(n2) : 0;
@@ -415,7 +424,7 @@ struct Surface
 		[branch]
 		if (geometry.vb_uvs >= 0)
 		{
-			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_uvs)];
+			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(descriptor_index(geometry.vb_uvs))];
 			float4 uv0 = lerp(geometry.uv_range_min.xyxy, geometry.uv_range_max.xyxy, buf[i0]);
 			float4 uv1 = lerp(geometry.uv_range_min.xyxy, geometry.uv_range_max.xyxy, buf[i1]);
 			float4 uv2 = lerp(geometry.uv_range_min.xyxy, geometry.uv_range_max.xyxy, buf[i2]);
@@ -448,21 +457,17 @@ struct Surface
 		[branch]
 		if (geometry.vb_tan >= 0)
 		{
-			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_tan)];
-			half4 t0 = buf[i0];
-			half4 t1 = buf[i1];
-			half4 t2 = buf[i2];
-			t0.xyz = rotate_vector(t0.xyz, (half4)inst.quaternion);
-			t1.xyz = rotate_vector(t1.xyz, (half4)inst.quaternion);
-			t2.xyz = rotate_vector(t2.xyz, (half4)inst.quaternion);
+			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(descriptor_index(geometry.vb_tan))];
+			float4 t0 = buf[i0];
+			float4 t1 = buf[i1];
+			float4 t2 = buf[i2];
+			t0.xyz = mul(inst.transformRaw.GetMatrixAdjoint(), t0.xyz);
+			t1.xyz = mul(inst.transformRaw.GetMatrixAdjoint(), t1.xyz);
+			t2.xyz = mul(inst.transformRaw.GetMatrixAdjoint(), t2.xyz);
 			t0.xyz = any(t0.xyz) ? normalize(t0.xyz) : 0;
 			t1.xyz = any(t1.xyz) ? normalize(t1.xyz) : 0;
 			t2.xyz = any(t2.xyz) ? normalize(t2.xyz) : 0;
 			T = attribute_at_bary(t0, t1, t2, bary);
-			if (is_backface)
-			{
-				T = -T;
-			}
 			T.w = T.w < 0 ? -1 : 1;
 			half3 bitangent = cross(T.xyz, Nunnormalized) * T.w;
 			TBN = half3x3(T.xyz, bitangent, Nunnormalized); // unnormalized TBN! http://www.mikktspace.com/
@@ -476,7 +481,7 @@ struct Surface
 				const float2 uv = material.textures[DISPLACEMENTMAP].GetUVSet() == 0 ? uvsets.xy : uvsets.zw;
 				const float2 uv_dx = material.textures[DISPLACEMENTMAP].GetUVSet() == 0 ? uvsets_dx.xy : uvsets_dx.zw;
 				const float2 uv_dy = material.textures[DISPLACEMENTMAP].GetUVSet() == 0 ? uvsets_dy.xy : uvsets_dy.zw;
-				Texture2D tex = bindless_textures[NonUniformResourceIndex(material.textures[DISPLACEMENTMAP].texture_descriptor)];
+				Texture2D<half4> tex = bindless_textures_half4[NonUniformResourceIndex(descriptor_index(material.textures[DISPLACEMENTMAP].texture_descriptor))];
 				ParallaxOcclusionMapping_Impl(
 					uvsets,
 					V,
@@ -537,6 +542,8 @@ struct Surface
 
 		baseColor = is_emittedparticle ? 1 : material.GetBaseColor();
 		baseColor *= inst.GetColor();
+
+#ifndef INTERIORMAPPING
 		[branch]
 		if (material.textures[BASECOLORMAP].IsValid())
 		{
@@ -558,6 +565,7 @@ struct Surface
 				baseColor.a *= baseColorMap.a;
 			}
 		}
+#endif // INTERIORMAPPING
 		
 		[branch]
 		if (material.textures[TRANSPARENCYMAP].IsValid())
@@ -576,7 +584,7 @@ struct Surface
 		[branch]
 		if (geometry.vb_col >= 0 && material.IsUsingVertexColors())
 		{
-			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_col)];
+			Buffer<half4> buf = bindless_buffers_half4[NonUniformResourceIndex(descriptor_index(geometry.vb_col))];
 			const half4 c0 = buf[i0];
 			const half4 c1 = buf[i1];
 			const half4 c2 = buf[i2];
@@ -587,7 +595,7 @@ struct Surface
 		[branch]
 		if (inst.vb_ao >= 0 && material.IsUsingVertexAO())
 		{
-			Buffer<float> buf = bindless_buffers_float[NonUniformResourceIndex(inst.vb_ao)];
+			Buffer<half> buf = bindless_buffers_half[NonUniformResourceIndex(descriptor_index(inst.vb_ao))];
 			const half ao0 = buf[i0];
 			const half ao1 = buf[i1];
 			const half ao2 = buf[i2];
@@ -598,13 +606,13 @@ struct Surface
 		[branch]
 		if (inst.lightmap >= 0 && geometry.vb_atl >= 0)
 		{
-			Buffer<float2> buf = bindless_buffers_float2[NonUniformResourceIndex(geometry.vb_atl)];
+			Buffer<float2> buf = bindless_buffers_float2[NonUniformResourceIndex(descriptor_index(geometry.vb_atl))];
 			const float2 a0 = buf[i0];
 			const float2 a1 = buf[i1];
 			const float2 a2 = buf[i2];
 			float2 atlas = attribute_at_bary(a0, a1, a2, bary);
 
-			Texture2D tex = bindless_textures[NonUniformResourceIndex(inst.lightmap)];
+			Texture2D<half4> tex = bindless_textures_half4[NonUniformResourceIndex(descriptor_index(inst.lightmap))];
 			gi = tex.SampleLevel(sampler_linear_clamp, atlas, 0).rgb;
 			SetGIApplied(true);
 		}
@@ -680,12 +688,12 @@ struct Surface
 				if(chunk_coord.x >= -terrain.chunk_buffer_range && chunk_coord.x <= terrain.chunk_buffer_range && chunk_coord.y >= -terrain.chunk_buffer_range && chunk_coord.y <= terrain.chunk_buffer_range)
 				{
 					uint chunk_idx = flatten2D(chunk_coord + terrain.chunk_buffer_range, terrain.chunk_buffer_range * 2 + 1);
-					ShaderTerrainChunk chunk = bindless_structured_terrain_chunks[terrain.chunk_buffer][chunk_idx];
+					ShaderTerrainChunk chunk = bindless_structured_terrain_chunks[NonUniformResourceIndex(descriptor_index(terrain.chunk_buffer))][chunk_idx];
 				
 					[branch]
 					if(chunk.heightmap >= 0)
 					{
-						Texture2D terrain_heightmap = bindless_textures[NonUniformResourceIndex(chunk.heightmap)];
+						Texture2D terrain_heightmap = bindless_textures[NonUniformResourceIndex(descriptor_index(chunk.heightmap))];
 						float2 chunk_min = terrain.center_chunk_pos.xz + chunk_coord * terrain.chunk_size;
 						float2 chunk_max = terrain.center_chunk_pos.xz + terrain.chunk_size + chunk_coord * terrain.chunk_size;
 						float2 terrain_uv = saturate(inverse_lerp(chunk_min, chunk_max, P.xz));
@@ -795,7 +803,7 @@ struct Surface
 								V,
 								tbn,
 								decal.GetLength(),
-								bindless_textures[decalDisplacementmap],
+								bindless_textures_half4[descriptor_index(decalDisplacementmap)],
 								uvw.xy,
 								decalDX,
 								decalDY,
@@ -806,7 +814,7 @@ struct Surface
 						[branch]
 						if (decalTexture >= 0)
 						{
-							decalColor *= (half4)bindless_textures[decalTexture].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+							decalColor *= bindless_textures_half4[descriptor_index(decalTexture)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 							if ((decal.GetFlags() & ENTITY_FLAG_DECAL_BASECOLOR_ONLY_ALPHA) == 0)
 							{
 								// perform manual blending of decals:
@@ -818,7 +826,7 @@ struct Surface
 						[branch]
 						if (decalNormal >= 0)
 						{
-							half3 decalBumpColor = half3((half2)bindless_textures[decalNormal].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
+							half3 decalBumpColor = half3(bindless_textures_half4[descriptor_index(decalNormal)].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
 							decalBumpColor = decalBumpColor * 2 - 1;
 							decalBumpColor.rg *= decal.GetAngleScale();
 							decalBumpAccumulation.rgb = mad(1 - decalBumpAccumulation.a, decalColor.a * decalBumpColor.rgb, decalBumpAccumulation.rgb);
@@ -827,7 +835,7 @@ struct Surface
 						[branch]
 						if (decalSurfacemap >= 0)
 						{
-							half4 decalSurfaceColor = (half4)bindless_textures[decalSurfacemap].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+							half4 decalSurfaceColor = bindless_textures_half4[descriptor_index(decalSurfacemap)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 							decalSurfaceAccumulation = mad(1 - decalSurfaceAccumulationAlpha, decalColor.a * decalSurfaceColor, decalSurfaceAccumulation);
 							decalSurfaceAccumulationAlpha = mad(1 - decalColor.a, decalSurfaceAccumulationAlpha, decalColor.a);
 						}
@@ -868,7 +876,7 @@ struct Surface
 		[branch]
 		if (inst.vb_wetmap >= 0)
 		{
-			Buffer<float> buf = bindless_buffers_float[NonUniformResourceIndex(inst.vb_wetmap)];
+			Buffer<half> buf = bindless_buffers_half[NonUniformResourceIndex(descriptor_index(inst.vb_wetmap))];
 			const half wet0 = buf[i0];
 			const half wet1 = buf[i1];
 			const half wet2 = buf[i2];
@@ -1007,7 +1015,7 @@ struct Surface
 		[branch]
 		if (geometry.vb_pre >= 0)
 		{
-			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(geometry.vb_pre)];
+			Buffer<float4> buf = bindless_buffers_float4[NonUniformResourceIndex(descriptor_index(geometry.vb_pre))];
 			pre0 = buf[i0].xyz;
 			pre1 = buf[i1].xyz;
 			pre2 = buf[i2].xyz;

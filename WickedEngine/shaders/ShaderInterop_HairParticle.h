@@ -6,18 +6,19 @@
 
 #define THREADCOUNT_SIMULATEHAIR 64
 
-struct PatchSimulationData
+struct alignas(16) PatchSimulationData
 {
-	float3 position;
-	uint tangent_random;
-	uint3 normal_velocity; // packed fp16
-	uint binormal_length;
+	float3 prevTail;
+	float padding0;
+	float3 currentTail;
+	float padding1;
 };
 
 enum HAIR_FLAGS
 {
 	HAIR_FLAG_REGENERATE_FRAME = 1 << 0,
 	HAIR_FLAG_UNORM_POS = 1 << 1,
+	HAIR_FLAG_CAMERA_BEND = 1 << 2,
 };
 
 struct HairParticleAtlasRect
@@ -37,7 +38,7 @@ CBUFFER(HairParticleCB, CBSLOT_OTHER_HAIRPARTICLE)
 	uint xHairFlags;
 	float xHairLength;
 	float xHairStiffness;
-	float xHairRandomness;
+	float xHairDrag;
 
 	uint xHairParticleCount;
 	uint xHairStrandCount;
@@ -49,10 +50,15 @@ CBUFFER(HairParticleCB, CBSLOT_OTHER_HAIRPARTICLE)
 	uint xHairInstanceIndex;
 	uint xHairLayerMask;
 
+	float xHairRandomness;
 	float xHairAspect;
-	float xHairPadding1;
 	float xHairUniformity;
 	uint xHairAtlasRectCount;
+
+	float xHairGravityPower;
+	uint xHairBillboardCount;
+	float xHair_padding0;
+	float xHair_padding1;
 
 	HairParticleAtlasRect xHairAtlasRects[64];
 };

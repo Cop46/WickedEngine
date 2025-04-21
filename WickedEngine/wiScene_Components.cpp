@@ -35,7 +35,7 @@ namespace wi::scene
 
 	XMFLOAT3 TransformComponent::GetPosition() const
 	{
-		return *((XMFLOAT3*)&world._41);
+		return wi::math::GetPosition(world);
 	}
 	XMFLOAT4 TransformComponent::GetRotation() const
 	{
@@ -101,6 +101,14 @@ namespace wi::scene
 	{
 		XMFLOAT3 v = wi::math::GetRight(world);
 		return XMLoadFloat3(&v);
+	}
+	void TransformComponent::GetPositionRotationScale(XMFLOAT3& position, XMFLOAT4& rotation, XMFLOAT3& scale) const
+	{
+		XMVECTOR S, R, T;
+		XMMatrixDecompose(&S, &R, &T, XMLoadFloat4x4(&world));
+		XMStoreFloat3(&position, T);
+		XMStoreFloat4(&rotation, R);
+		XMStoreFloat3(&scale, S);
 	}
 	void TransformComponent::UpdateTransform()
 	{
@@ -318,6 +326,13 @@ namespace wi::scene
 		material.shaderType = (uint)shaderType;
 		material.userdata = userdata;
 
+		if (shaderType == SHADERTYPE_INTERIORMAPPING)
+		{
+			// Note: the sss params are repurposed for this shader type
+			material.subsurfaceScattering = pack_half4(interiorMappingScale.x, interiorMappingScale.y, interiorMappingScale.z, std::sin(interiorMappingRotation));
+			material.subsurfaceScattering_inv = pack_half4(interiorMappingOffset.x, interiorMappingOffset.y, interiorMappingOffset.z, std::cos(interiorMappingRotation));
+		}
+
 		material.options_stencilref = 0;
 		if (IsUsingVertexColors())
 		{
@@ -367,14 +382,19 @@ namespace wi::scene
 		{
 			material.options_stencilref |= SHADERMATERIAL_OPTION_BIT_USE_VERTEXAO;
 		}
+		if (IsCapsuleShadowDisabled())
+		{
+			material.options_stencilref |= SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED;
+		}
 
 		material.options_stencilref |= wi::renderer::CombineStencilrefs(engineStencilRef, userStencilRef) << 24u;
 
 		GraphicsDevice* device = wi::graphics::GetDevice();
 		for (int i = 0; i < TEXTURESLOT_COUNT; ++i)
 		{
-			material.textures[i].uvset_lodclamp = (textures[i].uvset & 1) | (XMConvertFloatToHalf(textures[i].lod_clamp) << 1u);
-			if (textures[i].resource.IsValid())
+			const MaterialComponent::TextureMap& texturemap = textures[i];
+			material.textures[i].uvset_aniso_lodclamp = (texturemap.uvset & 1) | ((texturemap.virtual_anisotropy & 0x7F) << 1u) | (XMConvertFloatToHalf(texturemap.lod_clamp) << 16u);
+			if (texturemap.resource.IsValid())
 			{
 				int subresource = -1;
 				switch (i)
@@ -383,18 +403,18 @@ namespace wi::scene
 				case EMISSIVEMAP:
 				case SPECULARMAP:
 				case SHEENCOLORMAP:
-					subresource = textures[i].resource.GetTextureSRGBSubresource();
+					subresource = texturemap.resource.GetTextureSRGBSubresource();
 					break;
 				case SURFACEMAP:
 					if (IsUsingSpecularGlossinessWorkflow())
 					{
-						subresource = textures[i].resource.GetTextureSRGBSubresource();
+						subresource = texturemap.resource.GetTextureSRGBSubresource();
 					}
 					break;
 				default:
 					break;
 				}
-				material.textures[i].texture_descriptor = device->GetDescriptorIndex(textures[i].GetGPUResource(), SubresourceType::SRV, subresource);
+				material.textures[i].texture_descriptor = device->GetDescriptorIndex(texturemap.GetGPUResource(), SubresourceType::SRV, subresource);
 			}
 			else
 			{
@@ -411,6 +431,12 @@ namespace wi::scene
 		else
 		{
 			material.sampler_descriptor = sampler_descriptor;
+		}
+
+		if (shaderType == SHADERTYPE_INTERIORMAPPING && textures[BASECOLORMAP].resource.IsValid() && !has_flag(textures[BASECOLORMAP].resource.GetTexture().GetDesc().misc_flags, ResourceMiscFlag::TEXTURECUBE))
+		{
+			// If the BASECOLORMAP slot is not a cubemap, then this will be invalid for the interior mapping shader:
+			material.textures[BASECOLORMAP].texture_descriptor = -1;
 		}
 
 		std::memcpy(dest, &material, sizeof(ShaderMaterial)); // memcpy whole structure into mapped pointer to avoid read from uncached memory
@@ -768,6 +794,8 @@ namespace wi::scene
 		}
 
 		// Determine UV range for normalization:
+		size_t uv_stride = sizeof(Vertex_UVS);
+		Format uv_format = Vertex_UVS::FORMAT;
 		if (!vertex_uvset_0.empty() || !vertex_uvset_1.empty())
 		{
 			const XMFLOAT2* uv0_stream = vertex_uvset_0.empty() ? vertex_uvset_1.data() : vertex_uvset_0.data();
@@ -781,6 +809,13 @@ namespace wi::scene
 				uv_range_max = wi::math::Max(uv_range_max, uv1_stream[i]);
 				uv_range_min = wi::math::Min(uv_range_min, uv0_stream[i]);
 				uv_range_min = wi::math::Min(uv_range_min, uv1_stream[i]);
+			}
+
+			if (std::abs(uv_range_max.x - uv_range_min.x) > 65536 || std::abs(uv_range_max.y - uv_range_min.y) > 65536)
+			{
+				// The bounding box of UVs is too large, fall back to full precision UVs:
+				uv_stride = sizeof(Vertex_UVS32);
+				uv_format = Vertex_UVS32::FORMAT;
 			}
 		}
 
@@ -808,7 +843,7 @@ namespace wi::scene
 			AlignTo(indices.size() * GetIndexStride(), alignment) +
 			AlignTo(vertex_normals.size() * sizeof(Vertex_NOR), alignment) +
 			AlignTo(vertex_tangents.size() * sizeof(Vertex_TAN), alignment) +
-			AlignTo(uv_count * sizeof(Vertex_UVS), alignment) +
+			AlignTo(uv_count * uv_stride, alignment) +
 			AlignTo(vertex_atlas.size() * sizeof(Vertex_TEX), alignment) +
 			AlignTo(vertex_colors.size() * sizeof(Vertex_COL), alignment) +
 			AlignTo(vertex_boneindices.size() * sizeof(Vertex_BON), alignment) +
@@ -1057,15 +1092,30 @@ namespace wi::scene
 				const XMFLOAT2* uv1_stream = vertex_uvset_1.empty() ? vertex_uvset_0.data() : vertex_uvset_1.data();
 
 				vb_uvs.offset = buffer_offset;
-				vb_uvs.size = uv_count * sizeof(Vertex_UVS);
-				Vertex_UVS* vertices = (Vertex_UVS*)(buffer_data + buffer_offset);
-				buffer_offset += AlignTo(vb_uvs.size, alignment);
-				for (size_t i = 0; i < uv_count; ++i)
+				vb_uvs.size = uv_count * uv_stride;
+				if (uv_stride == sizeof(Vertex_UVS))
 				{
-					Vertex_UVS vert;
-					vert.uv0.FromFULL(uv0_stream[i], uv_range_min, uv_range_max);
-					vert.uv1.FromFULL(uv1_stream[i], uv_range_min, uv_range_max);
-					std::memcpy(vertices + i, &vert, sizeof(vert));
+					Vertex_UVS* vertices = (Vertex_UVS*)(buffer_data + buffer_offset);
+					buffer_offset += AlignTo(vb_uvs.size, alignment);
+					for (size_t i = 0; i < uv_count; ++i)
+					{
+						Vertex_UVS vert;
+						vert.uv0.FromFULL(uv0_stream[i], uv_range_min, uv_range_max);
+						vert.uv1.FromFULL(uv1_stream[i], uv_range_min, uv_range_max);
+						std::memcpy(vertices + i, &vert, sizeof(vert));
+					}
+				}
+				else
+				{
+					Vertex_UVS32* vertices = (Vertex_UVS32*)(buffer_data + buffer_offset);
+					buffer_offset += AlignTo(vb_uvs.size, alignment);
+					for (size_t i = 0; i < uv_count; ++i)
+					{
+						Vertex_UVS32 vert;
+						vert.uv0.FromFULL(uv0_stream[i], uv_range_min, uv_range_max);
+						vert.uv1.FromFULL(uv1_stream[i], uv_range_min, uv_range_max);
+						std::memcpy(vertices + i, &vert, sizeof(vert));
+					}
 				}
 			}
 
@@ -1266,7 +1316,7 @@ namespace wi::scene
 		}
 		if (vb_uvs.IsValid())
 		{
-			vb_uvs.subresource_srv = device->CreateSubresource(&generalBuffer, SubresourceType::SRV, vb_uvs.offset, vb_uvs.size, &Vertex_UVS::FORMAT);
+			vb_uvs.subresource_srv = device->CreateSubresource(&generalBuffer, SubresourceType::SRV, vb_uvs.offset, vb_uvs.size, &uv_format);
 			vb_uvs.descriptor_srv = device->GetDescriptorIndex(&generalBuffer, SubresourceType::SRV, vb_uvs.subresource_srv);
 		}
 		if (vb_atl.IsValid())
@@ -1322,8 +1372,8 @@ namespace wi::scene
 
 		const uint64_t alignment = device->GetMinOffsetAlignment(&desc) * sizeof(Vertex_POS32); // additional alignment for RGB32F
 		desc.size =
-			AlignTo(vertex_positions.size() * sizeof(Vertex_POS32), alignment) + // pos
-			AlignTo(vertex_positions.size() * sizeof(Vertex_POS32), alignment) + // prevpos
+			AlignTo(vertex_positions.size() * sizeof(Vertex_POS32W), alignment) + // pos
+			AlignTo(vertex_positions.size() * sizeof(Vertex_POS32W), alignment) + // prevpos
 			AlignTo(vertex_normals.size() * sizeof(Vertex_NOR), alignment) +
 			AlignTo(vertex_tangents.size() * sizeof(Vertex_TAN), alignment)
 			;
@@ -1335,18 +1385,18 @@ namespace wi::scene
 		uint64_t buffer_offset = 0ull;
 
 		so_pos.offset = buffer_offset;
-		so_pos.size = vertex_positions.size() * sizeof(Vertex_POS32);
+		so_pos.size = vertex_positions.size() * sizeof(Vertex_POS32W);
 		buffer_offset += AlignTo(so_pos.size, alignment);
-		so_pos.subresource_srv = device->CreateSubresource(&streamoutBuffer, SubresourceType::SRV, so_pos.offset, so_pos.size, &Vertex_POS32::FORMAT);
-		so_pos.subresource_uav = device->CreateSubresource(&streamoutBuffer, SubresourceType::UAV, so_pos.offset, so_pos.size); // UAV can't have RGB32_F format!
+		so_pos.subresource_srv = device->CreateSubresource(&streamoutBuffer, SubresourceType::SRV, so_pos.offset, so_pos.size, &Vertex_POS32W::FORMAT);
+		so_pos.subresource_uav = device->CreateSubresource(&streamoutBuffer, SubresourceType::UAV, so_pos.offset, so_pos.size, &Vertex_POS32W::FORMAT); // UAV can't have RGB32_F format!
 		so_pos.descriptor_srv = device->GetDescriptorIndex(&streamoutBuffer, SubresourceType::SRV, so_pos.subresource_srv);
 		so_pos.descriptor_uav = device->GetDescriptorIndex(&streamoutBuffer, SubresourceType::UAV, so_pos.subresource_uav);
 
 		so_pre.offset = buffer_offset;
 		so_pre.size = so_pos.size;
 		buffer_offset += AlignTo(so_pre.size, alignment);
-		so_pre.subresource_srv = device->CreateSubresource(&streamoutBuffer, SubresourceType::SRV, so_pre.offset, so_pre.size, &Vertex_POS32::FORMAT);
-		so_pre.subresource_uav = device->CreateSubresource(&streamoutBuffer, SubresourceType::UAV, so_pre.offset, so_pre.size); // UAV can't have RGB32_F format!
+		so_pre.subresource_srv = device->CreateSubresource(&streamoutBuffer, SubresourceType::SRV, so_pre.offset, so_pre.size, &Vertex_POS32W::FORMAT);
+		so_pre.subresource_uav = device->CreateSubresource(&streamoutBuffer, SubresourceType::UAV, so_pre.offset, so_pre.size, &Vertex_POS32W::FORMAT); // UAV can't have RGB32_F format!
 		so_pre.descriptor_srv = device->GetDescriptorIndex(&streamoutBuffer, SubresourceType::SRV, so_pre.subresource_srv);
 		so_pre.descriptor_uav = device->GetDescriptorIndex(&streamoutBuffer, SubresourceType::UAV, so_pre.subresource_uav);
 
@@ -1416,8 +1466,8 @@ namespace wi::scene
 				geometry.triangles.vertex_count = (uint32_t)vertex_positions.size();
 				if (so_pos.IsValid())
 				{
-					geometry.triangles.vertex_format = Vertex_POS32::FORMAT;
-					geometry.triangles.vertex_stride = sizeof(Vertex_POS32);
+					geometry.triangles.vertex_format = Format::R32G32B32_FLOAT;
+					geometry.triangles.vertex_stride = sizeof(Vertex_POS32W);
 				}
 				else
 				{
@@ -1895,6 +1945,7 @@ namespace wi::scene
 	}
 	size_t MeshComponent::CreateSubset()
 	{
+		wi::vector<MeshSubset> new_subsets;
 		int ret = 0;
 		const uint32_t lod_count = GetLODCount();
 		for (uint32_t lod = 0; lod < lod_count; ++lod)
@@ -1902,31 +1953,99 @@ namespace wi::scene
 			uint32_t first_subset = 0;
 			uint32_t last_subset = 0;
 			GetLODSubsetRange(lod, first_subset, last_subset);
-			MeshComponent::MeshSubset subset;
-			subset.indexOffset = ~0u;
-			subset.indexCount = 0;
+			uint32_t firstIndex = ~0u;
+			uint32_t lastIndex = 0u;
 			for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
 			{
-				subset.indexOffset = std::min(subset.indexOffset, subsets[subsetIndex].indexOffset);
-				subset.indexCount = std::max(subset.indexCount, subsets[subsetIndex].indexOffset + subsets[subsetIndex].indexCount);
+				const MeshComponent::MeshSubset& subset = subsets[subsetIndex];
+				firstIndex = std::min(firstIndex, subset.indexOffset);
+				lastIndex = std::max(lastIndex, subset.indexOffset + subset.indexCount);
+				new_subsets.push_back(subset);
 			}
-			subsets.insert(subsets.begin() + last_subset, subset);
-			if (lod == 0)
+			if (lastIndex > firstIndex)
 			{
-				ret = last_subset;
+				MeshComponent::MeshSubset& subset = new_subsets.emplace_back();
+				subset.indexOffset = firstIndex;
+				subset.indexCount = lastIndex - firstIndex;
+				if (lod == 0)
+				{
+					ret = last_subset;
+				}
 			}
 		}
 		if (subsets_per_lod > 0)
 		{
 			subsets_per_lod++;
 		}
-		CreateRenderData(); // mesh shader needs to rebuild clusters, otherwise wouldn't be needed
+		std::swap(subsets, new_subsets);
+		if (wi::renderer::IsMeshShaderAllowed() || !cluster_ranges.empty())
+		{
+			// mesh shader needs to rebuild clusters, otherwise not be needed
+			CreateRenderData();
+		}
 		return ret;
+	}
+	void MeshComponent::DeleteSubset(uint32_t subsetIndexToDelete)
+	{
+		wi::vector<MeshSubset> new_subsets;
+		const uint32_t lod_count = GetLODCount();
+		for (uint32_t lod = 0; lod < lod_count; ++lod)
+		{
+			uint32_t first_subset = 0;
+			uint32_t last_subset = 0;
+			GetLODSubsetRange(lod, first_subset, last_subset);
+			uint32_t firstIndex = ~0u;
+			uint32_t lastIndex = 0u;
+			for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
+			{
+				if (subsetIndexToDelete != (subsetIndex - first_subset))
+				{
+					new_subsets.push_back(subsets[subsetIndex]);
+				}
+			}
+		}
+		if (subsets_per_lod > 0)
+		{
+			subsets_per_lod--;
+		}
+		std::swap(subsets, new_subsets);
+		if (wi::renderer::IsMeshShaderAllowed() || !cluster_ranges.empty())
+		{
+			// mesh shader needs to rebuild clusters, otherwise not be needed
+			CreateRenderData();
+		}
+	}
+	void MeshComponent::SetSubsetMaterial(uint32_t subsetIndex, Entity entity)
+	{
+		const uint32_t lod_count = GetLODCount();
+		for (uint32_t lod = 0; lod < lod_count; ++lod)
+		{
+			uint32_t first_subset = 0;
+			uint32_t last_subset = 0;
+			GetLODSubsetRange(lod, first_subset, last_subset);
+			size_t subset_offset = first_subset + subsetIndex;
+			if (subset_offset < last_subset)
+			{
+				subsets[subset_offset].materialID = entity;
+			}
+		}
+	}
+	Entity MeshComponent::GetSubsetMaterial(uint32_t subsetIndex)
+	{
+		uint32_t first_subset = 0;
+		uint32_t last_subset = 0;
+		GetLODSubsetRange(0, first_subset, last_subset);
+		if (subsetIndex >= first_subset && subsetIndex < last_subset)
+		{
+			return subsets[subsetIndex].materialID;
+		}
+		return INVALID_ENTITY;
 	}
 
 	void ObjectComponent::ClearLightmap()
 	{
-		lightmap = Texture();
+		lightmap_render = {};
+		lightmap = {};
 		lightmapWidth = 0;
 		lightmapHeight = 0;
 		lightmapIterationCount = 0;
@@ -1935,7 +2054,8 @@ namespace wi::scene
 	}
 	void ObjectComponent::SaveLightmap()
 	{
-		if (lightmap.IsValid() && has_flag(lightmap.desc.bind_flags, BindFlag::RENDER_TARGET))
+		lightmap_render = {};
+		if (lightmap.IsValid() && has_flag(lightmap.desc.bind_flags, BindFlag::UNORDERED_ACCESS))
 		{
 			SetLightmapRenderRequest(false);
 
@@ -1945,8 +2065,6 @@ namespace wi::scene
 #ifdef OPEN_IMAGE_DENOISE
 			if (success)
 			{
-				wi::vector<uint8_t> texturedata_dst(lightmapTextureData.size());
-
 				size_t width = (size_t)lightmapWidth;
 				size_t height = (size_t)lightmapHeight;
 				{
@@ -1962,14 +2080,14 @@ namespace wi::scene
 					}
 
 					oidn::BufferRef lightmapTextureData_buffer = device.newBuffer(lightmapTextureData.size());
-					oidn::BufferRef texturedata_dst_buffer = device.newBuffer(texturedata_dst.size());
+					oidn::BufferRef texturedata_dst_buffer = device.newBuffer(lightmapTextureData.size());
 
 					lightmapTextureData_buffer.write(0, lightmapTextureData.size(), lightmapTextureData.data());
 
 					// Create a denoising filter
 					oidn::FilterRef filter = device.newFilter("RTLightmap");
-					filter.setImage("color", lightmapTextureData_buffer, oidn::Format::Float3, width, height, 0, sizeof(XMFLOAT4));
-					filter.setImage("output", texturedata_dst_buffer, oidn::Format::Float3, width, height, 0, sizeof(XMFLOAT4));
+					filter.setImage("color", lightmapTextureData_buffer, oidn::Format::Half3, width, height, 0, sizeof(XMHALF4));
+					filter.setImage("output", texturedata_dst_buffer, oidn::Format::Half3, width, height, 0, sizeof(XMHALF4));
 					filter.commit();
 
 					// Filter the image
@@ -1984,11 +2102,9 @@ namespace wi::scene
 					}
 					else
 					{
-						texturedata_dst_buffer.read(0, texturedata_dst.size(), texturedata_dst.data());
+						texturedata_dst_buffer.read(0, lightmapTextureData.size(), lightmapTextureData.data());
 					}
 				}
-
-				lightmapTextureData = std::move(texturedata_dst); // replace old (raw) data with denoised data
 			}
 #endif // OPEN_IMAGE_DENOISE
 
@@ -2007,12 +2123,12 @@ namespace wi::scene
 			wi::vector<uint8_t> packed_data;
 			packed_data.resize(sizeof(XMFLOAT3PK) * lightmapWidth * lightmapHeight);
 			XMFLOAT3PK* packed_ptr = (XMFLOAT3PK*)packed_data.data();
-			XMFLOAT4* raw_ptr = (XMFLOAT4*)lightmapTextureData.data();
+			XMHALF4* raw_ptr = (XMHALF4*)lightmapTextureData.data();
 
 			uint32_t texelcount = lightmapWidth * lightmapHeight;
 			for (uint32_t i = 0; i < texelcount; ++i)
 			{
-				XMStoreFloat3PK(packed_ptr + i, XMLoadFloat4(raw_ptr + i));
+				XMStoreFloat3PK(packed_ptr + i, XMLoadHalf4(raw_ptr + i));
 			}
 
 			lightmapTextureData = std::move(packed_data);
@@ -2578,6 +2694,44 @@ namespace wi::scene
 		wi::audio::CreateSoundInstance(&soundResource.GetSound(), &soundinstance);
 	}
 
+	bool HumanoidComponent::IsValid() const
+	{
+		if (bones[size_t(HumanoidBone::Hips)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::Spine)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::Head)] == INVALID_ENTITY)
+			return false;
+
+		if (bones[size_t(HumanoidBone::LeftUpperLeg)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::LeftLowerLeg)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::LeftFoot)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightUpperLeg)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightLowerLeg)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightFoot)] == INVALID_ENTITY)
+			return false;
+
+		if (bones[size_t(HumanoidBone::LeftUpperArm)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::LeftLowerArm)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::LeftHand)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightUpperArm)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightLowerArm)] == INVALID_ENTITY)
+			return false;
+		if (bones[size_t(HumanoidBone::RightHand)] == INVALID_ENTITY)
+			return false;
+
+		return true;
+	}
+
 	void CharacterComponent::Move(const XMFLOAT3& direction)
 	{
 		movement = direction;
@@ -2598,13 +2752,6 @@ namespace wi::scene
 	}
 	void CharacterComponent::Turn(const XMFLOAT3& direction)
 	{
-		XMVECTOR F = XMLoadFloat3(&facing);
-		float dot = XMVectorGetX(XMVector3Dot(F, XMLoadFloat3(&direction)));
-		if (dot < 0)
-		{
-			// help with turning around 180 degrees:
-			XMStoreFloat3(&facing, XMVector3TransformNormal(F, XMMatrixRotationY(XM_PI * 0.05f)));
-		}
 		facing_next = direction;
 	}
 	void CharacterComponent::Lean(float amount)
@@ -2718,5 +2865,254 @@ namespace wi::scene
 	bool CharacterComponent::IsActive() const
 	{
 		return active;
+	}
+
+	XMMATRIX SplineComponent::EvaluateSplineAt(float t) const
+	{
+		// Notes:
+		//	- This function uses the spline_node_transforms which are precomputed before using this by the scene's RunSplineUpdateSystem()
+		//	- it uses _local members of the transforms, but they can be either wlocal or world space, depending on when we use it and what was stored in them at that point
+		//		for example mesh updates will use local spaces, but terrain updates will use world spaces
+		//	- precomputed_node_distances must be updated before this, it is done by RunSplineUpdateSystem()
+		//		this is made to avoid computing distances every time we call this which might be a lot
+
+		if (spline_node_transforms.empty())
+			return {};
+		if (spline_node_transforms.size() == 1)
+			return spline_node_transforms[0].GetWorldMatrix();
+
+		if (spline_node_transforms.size() == 2)
+		{
+			XMVECTOR P0 = XMLoadFloat3(&spline_node_transforms[0].translation_local);
+			XMVECTOR P1 = XMLoadFloat3(&spline_node_transforms[1].translation_local);
+
+			XMVECTOR W0 = XMVectorReplicate(spline_node_transforms[0].scale_local.x);
+			XMVECTOR W1 = XMVectorReplicate(spline_node_transforms[1].scale_local.x);
+
+			XMVECTOR Q0 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[0].rotation_local));
+			XMVECTOR Q1 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[1].rotation_local));
+
+			XMVECTOR P = XMVectorLerp(P0, P1, t);
+			XMVECTOR Q = XMQuaternionNormalize(XMQuaternionSlerp(Q0, Q1, t));
+			XMVECTOR W = XMVectorLerp(W0, W1, t);
+			XMVECTOR N = XMVector3Normalize(XMVector3Rotate(XMVectorSet(0, 1, 0, 0), Q));
+			XMVECTOR T = XMVector3Normalize(P1 - P0);
+			XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+			N = XMVector3Normalize(XMVector3Cross(B, T));
+			B *= XMVectorGetX(W); // width offset
+			N *= XMVectorGetX(W); // width offset
+			N = XMVectorSetW(N, 0);
+			T = XMVectorSetW(T, 0);
+			B = XMVectorSetW(B, 0);
+			P = XMVectorSetW(P, 1);
+			XMMATRIX M = { B, N, T, P };
+			return M;
+		}
+
+		int cnt = (int)spline_node_transforms.size();
+		int first = 0;
+		int second = 1;
+		int beforelast = cnt - 1;
+		if (IsLooped())
+		{
+			first = cnt - 1;
+			second = first + 1;
+			beforelast++;
+		}
+
+		float tdist = t * precomputed_total_distance;
+		int t0 = 0; // prev
+		int t1 = 0; // current
+		int t2 = 1; // next
+		int t3 = 1; // after next
+		float tmid = 0;
+
+		// This is similar to a keyframe search:
+		float total_distance = 0;
+		for (int i = 0; i < beforelast; ++i)
+		{
+			float dist_prev = total_distance;
+			total_distance += precomputed_node_distances[i];
+			if (total_distance >= tdist)
+			{
+				if (IsLooped())
+				{
+					t0 = (i + first - 1) % cnt;
+					t1 = (i + first) % cnt;
+					t2 = (i + second) % cnt;
+					t3 = (i + second + 1) % cnt;
+				}
+				else
+				{
+					t0 = std::max(0, i - 1);
+					t1 = i;
+					t2 = i + 1;
+					t3 = std::min(i + 2, cnt - 1);
+				}
+				tmid = saturate(inverse_lerp(dist_prev, total_distance, tdist));
+				break;
+			}
+		}
+
+		XMVECTOR P0 = XMLoadFloat3(&spline_node_transforms[t0].translation_local);
+		XMVECTOR P1 = XMLoadFloat3(&spline_node_transforms[t1].translation_local);
+		XMVECTOR P2 = XMLoadFloat3(&spline_node_transforms[t2].translation_local);
+		XMVECTOR P3 = XMLoadFloat3(&spline_node_transforms[t3].translation_local);
+
+		if (t1 == t0)
+		{
+			// when P0 == P1, centripetal catmull doesn't work, so we have to do a dummy control point
+			P0 += P1 - P2;
+		}
+		if (t2 == t3)
+		{
+			// when P2 == P3, centripetal catmull doesn't work, so we have to do a dummy control point
+			P3 += P2 - P1;
+		}
+
+		XMVECTOR W0 = XMVectorReplicate(spline_node_transforms[t0].scale_local.x);
+		XMVECTOR W1 = XMVectorReplicate(spline_node_transforms[t1].scale_local.x);
+		XMVECTOR W2 = XMVectorReplicate(spline_node_transforms[t2].scale_local.x);
+		XMVECTOR W3 = XMVectorReplicate(spline_node_transforms[t3].scale_local.x);
+
+		XMVECTOR Q0 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[t0].rotation_local));
+		XMVECTOR Q1 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[t1].rotation_local));
+		XMVECTOR Q2 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[t2].rotation_local));
+		XMVECTOR Q3 = XMQuaternionNormalize(XMLoadFloat4(&spline_node_transforms[t3].rotation_local));
+
+		XMVECTOR P = wi::math::CatmullRomCentripetal(P0, P1, P2, P3, tmid);
+		XMVECTOR P_prev = wi::math::CatmullRomCentripetal(P0, P1, P2, P3, saturate(tmid - 0.01f));
+		XMVECTOR P_next = wi::math::CatmullRomCentripetal(P0, P1, P2, P3, saturate(tmid + 0.01f));
+		XMVECTOR squadA, squadB, squadC;
+		XMQuaternionSquadSetup(&squadA, &squadB, &squadC, Q0, Q1, Q2, Q3);
+		XMVECTOR Q = XMQuaternionNormalize(XMQuaternionSquad(Q1, squadA, squadB, squadC, tmid));
+		XMVECTOR W = XMVectorCatmullRom(W0, W1, W2, W3, tmid);
+		XMVECTOR N = XMVector3Normalize(XMVector3Rotate(XMVectorSet(0, 1, 0, 0), Q));
+		XMVECTOR T = XMVector3Normalize(P_next - P_prev);
+		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		N = XMVector3Normalize(XMVector3Cross(B, T));
+		B *= XMVectorGetX(W); // width offset
+		N *= XMVectorGetX(W); // width offset
+		N = XMVectorSetW(N, 0);
+		T = XMVectorSetW(T, 0);
+		B = XMVectorSetW(B, 0);
+		P = XMVectorSetW(P, 1);
+		XMMATRIX M = { B, N, T, P };
+		return M;
+	}
+	XMVECTOR SplineComponent::ClosestPointOnSpline(const XMVECTOR& P, int steps) const
+	{
+		if (spline_node_transforms.empty())
+			return XMVectorZero();
+		if (spline_node_transforms.size() == 1)
+			return XMLoadFloat3(&spline_node_transforms[0].translation_local);
+
+		steps *= (int)spline_node_transforms.size();
+		float mindist = FLT_MAX;
+		XMVECTOR MIN = XMVectorZero();
+		XMVECTOR A = wi::math::GetPosition(EvaluateSplineAt(0.0f));
+		for (int i = 1; i < steps; ++i)
+		{
+			const float t = float(i) / float(steps - 1);
+			const XMMATRIX M = EvaluateSplineAt(t);
+			XMVECTOR R = wi::math::GetRight(M);
+			float nodewidth = XMVectorGetX(XMVector3Length(R));
+			nodewidth *= width;
+			R = XMVector3Normalize(R) * nodewidth;
+			const XMVECTOR B = wi::math::GetPosition(M);
+			XMVECTOR C = wi::math::ClosestPointOnLineSegment(A, B, P); // point on spline center
+			C = wi::math::ClosestPointOnLineSegment(C - R, C + R, P); // extruded segment by spline width
+			const float dist = wi::math::Distance(P, C);
+			if (dist < mindist)
+			{
+				mindist = dist;
+				MIN = C;
+			}
+			A = B;
+		}
+
+		return MIN;
+	}
+	XMVECTOR SplineComponent::TraceSplinePlane(const XMVECTOR& ORIGIN, const XMVECTOR& DIRECTION, int steps) const
+	{
+		if (spline_node_transforms.empty())
+			return XMVectorZero();
+		if (spline_node_transforms.size() == 1)
+			return XMVectorZero();
+
+		steps *= (int)spline_node_transforms.size();
+		float mindist = FLT_MAX;
+		XMVECTOR MIN = XMVectorZero();
+		for (int i = 0; i < steps; ++i)
+		{
+			const float t = float(i) / float(steps - 1);
+			const XMMATRIX M = EvaluateSplineAt(t);
+			const XMVECTOR P = wi::math::GetPosition(M);
+			const XMVECTOR N = wi::math::GetUp(M);
+			const XMVECTOR PLANE = XMPlaneFromPointNormal(P, N);
+			const XMVECTOR I = XMPlaneIntersectLine(PLANE, ORIGIN, ORIGIN + DIRECTION * 100000);
+			const float dist = wi::math::Distance(P, I);
+			if (dist < mindist)
+			{
+				mindist = dist;
+				MIN = I;
+			}
+		}
+
+		return MIN;
+	}
+	AABB SplineComponent::ComputeAABB(int steps) const
+	{
+		AABB ret;
+		float rangemod = width;
+		if (terrain_modifier_amount > 0)
+		{
+			rangemod /= sqr(terrain_modifier_amount); // sqr is used to match with distance falloff used in terrain generation
+		}
+		steps *= (int)spline_node_transforms.size();
+		for (int i = 0; i < steps; ++i)
+		{
+			const float t = float(i) / float(steps - 1);
+			const XMMATRIX M = EvaluateSplineAt(t);
+			const float nodewidth = XMVectorGetX(XMVector3Length(wi::math::GetRight(M)));
+			const float range = nodewidth * rangemod;
+			const XMVECTOR P = wi::math::GetPosition(M);
+			const XMVECTOR R = XMVector3Normalize(wi::math::GetRight(M)) * range;
+			const XMVECTOR N = XMVector3Normalize(wi::math::GetUp(M)) * range;
+			const XMVECTOR F = XMVector3Normalize(wi::math::GetForward(M)) * range;
+			ret.AddPoint(P - R);
+			ret.AddPoint(P + R);
+			ret.AddPoint(P - N);
+			ret.AddPoint(P + N);
+			ret.AddPoint(P + F);
+			ret.AddPoint(P - F);
+		}
+		return ret;
+	}
+	void SplineComponent::PrecomputeSplineNodeDistances()
+	{
+		if (spline_node_transforms.empty())
+			return;
+		precomputed_node_distances.resize(spline_node_transforms.size());
+		int cnt = (int)spline_node_transforms.size();
+		int first = 0;
+		int second = 1;
+		int beforelast = cnt - 1;
+		if (IsLooped())
+		{
+			first = cnt - 1;
+			second = first + 1;
+			beforelast++;
+		}
+
+		precomputed_total_distance = 0;
+		for (int i = 0; i < beforelast; ++i)
+		{
+			const XMFLOAT3& pos0 = spline_node_transforms[(i + first) % cnt].translation_local;
+			const XMFLOAT3& pos1 = spline_node_transforms[(i + second) % cnt].translation_local;
+			const float distance = wi::math::Distance(pos0, pos1);
+			precomputed_total_distance += distance;
+			precomputed_node_distances[i] = distance;
+		}
 	}
 }

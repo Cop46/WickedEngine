@@ -469,6 +469,7 @@ MetadataPreset = {
 	Enemy = 3,
 	NPC = 4,
 	Pickup = 5,
+	Vehicle = 6,
 }
 )";
 
@@ -696,6 +697,8 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, GetOceanPosAt),
 	lunamethod(Scene_BindLua, VoxelizeObject),
 	lunamethod(Scene_BindLua, VoxelizeScene),
+
+	lunamethod(Scene_BindLua, FixupNans),
 	{ NULL, NULL }
 };
 Luna<Scene_BindLua>::PropertyType Scene_BindLua::properties[] = {
@@ -3435,7 +3438,11 @@ int Scene_BindLua::VoxelizeScene(lua_State* L)
 	scene->VoxelizeScene(*voxelgrid->voxelgrid, subtract, filterMask, layerMask, lod);
 	return 0;
 }
-
+int Scene_BindLua::FixupNans(lua_State* L)
+{
+	scene->FixupNans();
+	return 0;
+}
 
 
 
@@ -4795,21 +4802,9 @@ int MeshComponent_BindLua::SetMeshSubsetMaterialID(lua_State* L)
 	int argc = wi::lua::SGetArgCount(L);
 	if (argc >= 2)
 	{
-		size_t subsetindex = (uint32_t)wi::lua::SGetLongLong(L, 1);
-		Entity entity = (uint32_t)wi::lua::SGetLongLong(L, 2);
-
-		const uint32_t lod_count = component->GetLODCount();
-		for (uint32_t lod = 0; lod < lod_count; ++lod)
-		{
-			uint32_t first_subset = 0;
-			uint32_t last_subset = 0;
-			component->GetLODSubsetRange(lod, first_subset, last_subset);
-			size_t subset_offset = first_subset + subsetindex;
-			if (subset_offset < last_subset)
-			{
-				component->subsets[subset_offset].materialID = entity;
-			}
-		}
+		uint32_t subsetindex = (uint32_t)wi::lua::SGetLongLong(L, 1);
+		Entity entity = (Entity)wi::lua::SGetLongLong(L, 2);
+		component->SetSubsetMaterial(subsetindex, entity);
 	}
 	else
 	{
@@ -4823,18 +4818,9 @@ int MeshComponent_BindLua::GetMeshSubsetMaterialID(lua_State* L)
 	int argc = wi::lua::SGetArgCount(L);
 	if (argc > 0)
 	{
-		size_t subsetindex = wi::lua::SGetLongLong(L, 1);
-
-		if(subsetindex < component->subsets.size())
-		{
-			auto& subsetdata = component->subsets[subsetindex];
-			wi::lua::SSetLongLong(L, subsetdata.materialID);
-			return 1;
-		}
-		else
-		{
-			wi::lua::SError(L, "GetMeshSubsetMaterialID(int subsetindex) index out of range!");
-		}
+		uint32_t subsetindex = (uint32_t)wi::lua::SGetLongLong(L, 1);
+		wi::lua::SSetLongLong(L, component->GetSubsetMaterial(subsetindex));
+		return 1;
 	}
 	else
 	{
@@ -5535,7 +5521,7 @@ int ObjectComponent_BindLua::GetUserStencilRef(lua_State* L)
 }
 int ObjectComponent_BindLua::GetLodDistanceMultiplier(lua_State* L)
 {
-	wi::lua::SSetInt(L, (int)component->lod_distance_multiplier);
+	wi::lua::SSetInt(L, 0);
 	return 1;
 }
 int ObjectComponent_BindLua::GetDrawDistance(lua_State* L)
@@ -5743,7 +5729,7 @@ int ObjectComponent_BindLua::SetLodDistanceMultiplier(lua_State* L)
 	if (argc > 0)
 	{
 		float value = wi::lua::SGetFloat(L, 1);
-		component->lod_distance_multiplier = value;
+		component->lod_bias = value;
 	}
 	else
 	{
@@ -6088,6 +6074,9 @@ int ScriptComponent_BindLua::Stop(lua_State* L)
 
 
 Luna<RigidBodyPhysicsComponent_BindLua>::FunctionType RigidBodyPhysicsComponent_BindLua::methods[] = {
+	lunamethod(RigidBodyPhysicsComponent_BindLua, IsVehicle),
+	lunamethod(RigidBodyPhysicsComponent_BindLua, IsCar),
+	lunamethod(RigidBodyPhysicsComponent_BindLua, IsMotorcycle),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsDisableDeactivation),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsKinematic),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsStartDeactivated),
@@ -6112,6 +6101,21 @@ Luna<RigidBodyPhysicsComponent_BindLua>::PropertyType RigidBodyPhysicsComponent_
 	{ NULL, NULL }
 };
 
+int RigidBodyPhysicsComponent_BindLua::IsVehicle(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsVehicle());
+	return 1;
+}
+int RigidBodyPhysicsComponent_BindLua::IsCar(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsCar());
+	return 1;
+}
+int RigidBodyPhysicsComponent_BindLua::IsMotorcycle(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsMotorcycle());
+	return 1;
+}
 int RigidBodyPhysicsComponent_BindLua::IsDisableDeactivation(lua_State* L)
 {
 	wi::lua::SSetBool(L, component->IsDisableDeactivation());
@@ -6274,7 +6278,7 @@ Luna<Weather_OceanParams_BindLua>::PropertyType Weather_OceanParams_BindLua::pro
 	lunaproperty(Weather_OceanParams_BindLua, waterColor),
 	lunaproperty(Weather_OceanParams_BindLua, waterHeight),
 	lunaproperty(Weather_OceanParams_BindLua, surfaceDetail),
-	lunaproperty(Weather_OceanParams_BindLua, surfaceDisplacement),
+	lunaproperty(Weather_OceanParams_BindLua, surfaceDisplacementTolerance),
 	{ NULL, NULL }
 };
 
@@ -6810,7 +6814,7 @@ int SoundComponent_BindLua::SetLooped(lua_State* L)
 	int argc = wi::lua::SGetArgCount(L);
 	if (argc > 0)
 	{
-		bool value = wi::lua::SGetBool(L, 1);
+		value = wi::lua::SGetBool(L, 1);
 	}
 	
 	component->SetLooped(value);
@@ -6824,8 +6828,7 @@ int SoundComponent_BindLua::SetDisable3D(lua_State* L)
 	int argc = wi::lua::SGetArgCount(L);
 	if (argc > 0)
 	{
-		bool value = wi::lua::SGetBool(L, 1);
-		component->SetLooped();
+		value = wi::lua::SGetBool(L, 1);
 	}
 	
 	component->SetDisable3D(value);
@@ -7671,6 +7674,7 @@ Luna<CharacterComponent_BindLua>::FunctionType CharacterComponent_BindLua::metho
 	lunamethod(CharacterComponent_BindLua, SetWaterFriction),
 	lunamethod(CharacterComponent_BindLua, SetSlopeThreshold),
 	lunamethod(CharacterComponent_BindLua, SetLeaningLimit),
+	lunamethod(CharacterComponent_BindLua, SetTurningSpeed),
 	lunamethod(CharacterComponent_BindLua, SetFixedUpdateFPS),
 	lunamethod(CharacterComponent_BindLua, SetGravity),
 	lunamethod(CharacterComponent_BindLua, SetWaterVerticalOffset),
@@ -7707,6 +7711,7 @@ Luna<CharacterComponent_BindLua>::FunctionType CharacterComponent_BindLua::metho
 	lunamethod(CharacterComponent_BindLua, GetRelativeOffset),
 	lunamethod(CharacterComponent_BindLua, GetLeaning),
 	lunamethod(CharacterComponent_BindLua, GetLeaningSmoothed),
+	lunamethod(CharacterComponent_BindLua, GetFootOffset),
 
 	lunamethod(CharacterComponent_BindLua, SetPathGoal),
 	lunamethod(CharacterComponent_BindLua, GetPathQuery),
@@ -7882,6 +7887,17 @@ int CharacterComponent_BindLua::SetLeaningLimit(lua_State* L)
 		return 0;
 	}
 	component->leaning_limit = wi::lua::SGetFloat(L, 1);
+	return 0;
+}
+int CharacterComponent_BindLua::SetTurningSpeed(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 1)
+	{
+		wi::lua::SError(L, "SetTurningSpeed(float value) not enough arguments!");
+		return 0;
+	}
+	component->turning_speed = wi::lua::SGetFloat(L, 1);
 	return 0;
 }
 int CharacterComponent_BindLua::SetFixedUpdateFPS(lua_State* L)
@@ -8162,6 +8178,11 @@ int CharacterComponent_BindLua::GetLeaning(lua_State* L)
 int CharacterComponent_BindLua::GetLeaningSmoothed(lua_State* L)
 {
 	wi::lua::SSetFloat(L, component->GetLeaningSmoothed());
+	return 1;
+}
+int CharacterComponent_BindLua::GetFootOffset(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->foot_offset);
 	return 1;
 }
 

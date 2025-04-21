@@ -8,6 +8,10 @@ namespace wi::jobsystem
 	void Initialize(uint32_t maxThreadCount = ~0u);
 	void ShutDown();
 
+	// Returns true if the job system is shutting down
+	//	Long-running (multi-frame) jobs should ideally check this and exit themselves if true
+	bool IsShuttingDown();
+
 	struct JobArgs
 	{
 		uint32_t jobIndex;		// job index relative to dispatch (like SV_DispatchThreadID in HLSL)
@@ -29,7 +33,7 @@ namespace wi::jobsystem
 	// Defines a state of execution, can be waited on
 	struct context
 	{
-		volatile long counter = 0;
+		std::atomic<uint32_t> counter{ 0 };
 		Priority priority = Priority::High;
 	};
 
@@ -53,4 +57,7 @@ namespace wi::jobsystem
 	// Wait until all threads become idle
 	//	Current thread will become a worker thread, executing jobs
 	void Wait(const context& ctx);
+
+	// Returns the number of remaining jobs
+	uint32_t GetRemainingJobCount(const context& ctx);
 }

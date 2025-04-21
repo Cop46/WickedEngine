@@ -210,6 +210,8 @@ namespace wi::lua::scene
 
 		int VoxelizeObject(lua_State* L);
 		int VoxelizeScene(lua_State* L);
+
+		int FixupNans(lua_State* L);
 	};
 
 	class NameComponent_BindLua
@@ -991,6 +993,9 @@ namespace wi::lua::scene
 		int SetKinematic(lua_State* L);
 		int SetStartDeactivated(lua_State* L);
 
+		int IsVehicle(lua_State* L);
+		int IsCar(lua_State* L);
+		int IsMotorcycle(lua_State* L);
 		int IsDisableDeactivation(lua_State* L);
 		int IsKinematic(lua_State* L);
 		int IsStartDeactivated(lua_State* L);
@@ -1100,6 +1105,10 @@ namespace wi::lua::scene
 			wind_speed = FloatProperty(&parameter->wind_speed);
 			wind_dependency = FloatProperty(&parameter->wind_dependency);
 			choppy_scale = FloatProperty(&parameter->choppy_scale);
+			waterColor = VectorProperty(&parameter->waterColor);
+			waterHeight = FloatProperty(&parameter->waterHeight);
+			//surfaceDetail = IntProperty(&parameter->surfaceDetail);
+			surfaceDisplacementTolerance = FloatProperty(&parameter->surfaceDisplacementTolerance);
 		}
 
 		Weather_OceanParams_BindLua(wi::Ocean::OceanParameters* parameter) :parameter(parameter)
@@ -1121,8 +1130,8 @@ namespace wi::lua::scene
 		FloatProperty choppy_scale;
 		VectorProperty waterColor;
 		FloatProperty waterHeight;
-		LongLongProperty surfaceDetail;
-		FloatProperty surfaceDisplacement;
+		IntProperty surfaceDetail;
+		FloatProperty surfaceDisplacementTolerance;
 
 		PropertyFunction(dmap_dim)
 		PropertyFunction(patch_length)
@@ -1135,7 +1144,7 @@ namespace wi::lua::scene
 		PropertyFunction(waterColor)
 		PropertyFunction(waterHeight)
 		PropertyFunction(surfaceDetail)
-		PropertyFunction(surfaceDisplacement)
+		PropertyFunction(surfaceDisplacementTolerance)
 	};
 	struct Weather_OceanParams_Property
 	{
@@ -1889,6 +1898,7 @@ namespace wi::lua::scene
 		int SetWaterFriction(lua_State* L);
 		int SetSlopeThreshold(lua_State* L);
 		int SetLeaningLimit(lua_State* L);
+		int SetTurningSpeed(lua_State* L);
 		int SetFixedUpdateFPS(lua_State* L);
 		int SetGravity(lua_State* L);
 		int SetWaterVerticalOffset(lua_State* L);
@@ -1925,6 +1935,7 @@ namespace wi::lua::scene
 		int IsCharacterToCharacterCollisionDisabled(lua_State* L);
 		int GetLeaning(lua_State* L);
 		int GetLeaningSmoothed(lua_State* L);
+		int GetFootOffset(lua_State* L);
 
 		int SetPathGoal(lua_State* L);
 		int GetPathQuery(lua_State* L);

@@ -14,8 +14,9 @@ namespace wi
 		public RenderPath
 	{
 	protected:
-		wi::graphics::Texture rtStenciled;
-		wi::graphics::Texture rtStenciled_resolved;
+		wi::graphics::Texture rtStencilExtracted;
+		wi::graphics::Texture stencilScaled;
+
 		wi::graphics::Texture rtFinal;
 		wi::graphics::Texture rtFinal_MSAA;
 
@@ -27,6 +28,7 @@ namespace wi
 		float hdr_scaling = 9.0f;
 
 		uint32_t msaaSampleCount = 1;
+		uint32_t msaaSampleCount2D = 1;
 
 	public:
 		// Delete GPU resources and initialize them to default
@@ -38,11 +40,15 @@ namespace wi
 
 		void Update(float dt) override;
 		void FixedUpdate() override;
+		void PreRender() override;
 		void Render() const override;
 		void Compose(wi::graphics::CommandList cmd) const override;
 
 		virtual void setMSAASampleCount(uint32_t value) { msaaSampleCount = value; }
 		constexpr uint32_t getMSAASampleCount() const { return msaaSampleCount; }
+
+		virtual void setMSAASampleCount2D(uint32_t value) { msaaSampleCount2D = value; }
+		constexpr uint32_t getMSAASampleCount2D() const { return msaaSampleCount2D; }
 
 		const wi::graphics::Texture& GetRenderResult() const { return rtFinal; }
 		virtual const wi::graphics::Texture* GetDepthStencil() const { return nullptr; }

@@ -16,11 +16,25 @@ void GeneralWindow::Create(EditorComponent* _editor)
 
 	SetSize(XMFLOAT2(300, 740));
 
+	masterVolumeSlider.Create(0, 2, 1, 100, "Master Volume: ");
+	if (editor->main->config.GetSection("options").Has("volume"))
+	{
+		wi::audio::SetVolume(editor->main->config.GetSection("options").GetFloat("volume"));
+	}
+	masterVolumeSlider.OnSlide([=](wi::gui::EventArgs args) {
+		wi::audio::SetVolume(args.fValue); // no specific sound instance arg: master volume
+		editor->main->config.GetSection("options").Set("volume", args.fValue);
+	});
+	masterVolumeSlider.SetValue(wi::audio::GetVolume());
+	AddWidget(&masterVolumeSlider);
+
 	physicsDebugCheckBox.Create("Physics visualizer: ");
 	physicsDebugCheckBox.SetTooltip("Visualize the physics world");
-	physicsDebugCheckBox.OnClick([](wi::gui::EventArgs args) {
+	physicsDebugCheckBox.OnClick([=](wi::gui::EventArgs args) {
 		wi::physics::SetDebugDrawEnabled(args.bValue);
-		});
+		editor->componentsWnd.rigidWnd.physicsDebugCheckBox.SetCheck(args.bValue);
+		editor->componentsWnd.constraintWnd.physicsDebugCheckBox.SetCheck(args.bValue);
+	});
 	physicsDebugCheckBox.SetCheck(wi::physics::IsDebugDrawEnabled());
 	AddWidget(&physicsDebugCheckBox);
 
@@ -112,6 +126,11 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	springVisCheckBox.SetCheck(wi::renderer::GetToDrawDebugSprings());
 	AddWidget(&springVisCheckBox);
 
+	splineVisCheckBox.Create(ICON_SPLINE " Spline visualizer: ");
+	splineVisCheckBox.SetTooltip("Toggle visualization of splines in the scene");
+	splineVisCheckBox.SetCheck(true);
+	AddWidget(&splineVisCheckBox);
+
 	gridHelperCheckBox.Create("Grid helper: ");
 	gridHelperCheckBox.SetTooltip("Toggle showing of unit visualizer grid in the world origin");
 	if (editor->main->config.GetSection("options").Has("grid_helper"))
@@ -154,7 +173,20 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	forceDiffuseLightingCheckBox.SetCheck(wi::renderer::IsForceDiffuseLighting());
 	AddWidget(&forceDiffuseLightingCheckBox);
 
-
+	focusModeCheckBox.Create(ICON_EYE " Focus mode GUI: ");
+	focusModeCheckBox.SetCheckText(ICON_EYE);
+	focusModeCheckBox.SetTooltip("Reduce the amount of effects in the editor GUI to improve accessibility");
+	if (editor->main->config.GetSection("options").Has("focus_mode"))
+	{
+		focusModeCheckBox.SetCheck(editor->main->config.GetSection("options").GetBool("focus_mode"));
+	}
+	focusModeCheckBox.OnClick([&](wi::gui::EventArgs args) {
+		editor->main->config.GetSection("options").Set("focus_mode", args.bValue);
+		// trigger themeCombo's OnSelect handler, which will enable/disable shadow highlighting
+		// according to this checkbox's state
+		themeCombo.SetSelected(themeCombo.GetSelected());
+	});
+	AddWidget(&focusModeCheckBox);
 
 	versionCheckBox.Create("Version: ");
 	versionCheckBox.SetTooltip("Toggle the engine version display text in top left corner.");
@@ -218,6 +250,17 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		});
 	AddWidget(&saveModeComboBox);
 
+	saveCompressionCheckBox.Create("Save compressed: ");
+	saveCompressionCheckBox.SetTooltip("Set whether to enable compression when saving WISCENE files.\nNote that compressed WISCENE with embedded resources will have higher RAM usage when loaded to support streaming.");
+	if (editor->main->config.GetSection("options").Has("save_compressed"))
+	{
+		saveCompressionCheckBox.SetCheck(editor->main->config.GetSection("options").GetBool("save_compressed"));
+	}
+	saveCompressionCheckBox.OnClick([&](wi::gui::EventArgs args) {
+		editor->main->config.GetSection("options").Set("save_compressed", args.bValue);
+		editor->main->config.Commit();
+	});
+	AddWidget(&saveCompressionCheckBox);
 
 	transformToolOpacitySlider.Create(0, 1, 1, 100, "Transform Tool Opacity: ");
 	transformToolOpacitySlider.SetTooltip("You can control the transparency of the object placement tool");
@@ -232,6 +275,20 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		editor->main->config.GetSection("options").Set("transform_tool_opacity", args.fValue);
 	});
 	AddWidget(&transformToolOpacitySlider);
+
+	transformToolDarkenSlider.Create(0, 1, 1, 100, "Darken Negative Axes: ");
+	transformToolDarkenSlider.SetTooltip("You can control the darkening of the object placement tool's negative axes");
+	transformToolDarkenSlider.SetSize(XMFLOAT2(100, 18));
+	if (editor->main->config.GetSection("options").Has("transform_tool_darken_negative_axes"))
+	{
+		transformToolDarkenSlider.SetValue(editor->main->config.GetSection("options").GetFloat("transform_tool_darken_negative_axes"));
+		editor->translator.darken_negative_axes = transformToolDarkenSlider.GetValue();
+	}
+	transformToolDarkenSlider.OnSlide([=](wi::gui::EventArgs args) {
+		editor->translator.darken_negative_axes = args.fValue;
+		editor->main->config.GetSection("options").Set("transform_tool_darken_negative_axes", args.fValue);
+	});
+	AddWidget(&transformToolDarkenSlider);
 
 	bonePickerOpacitySlider.Create(0, 1, 1, 100, "Bone Picker Opacity: ");
 	bonePickerOpacitySlider.SetTooltip("You can control the transparency of the bone selector tool");
@@ -374,6 +431,21 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			break;
 		}
 
+		theme.shadow_highlight = !focusModeCheckBox.GetCheck();
+		theme.shadow_highlight_spread = 0.4f;
+		theme.shadow_highlight_color = theme_color_focus;
+		theme.shadow_highlight_color.x *= 1.4f;
+		theme.shadow_highlight_color.y *= 1.4f;
+		theme.shadow_highlight_color.z *= 1.4f;
+		if ((Theme)args.userdata == Theme::Nord)
+		{
+			theme.shadow_highlight_color = wi::Color::White();
+		}
+
+		//theme.image.highlight_color = theme_color_focus;
+		//theme.image.highlight_spread = 0.3f;
+		//theme.image.highlight = true;
+
 		theme.tooltipImage = theme.image;
 		theme.tooltipImage.color = theme_color_idle;
 		theme.tooltipFont = theme.font;
@@ -436,6 +508,11 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		editor->newEntityCombo.SetAngularHighlightColor(highlight);
 		editor->componentsWnd.newComponentCombo.SetAngularHighlightColor(highlight);
 		editor->componentsWnd.materialWnd.textureSlotButton.SetColor(wi::Color::White(), wi::gui::IDLE);
+		editor->componentsWnd.objectWnd.lightmapPreviewButton.SetColor(wi::Color::White());
+		for (auto& x : editor->componentsWnd.objectWnd.lightmapPreviewButton.sprites)
+		{
+			x.params.disableBackground();
+		}
 		editor->componentsWnd.spriteWnd.textureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->paintToolWnd.brushTextureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->paintToolWnd.revealTextureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
@@ -468,6 +545,25 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editorscene->tabCloseButton.SetColor(wi::Color::Error(), wi::gui::WIDGET_ID_FOCUS);
 			scene_id++;
 		}
+
+		editor->generalButton.SetShadowRadius(1);
+		editor->graphicsButton.SetShadowRadius(1);
+		editor->cameraButton.SetShadowRadius(1);
+		editor->materialsButton.SetShadowRadius(1);
+		editor->paintToolButton.SetShadowRadius(1);
+
+		editor->generalButton.SetShadowColor(wi::Color::Transparent());
+		editor->graphicsButton.SetShadowColor(wi::Color::Transparent());
+		editor->cameraButton.SetShadowColor(wi::Color::Transparent());
+		editor->materialsButton.SetShadowColor(wi::Color::Transparent());
+		editor->paintToolButton.SetShadowColor(wi::Color::Transparent());
+
+		editor->generalButton.SetShadowHighlightSpread(0.2f);
+		editor->graphicsButton.SetShadowHighlightSpread(0.2f);
+		editor->cameraButton.SetShadowHighlightSpread(0.2f);
+		editor->materialsButton.SetShadowHighlightSpread(0.2f);
+		editor->paintToolButton.SetShadowHighlightSpread(0.2f);
+
 		for (int i = 0; i < arraysize(editor->newSceneButton.sprites); ++i)
 		{
 			editor->newSceneButton.sprites[i].params.enableCornerRounding();
@@ -482,30 +578,35 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editor->newEntityCombo.sprites[i].params.corners_rounding[2].radius = 20;
 			editor->newEntityCombo.sprites[i].params.corners_rounding[3].radius = 20;
 
+			//editor->generalButton.sprites[i].params.enableHighlight();
 			editor->generalButton.sprites[i].params.enableCornerRounding();
 			editor->generalButton.sprites[i].params.corners_rounding[0].radius = 20;
 			editor->generalButton.sprites[i].params.corners_rounding[1].radius = 20;
 			editor->generalButton.sprites[i].params.corners_rounding[2].radius = 20;
 			editor->generalButton.sprites[i].params.corners_rounding[3].radius = 20;
 
+			//editor->graphicsButton.sprites[i].params.enableHighlight();
 			editor->graphicsButton.sprites[i].params.enableCornerRounding();
 			editor->graphicsButton.sprites[i].params.corners_rounding[0].radius = 20;
 			editor->graphicsButton.sprites[i].params.corners_rounding[1].radius = 20;
 			editor->graphicsButton.sprites[i].params.corners_rounding[2].radius = 20;
 			editor->graphicsButton.sprites[i].params.corners_rounding[3].radius = 20;
 
+			//editor->cameraButton.sprites[i].params.enableHighlight();
 			editor->cameraButton.sprites[i].params.enableCornerRounding();
 			editor->cameraButton.sprites[i].params.corners_rounding[0].radius = 20;
 			editor->cameraButton.sprites[i].params.corners_rounding[1].radius = 20;
 			editor->cameraButton.sprites[i].params.corners_rounding[2].radius = 20;
 			editor->cameraButton.sprites[i].params.corners_rounding[3].radius = 20;
 
+			//editor->materialsButton.sprites[i].params.enableHighlight();
 			editor->materialsButton.sprites[i].params.enableCornerRounding();
 			editor->materialsButton.sprites[i].params.corners_rounding[0].radius = 20;
 			editor->materialsButton.sprites[i].params.corners_rounding[1].radius = 20;
 			editor->materialsButton.sprites[i].params.corners_rounding[2].radius = 20;
 			editor->materialsButton.sprites[i].params.corners_rounding[3].radius = 20;
 
+			//editor->paintToolButton.sprites[i].params.enableHighlight();
 			editor->paintToolButton.sprites[i].params.enableCornerRounding();
 			editor->paintToolButton.sprites[i].params.corners_rounding[0].radius = 20;
 			editor->paintToolButton.sprites[i].params.corners_rounding[1].radius = 20;
@@ -568,6 +669,12 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			ktxConvButton.sprites[i].params.corners_rounding[2].radius = 8;
 			ktxConvButton.sprites[i].params.corners_rounding[3].radius = 8;
 
+			duplicateCollidersButton.sprites[i].params.enableCornerRounding();
+			duplicateCollidersButton.sprites[i].params.corners_rounding[0].radius = 8;
+			duplicateCollidersButton.sprites[i].params.corners_rounding[1].radius = 8;
+			duplicateCollidersButton.sprites[i].params.corners_rounding[2].radius = 8;
+			duplicateCollidersButton.sprites[i].params.corners_rounding[3].radius = 8;
+
 			editor->aboutWindow.sprites[i].params.enableCornerRounding();
 			editor->aboutWindow.sprites[i].params.corners_rounding[0].radius = 10;
 			editor->aboutWindow.sprites[i].params.corners_rounding[1].radius = 10;
@@ -608,6 +715,12 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editor->componentsWnd.metadataWnd.addCombo.sprites[i].params.corners_rounding[1].radius = 10;
 			editor->componentsWnd.metadataWnd.addCombo.sprites[i].params.corners_rounding[2].radius = 10;
 			editor->componentsWnd.metadataWnd.addCombo.sprites[i].params.corners_rounding[3].radius = 10;
+
+			editor->componentsWnd.splineWnd.addButton.sprites[i].params.enableCornerRounding();
+			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[0].radius = 10;
+			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[1].radius = 10;
+			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[2].radius = 10;
+			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[3].radius = 10;
 		}
 		editor->componentsWnd.weatherWnd.default_sky_horizon = dark_point;
 		editor->componentsWnd.weatherWnd.default_sky_zenith = theme_color_idle;
@@ -632,6 +745,23 @@ void GeneralWindow::Create(EditorComponent* _editor)
 				sprite.params.enableCornerRounding();
 				sprite.params.corners_rounding[0].radius = 10;
 				sprite.params.corners_rounding[2].radius = 10;
+			}
+		}
+
+		for (auto& x : editor->componentsWnd.splineWnd.entries)
+		{
+			x.removeButton.SetColor(wi::Color::Error(), wi::gui::WIDGETSTATE::FOCUS);
+			for (auto& sprite : x.removeButton.sprites)
+			{
+				sprite.params.enableCornerRounding();
+				sprite.params.corners_rounding[0].radius = 10;
+				sprite.params.corners_rounding[2].radius = 10;
+			}
+			for (auto& sprite : x.entityButton.sprites)
+			{
+				sprite.params.enableCornerRounding();
+				sprite.params.corners_rounding[1].radius = 10;
+				sprite.params.corners_rounding[3].radius = 10;
 			}
 		}
 
@@ -709,6 +839,29 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editor->aboutLabel.sprites[i].params.blendFlag = wi::enums::BLENDMODE_ALPHA;
 		}
 
+		editor->guiScalingCombo.SetShadowRadius(1);
+		editor->guiScalingCombo.SetShadowColor(wi::Color::Transparent());
+		editor->guiScalingCombo.SetShadowHighlightSpread(0.2f);
+		for (auto& sprite : editor->guiScalingCombo.sprites)
+		{
+			//sprite.params.enableHighlight();
+			sprite.params.enableCornerRounding();
+			sprite.params.corners_rounding[0].radius = 10;
+			sprite.params.corners_rounding[1].radius = 10;
+			sprite.params.corners_rounding[2].radius = 10;
+			sprite.params.corners_rounding[3].radius = 10;
+		}
+
+		if (focusModeCheckBox.GetCheck())
+		{
+			editor->newEntityCombo.SetAngularHighlightWidth(0);
+			editor->newEntityCombo.SetShadowRadius(2);
+		}
+		else
+		{
+			editor->newEntityCombo.SetAngularHighlightWidth(3);
+			editor->newEntityCombo.SetShadowRadius(0);
+		}
 	});
 	AddWidget(&themeCombo);
 
@@ -818,6 +971,17 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		});
 	AddWidget(&ktxConvButton);
 
+
+	duplicateCollidersButton.Create("Delete duplicate colliders");
+	duplicateCollidersButton.SetTooltip("Duplicate colliders will be removed from the scene.");
+	duplicateCollidersButton.SetSize(XMFLOAT2(100, 18));
+	duplicateCollidersButton.OnClick([=](wi::gui::EventArgs args) {
+		Scene& scene = editor->GetCurrentScene();
+		scene.DeleteDuplicateColliders();
+		editor->componentsWnd.RefreshEntityTree();
+	});
+	AddWidget(&duplicateCollidersButton);
+
 	SetVisible(false);
 }
 
@@ -881,10 +1045,16 @@ void GeneralWindow::ResizeLayout()
 	y += versionCheckBox.GetSize().y;
 	y += padding;
 
+	width -= padding * 6;
+	add(masterVolumeSlider);
+	width += padding * 6;
+
 	saveModeComboBox.SetPos(XMFLOAT2(x_off, y));
 	saveModeComboBox.SetSize(XMFLOAT2(width - x_off - saveModeComboBox.GetScale().y - 1, saveModeComboBox.GetScale().y));
 	y += saveModeComboBox.GetSize().y;
 	y += padding;
+
+	add_right(saveCompressionCheckBox);
 
 	themeCombo.SetPos(XMFLOAT2(x_off, y));
 	themeCombo.SetSize(XMFLOAT2(width - x_off - themeCombo.GetScale().y - 1, themeCombo.GetScale().y));
@@ -917,18 +1087,23 @@ void GeneralWindow::ResizeLayout()
 	add_right(cameraVisCheckBox);
 	add_right(colliderVisCheckBox);
 	add_right(springVisCheckBox);
+	add_right(splineVisCheckBox);
 
 	y += jump;
 
 	add_right(freezeCullingCameraCheckBox);
 	add_right(disableAlbedoMapsCheckBox);
 	add_right(forceDiffuseLightingCheckBox);
+	y += jump;
+
+	add_right(focusModeCheckBox);
 
 	y += jump;
 
 	float prev_width = width;
 	width -= padding * 6;
 	add(transformToolOpacitySlider);
+	add(transformToolDarkenSlider);
 	add(bonePickerOpacitySlider);
 	add_right(skeletonsVisibleCheckBox);
 
@@ -938,4 +1113,5 @@ void GeneralWindow::ResizeLayout()
 	add_fullwidth(eliminateCoarseCascadesButton);
 	add_fullwidth(ddsConvButton);
 	add_fullwidth(ktxConvButton);
+	add_fullwidth(duplicateCollidersButton);
 }

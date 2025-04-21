@@ -33,7 +33,7 @@ jobs:
         move Editor\startup.lua .\
         move Editor\languages .\
         move Editor\fonts .\
-        
+
     - name: Package Editor
       uses: actions/upload-artifact@v4
       with:
@@ -81,7 +81,7 @@ jobs:
         mv Editor/startup.lua ./
         mv Editor/languages ./
         mv Editor/fonts ./
-        
+
     - name: Package Editor
       uses: actions/upload-artifact@v4
       with:

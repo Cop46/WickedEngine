@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.19)
 
 set(MIN_OpenImageDenoise_VERSION "2.0")
 
@@ -55,6 +55,9 @@ add_subdirectory(Utility)
 add_compile_definitions(JPH_DEBUG_RENDERER=1)
 set(PHYSICS_REPO_ROOT ${CMAKE_CURRENT_SOURCE_DIR})
 include(${PHYSICS_REPO_ROOT}/Jolt/Jolt.cmake)
+set_target_properties(Jolt PROPERTIES
+	POSITION_INDEPENDENT_CODE ${WICKED_PIC}
+)
 
 file(GLOB HEADER_FILES CONFIGURE_DEPENDS *.h)
 
@@ -66,8 +69,15 @@ add_library(${TARGET_NAME} ${WICKED_LIBRARY_TYPE}
 	${HEADER_FILES}
 )
 
+if(MSVC)
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+endif()
+
 add_library(WickedEngine ALIAS ${TARGET_NAME})
-set_target_properties(${TARGET_NAME} PROPERTIES PUBLIC_HEADER "${HEADER_FILES}")
+set_target_properties(${TARGET_NAME} PROPERTIES
+	PUBLIC_HEADER "${HEADER_FILES}"
+	POSITION_INDEPENDENT_CODE ${WICKED_PIC}
+)
 
 target_include_directories(${TARGET_NAME} SYSTEM PUBLIC
 	$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -97,6 +107,10 @@ else ()
 		Threads::Threads
 		SDL2::SDL2
 		$<$<BOOL:${OpenImageDenoise_FOUND}>:OpenImageDenoise> # links OpenImageDenoise only if it's found
+	)
+
+	set_target_properties(FAudio PROPERTIES
+		POSITION_INDEPENDENT_CODE ${WICKED_PIC}
 	)
 	set(WICKEDENGINE_STATIC_LIBRARIES ${WICKEDENGINE_STATIC_LIBRARIES} FAudio)
 

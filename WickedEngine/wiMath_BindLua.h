@@ -62,7 +62,11 @@ namespace wi::lua
 		int QuaternionSlerp(lua_State* L);
 		int Slerp(lua_State* L);
 
+		int PlaneFromPointNormal(lua_State* L);
+		int PlaneFromPoints(lua_State* L);
+
 		int GetAngle(lua_State* L);
+		int GetAngleSigned(lua_State* L);
 
 		static void Bind();
 	};

@@ -6,9 +6,18 @@
 
 #include "icon.c"
 
+#ifdef __linux__
+#  include <execinfo.h>
+#  include <csignal>
+#  include <cstdio>
+#  include <unistd.h>
+#endif
+
 using namespace std;
 
-int sdl_loop(Editor &editor)
+Editor editor;
+
+int sdl_loop()
 {
     bool quit = false;
     while (!quit)
@@ -55,6 +64,10 @@ int sdl_loop(Editor &editor)
                         }
                     }
                     break;
+                case SDL_DROPFILE:
+				    editor.renderComponent.Open(event.drop.file);
+                    editor.is_window_active = true;
+                    break;
                 default:
                     break;
             }
@@ -90,9 +103,70 @@ void set_window_icon(SDL_Window *window) {
     SDL_FreeSurface(icon);
 }
 
+#ifdef __linux__
+
+void crash_handler(int sig)
+{
+	void* btbuf[100];
+
+	char outbuf[256];
+
+	size_t size = backtrace(btbuf, 100);
+	snprintf(
+		outbuf, sizeof(outbuf),
+		"Signal: %i (%s)\n"
+		"Version: %s\nStacktrace:\n",
+		sig,
+		sigdescr_np(sig),
+		wi::version::GetVersionString()
+	);
+
+	fprintf(
+		stderr,
+		"\e[31m"  // red
+		"The editor just crashed, sorry about that! If you make a bug report, please include the following information:\n\n%s",
+		outbuf
+	);
+	backtrace_symbols_fd(btbuf, size, STDERR_FILENO);  // backtrace_symbols does a malloc which could crash, backtrace_symbols_fd does not.
+	fprintf(stderr, "\e[m");  // back to normal
+
+	// finally, we also try to write the crash data to a file
+	// this might fail because we're in a weird state right now, but there's no harm done if it doesn't work
+
+	// Use C interface because some stuff in the c++ stdlib could be calling malloc
+
+	const char* filename = "wicked-editor-crash-log.txt";
+
+	FILE* logfile = fopen(filename, "w");
+
+	if (logfile != nullptr)
+	{
+		fputs(outbuf, logfile);
+		fflush(logfile);
+		backtrace_symbols_fd(btbuf, size, fileno(logfile));
+		fclose(logfile);
+		char cwdbuf[200];
+		fprintf(stderr, "\e[1mcrash log written to %s/%s\e[m\n", getcwd(cwdbuf, sizeof(cwdbuf)), filename);
+	}
+	exit(1);
+}
+
+#endif
+
 int main(int argc, char *argv[])
 {
-    Editor editor;
+
+#ifdef __linux__
+	// dummy backtrace() call to force libgcc to be loaded ahead of time.
+	// Otherwise it might lead to malloc calls in the crash_handler, which we want to avoid
+	void* dummy[1];
+	backtrace(dummy, 1);
+
+	for (int sig : std::array{SIGABRT, SIGBUS, SIGILL, SIGFPE, SIGSEGV})
+	{
+		signal(sig, crash_handler);
+	}
+#endif
 
     wi::arguments::Parse(argc, argv);
 
@@ -142,7 +216,9 @@ int main(int argc, char *argv[])
 
     editor.SetWindow(window.get());
 
-    int ret = sdl_loop(editor);
+    int ret = sdl_loop();
+
+	wi::jobsystem::ShutDown();
 
     return ret;
 }

@@ -7,7 +7,7 @@ using namespace wi::scene;
 void HairParticleWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
-	wi::gui::Window::Create(ICON_HAIR " Hair Particle System", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_HAIR " Hair Particle System", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(600, 1000));
 
 	closeButton.SetTooltip("Delete HairParticleSystem");
@@ -59,6 +59,21 @@ void HairParticleWindow::Create(EditorComponent* _editor)
 	});
 	meshComboBox.SetTooltip("Choose a mesh where hair will grow from...");
 	AddWidget(&meshComboBox);
+
+	cameraBendCheckbox.Create("Camera Bend: ");
+	cameraBendCheckbox.SetTooltip("Enable a slight bending in camera view, that can help hide the card look when looking from above.");
+	cameraBendCheckbox.OnClick([=](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		for (auto& x : editor->translator.selected)
+		{
+			wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
+			if (hair == nullptr)
+				continue;
+			hair->SetCameraBendEnabled(args.bValue);
+			hair->SetDirty();
+		}
+	});
+	AddWidget(&cameraBendCheckbox);
 
 	countSlider.Create(0, 100000, 1000, 100000, "Strand Count: ");
 	countSlider.SetSize(XMFLOAT2(wid, hei));
@@ -114,7 +129,7 @@ void HairParticleWindow::Create(EditorComponent* _editor)
 	widthSlider.SetTooltip("Set hair strand width multiplier. This only scales the hair particles horizontally.");
 	AddWidget(&widthSlider);
 
-	stiffnessSlider.Create(0, 20, 5, 1000, "Stiffness: ");
+	stiffnessSlider.Create(0, 10, 0.5f, 100, "Stiffness: ");
 	stiffnessSlider.SetSize(XMFLOAT2(wid, hei));
 	stiffnessSlider.SetPos(XMFLOAT2(x, y += step));
 	stiffnessSlider.OnSlide([&](wi::gui::EventArgs args) {
@@ -127,10 +142,46 @@ void HairParticleWindow::Create(EditorComponent* _editor)
 			hair->stiffness = args.fValue;
 			hair->SetDirty();
 		}
-	});
+		});
 	stiffnessSlider.SetEnabled(false);
 	stiffnessSlider.SetTooltip("Set hair strand stiffness, how much it tries to get back to rest position.");
 	AddWidget(&stiffnessSlider);
+
+	dragSlider.Create(0, 1, 0.5f, 100, "Drag: ");
+	dragSlider.SetSize(XMFLOAT2(wid, hei));
+	dragSlider.SetPos(XMFLOAT2(x, y += step));
+	dragSlider.OnSlide([&](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		for (auto& x : editor->translator.selected)
+		{
+			wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
+			if (hair == nullptr)
+				continue;
+			hair->drag = args.fValue;
+			hair->SetDirty();
+		}
+		});
+	dragSlider.SetEnabled(false);
+	dragSlider.SetTooltip("Set hair strand drag, how much its movement slows down over time.");
+	AddWidget(&dragSlider);
+
+	gravityPowerSlider.Create(0, 1, 0.5f, 100, "Gravity Power: ");
+	gravityPowerSlider.SetSize(XMFLOAT2(wid, hei));
+	gravityPowerSlider.SetPos(XMFLOAT2(x, y += step));
+	gravityPowerSlider.OnSlide([&](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		for (auto& x : editor->translator.selected)
+		{
+			wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
+			if (hair == nullptr)
+				continue;
+			hair->gravityPower = args.fValue;
+			hair->SetDirty();
+		}
+		});
+	gravityPowerSlider.SetEnabled(false);
+	gravityPowerSlider.SetTooltip("Set hair strand gravity, how much its movement is pulled down constantly.");
+	AddWidget(&gravityPowerSlider);
 
 	randomnessSlider.Create(0, 1, 0.2f, 1000, "Randomness: ");
 	randomnessSlider.SetSize(XMFLOAT2(wid, hei));
@@ -150,22 +201,41 @@ void HairParticleWindow::Create(EditorComponent* _editor)
 	randomnessSlider.SetTooltip("Set hair length randomization factor. This will affect randomness of hair lengths.");
 	AddWidget(&randomnessSlider);
 
-	//segmentcountSlider.Create(1, 10, 1, 9, "Segment Count: ");
-	//segmentcountSlider.SetSize(XMFLOAT2(wid, hei));
-	//segmentcountSlider.SetPos(XMFLOAT2(x, y += step));
-	//segmentcountSlider.OnSlide([&](wi::gui::EventArgs args) {
-	//	wi::scene::Scene& scene = editor->GetCurrentScene();
-	//	for (auto& x : editor->translator.selected)
-	//	{
-	//		wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
-	//		if (hair == nullptr)
-	//			continue;
-	//		hair->segmentCount = (uint32_t)args.iValue;
-	//	}
-	//});
-	//segmentcountSlider.SetEnabled(false);
-	//segmentcountSlider.SetTooltip("Set hair strand segment count. This will affect simulation quality and performance.");
-	//AddWidget(&segmentcountSlider);
+	segmentcountSlider.Create(1, 10, 1, 9, "Segments: ");
+	segmentcountSlider.SetSize(XMFLOAT2(wid, hei));
+	segmentcountSlider.SetPos(XMFLOAT2(x, y += step));
+	segmentcountSlider.OnSlide([&](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		for (auto& x : editor->translator.selected)
+		{
+			wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
+			if (hair == nullptr)
+				continue;
+			hair->segmentCount = (uint32_t)args.iValue;
+			hair->SetDirty();
+		}
+	});
+	segmentcountSlider.SetEnabled(false);
+	segmentcountSlider.SetTooltip("Set the number of segments that make up one strand.");
+	AddWidget(&segmentcountSlider);
+
+	billboardcountSlider.Create(1, 10, 1, 9, "Billboards: ");
+	billboardcountSlider.SetSize(XMFLOAT2(wid, hei));
+	billboardcountSlider.SetPos(XMFLOAT2(x, y += step));
+	billboardcountSlider.OnSlide([&](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		for (auto& x : editor->translator.selected)
+		{
+			wi::HairParticleSystem* hair = scene.hairs.GetComponent(x.entity);
+			if (hair == nullptr)
+				continue;
+			hair->billboardCount = (uint32_t)args.iValue;
+			hair->SetDirty();
+		}
+	});
+	billboardcountSlider.SetEnabled(false);
+	billboardcountSlider.SetTooltip("Set the number of billboard geometry that make up one strand.");
+	AddWidget(&billboardcountSlider);
 
 	randomSeedSlider.Create(1, 12345, 1, 12344, "Random seed: ");
 	randomSeedSlider.SetSize(XMFLOAT2(wid, hei));
@@ -384,12 +454,16 @@ void HairParticleWindow::SetEntity(Entity entity)
 		lengthSlider.SetValue(hair->length);
 		widthSlider.SetValue(hair->width);
 		stiffnessSlider.SetValue(hair->stiffness);
+		dragSlider.SetValue(hair->drag);
+		gravityPowerSlider.SetValue(hair->gravityPower);
 		randomnessSlider.SetValue(hair->randomness);
 		countSlider.SetValue((float)hair->strandCount);
-		//segmentcountSlider.SetValue((float)hair->segmentCount);
+		segmentcountSlider.SetValue((float)hair->segmentCount);
+		billboardcountSlider.SetValue((float)hair->billboardCount);
 		randomSeedSlider.SetValue((float)hair->randomSeed);
 		viewDistanceSlider.SetValue(hair->viewDistance);
 		uniformitySlider.SetValue(hair->uniformity);
+		cameraBendCheckbox.SetCheck(hair->IsCameraBendEnabled());
 
 		const MaterialComponent* material = editor->GetCurrentScene().materials.GetComponent(entity);
 		if (changed || material->IsDirty())
@@ -502,10 +576,15 @@ void HairParticleWindow::ResizeLayout()
 
 	add_fullwidth(infoLabel);
 	add(meshComboBox);
+	add_right(cameraBendCheckbox);
 	add(countSlider);
+	add(segmentcountSlider);
+	add(billboardcountSlider);
 	add(lengthSlider);
 	add(widthSlider);
 	add(stiffnessSlider);
+	add(dragSlider);
+	add(gravityPowerSlider);
 	add(randomnessSlider);
 	add(randomSeedSlider);
 	add(viewDistanceSlider);

@@ -1,5 +1,3 @@
-#ifndef DDS_H
-#define DDS_H
 // Minimal cross-platform DDS texture utility created by Turánszki János for Wicked Engine: https://github.com/turanszkij/WickedEngine
 // This is not using any includes or memory allocations, and computes relative memory offsets designed for texture streaming
 // Based on DDS specification: https://learn.microsoft.com/en-us/windows/win32/direct3ddds/dx-graphics-dds-pguide#dds-file-layout
@@ -35,8 +33,8 @@
 //		5) enjoy
 //
 //	Example:
-//		std::vector<unsigned8_t> texturedata; // your texture data in a GPU format
-//		std::vector<unsigned8_t> filedata; // DDS file data container
+//		std::vector<unsigned char> texturedata; // your texture data in a GPU format
+//		std::vector<unsigned char> filedata; // DDS file data container
 //		filedata.resize(sizeof(dds::Header) + texturedata.size()); // allocate memory
 //		
 //		dds::write_header(
@@ -78,13 +76,18 @@
 //	Note: This is similar to how you would provide the texture with DirectX 11 API's D3D11_SUBRESOURCE_DATA when creating textures
 //
 //	Support:
-//		- This will only create DX10 version of DDS, doesn't support legacy
-//		- Tested with Texture 1D, Texture 2D, Texture 2D Array, Cubemap, Cubemap array, 3D Texture
+//		- This will only write DX10 version of DDS, doesn't support writing legacy formats, but it supports reading them
+//		- Tested with Texture 1D, Texture 2D, Texture 2D Array, Cubemap, Cubemap array, 3D Texture, mipmaps, should work with everything
 //		- Tested with uncompressed formats and block compressed
-//		- mipmaps: Yes
-//		- arrays: Yes
+//
+// 
+//	Contributors:
+//		- Jon Jansen
 //
 //	MIT License (see the end of this file)
+
+#ifndef DDS_H
+#define DDS_H
 
 namespace dds
 {
@@ -743,15 +746,17 @@ namespace dds
 		{
 			const unsigned long long bpe = bits_per_element();
 			const unsigned long long blocksize = block_size();
-			unsigned long long num_blocks_x = (width() + blocksize - 1) / blocksize;
-			unsigned long long num_blocks_y = (height() + blocksize - 1) / blocksize;
+			unsigned long long num_elements_x = width();
+			unsigned long long num_elements_y = height();
 			unsigned long long num_elements_z = depth();
-			num_blocks_x >>= mip;
-			num_blocks_y >>= mip;
+			num_elements_x >>= mip;
+			num_elements_y >>= mip;
 			num_elements_z >>= mip;
-			num_blocks_x = num_blocks_x < 1 ? 1 : num_blocks_x;
-			num_blocks_y = num_blocks_y < 1 ? 1 : num_blocks_y;
+			num_elements_x = num_elements_x < 1 ? 1 : num_elements_x;
+			num_elements_y = num_elements_y < 1 ? 1 : num_elements_y;
 			num_elements_z = num_elements_z < 1 ? 1 : num_elements_z;
+			const unsigned long long num_blocks_x = (num_elements_x + blocksize - 1) / blocksize;
+			const unsigned long long num_blocks_y = (num_elements_y + blocksize - 1) / blocksize;
 			return num_blocks_x * num_blocks_y * num_elements_z * bpe / 8ull;
 		}
 		// returns the size of one slice in bytes
@@ -787,7 +792,6 @@ namespace dds
 		constexpr unsigned long long mip_offset(unsigned mip, unsigned slice = 0) const
 		{
 			unsigned long long offset = slice_offset(slice);
-			const unsigned mips = mip_levels();
 			for (unsigned i = 0; i < mip; ++i)
 			{
 				offset += mip_size(i);
@@ -799,22 +803,26 @@ namespace dds
 		{
 			const unsigned long long bpe = bits_per_element();
 			const unsigned long long blocksize = block_size();
-			unsigned long long num_blocks_x = (width() + blocksize - 1) / blocksize;
-			num_blocks_x >>= mip;
-			num_blocks_x = num_blocks_x < 1 ? 1 : num_blocks_x;
+			unsigned long long num_elements_x = width();
+			num_elements_x >>= mip;
+			num_elements_x = num_elements_x < 1 ? 1 : num_elements_x;
+			const unsigned long long num_blocks_x = (num_elements_x + blocksize - 1) / blocksize;
 			return unsigned(num_blocks_x * bpe / 8);
 		}
 		// returns the size of a specific slice at a specific mip level in bytes
 		constexpr unsigned slice_pitch(unsigned mip) const
 		{
+			const unsigned long long bpe = bits_per_element();
 			const unsigned long long blocksize = block_size();
-			unsigned long long num_blocks_y = (width() + blocksize - 1) / blocksize;
-			unsigned long long num_elements_z = depth();
-			num_blocks_y >>= mip;
-			num_elements_z >>= mip;
-			num_blocks_y = num_blocks_y < 1 ? 1 : num_blocks_y;
-			num_elements_z = num_elements_z < 1 ? 1 : num_elements_z;
-			return unsigned(row_pitch(mip) * num_blocks_y * num_elements_z);
+			unsigned long long num_elements_x = width();
+			unsigned long long num_elements_y = height();
+			num_elements_x >>= mip;
+			num_elements_y >>= mip;
+			num_elements_x = num_elements_x < 1 ? 1 : num_elements_x;
+			num_elements_y = num_elements_y < 1 ? 1 : num_elements_y;
+			const unsigned long long num_blocks_x = (num_elements_x + blocksize - 1) / blocksize;
+			const unsigned long long num_blocks_y = (num_elements_y + blocksize - 1) / blocksize;
+			return unsigned(num_blocks_x * num_blocks_y * bpe / 8ull);
 		}
 	};
 

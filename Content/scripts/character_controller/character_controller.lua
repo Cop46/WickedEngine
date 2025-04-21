@@ -2,7 +2,7 @@
 --	This script will load a simple scene with a character that can be controlled
 --
 --	Tips:
---		- Character models that you use should have a humanoid rig (this is created automatically from VRM and Mixamo model imports)
+--		- Character models that you use should have a humanoid rig (this is created automatically from VRM, Makehuman and Mixamo model imports)
 --		- The level objects should be tagged as "Navmesh" because the characters will collide with only those, and these are optimized for intersections
 --		- To set the player start position, you can put a metadata component to the level scene and set it to "Player" preset
 --		- To add NPCs you can put a metadata component to the level scene and set it to "NPC" preset
@@ -12,9 +12,9 @@
 --		- To set conversation dialog for an NPC character, add a "dialog" named string property to its metadata and the value is a name of the lua file in assets/dialogs/. For example dialog = hello will make the character use the assets/dialogs/hello.lua dialog script
 --
 -- 	CONTROLS:
---		WASD/left thumbstick: walk
---		SHIFT/right shoulder button: walk -> jog
---		E/left shoulder button: jog -> run
+--		WASD/left thumbstick: walk/jog
+--		Left Control: slow walk
+--		Left Shift/left shoulder button: jog -> run
 --		SPACE/gamepad X/gamepad button 3: jump
 --		Right Mouse Button/Right thumbstick: rotate camera
 --		Scoll middle mouse/Left-Right triggers: adjust camera distance
@@ -80,7 +80,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 		target_rot_vertical = 0,
 		target_height = 0,
 		anims = {},
-		anim_amount = 1,
 		neck = INVALID_ENTITY,
 		head = INVALID_ENTITY,
 		left_hand = INVALID_ENTITY,
@@ -89,8 +88,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 		right_foot = INVALID_ENTITY,
 		left_toes = INVALID_ENTITY,
 		right_toes = INVALID_ENTITY,
-		leaning_next = 0, -- leaning sideways when turning
-		leaning = 0, -- leaning sideways when turning (smoothed)
 		savedPointerPos = Vector(),
 		walk_speed = 0.1,
 		jog_speed = 0.2,
@@ -103,9 +100,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 		position = Vector(),
         ground_intersect = false,
 		controllable = true,
-		fixed_update_remain = 0,
-		timestep_occured = false,
-		root_offset = 0,
 		foot_placed_left = false,
 		foot_placed_right = false,
 		mood = Mood.Neutral,
@@ -165,7 +159,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 			local charactercomponent = scene.Component_GetCharacter(self.model)
 			self.ground_intersect = charactercomponent.IsGrounded()
 			self.position = charactercomponent.GetPositionInterpolated()
-			local velocity = charactercomponent.GetVelocity()
 			local capsule = charactercomponent.GetCapsule()
 			character_capsules[self.model] = capsule
 			--DrawCapsule(capsule)
@@ -254,14 +247,15 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 							self:MoveDirection(lookDir)
 						elseif self.ground_intersect or charactercomponent.IsWallIntersect() then
 							if self.ground_intersect then
-								if(input.Down(KEYBOARD_BUTTON_LSHIFT) or input.Down(GAMEPAD_BUTTON_6)) then
-									if input.Down(string.byte('E')) or input.Down(GAMEPAD_BUTTON_5) then
+								local analog_len = vector.Length(analog)
+								if input.Down(KEYBOARD_BUTTON_LCONTROL) or (analog_len > 0 and analog_len < 0.75) then
+									self.state = States.WALK
+								else
+									if input.Down(KEYBOARD_BUTTON_LSHIFT) or input.Down(GAMEPAD_BUTTON_5) then
 										self.state = States.RUN
 									else
 										self.state = States.JOG
 									end
-								else
-									self.state = States.WALK
 								end
 							end
 							self:MoveDirection(lookDir)
@@ -309,7 +303,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 							end
 						else
 							-- move towards patrol waypoint:
-							local charactercomponent = scene.Component_GetCharacter(self.model)
 							charactercomponent.SetPathGoal(patrol_pos, voxelgrid) -- this is deferred into scene update
 							local pathquery = charactercomponent.GetPathQuery()
 							pathquery.SetAgentHeight(3)
@@ -323,7 +316,7 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 							end
 							self.patrol_wait = 0
 							-- check if it's blocked by player collision:
-							local capsule = scene.Component_GetCollider(self.collider).GetCapsule()
+							local capsule = charactercomponent.GetCapsule()
 							local forward_offset = vector.Multiply(patrol_vec.Normalize(), 0.5)
 							capsule.SetBase(vector.Add(capsule.GetBase(), forward_offset))
 							capsule.SetTip(vector.Add(capsule.GetTip(), forward_offset))
@@ -485,13 +478,17 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 	charactercomponent.SetFacing(facing)
 	charactercomponent.SetWidth(0.3)
 	charactercomponent.SetHeight(1.8)
+	if controllable then
+		charactercomponent.SetTurningSpeed(9)
+	else
+		charactercomponent.SetTurningSpeed(7) -- Set NPC to turn slower because when we approach it for conversation, fast turning looks bad
+	end
 	--charactercomponent.SetFootPlacementEnabled(false)
 
 	local layer = scene.Component_GetLayer(self.model)
 	layer.SetLayerMask(self.layerMask)
 
 	self.state = States.IDLE
-	self.state_prev = self.state
 
 	for i,entity in ipairs(scene.Entity_GetHumanoidArray()) do
 		if scene.Entity_IsDescendant(entity, self.model) then
@@ -528,20 +525,6 @@ local function Character(model_scene, start_transform, controllable, anim_scene,
 			object.SetWetmapEnabled(true)
 			table.insert(self.object_entities, entity) -- save object array for later use
 		end
-	end
-
-	-- Create a base capsule collider for character:
-	local collider = scene.Component_CreateCollider(self.model)
-	self.collider = self.model
-	collider.SetCPUEnabled(false)
-	collider.SetGPUEnabled(true)
-	collider.Shape = ColliderShape.Capsule
-	collider.Radius = charactercomponent.GetWidth()
-	collider.Offset = Vector(0, collider.Radius, 0)
-	collider.Tail = Vector(0, charactercomponent.GetHeight() - collider.Radius, 0)
-	local head_transform = scene.Component_GetTransform(self.head)
-	if head_transform ~= nil then
-		collider.Tail = head_transform.GetPosition()
 	end
 
 	self.root = self.humanoid
@@ -606,6 +589,7 @@ local ResolveCharacters = function(characterA, characterB)
 				if input.Press(KEYBOARD_BUTTON_ENTER) or input.Press(GAMEPAD_BUTTON_2) then
 					characterA:Turn(vector.Subtract(headB, headA):Normalize())
 					conversation:Enter(characterA)
+					application.CrossFade(0.5)
 				end
 				DrawDebugText("", vector.Add(headA, Vector(0,0.4)), Vector(1,1,1,1), 0.1, DEBUG_TEXT_DEPTH_TEST | DEBUG_TEXT_CAMERA_FACING)
 			end
@@ -671,11 +655,11 @@ local function ThirdPersonCamera(character)
 			self.rest_distance = math.lerp(self.rest_distance, self.rest_distance_new, 0.1) -- lerp will smooth out the zooming
 
 			-- This will allow some smoothing for certain movements of camera target:
-			local character_transform = scene.Component_GetTransform(self.character.model)
-			local character_position = character_transform.GetPosition()
+			local charactercomponent = scene.Component_GetCharacter(self.character.model)
+			local character_position = charactercomponent.GetPositionInterpolated()
 			self.target_rot_horizontal = math.lerp(self.target_rot_horizontal, self.character.target_rot_horizontal, 0.1)
 			self.target_rot_vertical = math.lerp(self.target_rot_vertical, self.character.target_rot_vertical, 0.1)
-			self.target_height = math.lerp(self.target_height, character_position.GetY() + self.character.target_height + self.character.root_offset, 0.1)
+			self.target_height = math.lerp(self.target_height, character_position.GetY() + self.character.target_height + charactercomponent.GetFootOffset(), 0.1)
 
 			local camera_transform = scene.Component_GetTransform(self.camera)
 			local target_transform = TransformComponent()
@@ -776,6 +760,9 @@ runProcess(function()
 	path.SetOutlineThickness(1.7)
 	path.SetOutlineColor(0,0,0,0.6)
 	path.SetBloomThreshold(5)
+	SetCapsuleShadowEnabled(true)
+	SetCapsuleShadowFade(0.4)
+	SetCapsuleShadowAngle(math.pi * 0.15)
 
 	--application.SetInfoDisplay(false)
 	--application.SetFPSDisplay(true)
@@ -807,8 +794,8 @@ runProcess(function()
 	loadingscreen.AddLoadModelTask(anim_scene, script_dir() .. "assets/animations.wiscene")
 	local loading_scene = Scene()
 	loadingscreen.AddLoadModelTask(loading_scene, script_dir() .. "assets/level.wiscene")
-	loadingscreen.AddRenderPathActivationTask(path, application, 0.5)
-	application.SetActivePath(loadingscreen, 0.5) -- activate and switch to loading screen
+	loadingscreen.AddRenderPathActivationTask(path, application, 0.5, 0, 0, 0, FadeType.FadeToColor)
+	application.SetActivePath(loadingscreen, 0.5, 0, 0, 0, FadeType.CrossFade) -- activate and switch to loading screen
 
     -- Because we are in a runProcess, we can block loading screen like this while application is still running normally:
 	--	Meanwhile, we can update the progress bar sprite
@@ -900,7 +887,11 @@ runProcess(function()
 
 	-- if player was not created from a metadata component, create a default player:
 	if player == nil then
-		player = Character(character_scenes["character"], TransformComponent(), true, anim_scene)
+		if character_scenes["character"] == nil then
+			character_scenes["character"] = Scene()
+			LoadModel(character_scenes["character"], script_dir() .. "assets/character.wiscene")
+		end
+		player = Character(character_scenes["character"], TransformComponent(), true, anim_scene, "")
 	end
 	
 	local camera = ThirdPersonCamera(player)
@@ -911,9 +902,9 @@ runProcess(function()
 	local help_text = "Wicked Engine Character demo (LUA)\n\n"
 	help_text = help_text .. "Controls:\n"
 	help_text = help_text .. "#############\n"
-	help_text = help_text .. "WASD/arrows/left analog stick: walk\n"
-	help_text = help_text .. "SHIFT/right shoulder button: walk -> jog\n"
-	help_text = help_text .. "E/left shoulder button: jog -> run\n"
+	help_text = help_text .. "WASD/arrows/left analog stick: jog\n"
+	help_text = help_text .. "SHIFT/right shoulder button: jog -> run\n"
+	help_text = help_text .. "LEFT CONTROL: walk\n"
 	help_text = help_text .. "SPACE/gamepad X/gamepad button 3: Jump\n"
 	help_text = help_text .. "Right Mouse Button/Right thumbstick: rotate camera\n"
 	help_text = help_text .. "Scoll middle mouse/Left-Right triggers: adjust camera distance\n"
@@ -925,6 +916,8 @@ runProcess(function()
 
 	-- Main loop:
 	while true do
+
+		update()
 
 		player:Update()
 		for k,npc in pairs(npcs) do
@@ -948,13 +941,15 @@ runProcess(function()
 		conversation:Update(path, scene, player)
 		player.controllable = not conversation.override_input
 
-		if not conversation.override_input then
-			camera:Update()
-		end
-
 		if dynamic_voxelization then
 			voxelgrid.ClearData()
 			scene.VoxelizeScene(voxelgrid, false, FILTER_NAVIGATION_MESH | FILTER_COLLIDER, ~(Layers.Player | Layers.NPC)) -- player and npc layers not included in voxelization
+		end
+
+		render() -- Camera update below will be happening after render phase is signaled, after update phase ended (this helps camera jitter as it will use the latest scene.Update() transforms doen by engine system)
+
+		if not conversation.override_input then
+			camera:Update()
 		end
 		
 		-- Do some debug draw geometry:
@@ -987,7 +982,7 @@ runProcess(function()
 			DrawPoint(scene.Component_GetTransform(player.right_foot).GetPosition(),0.05, Vector(0,1,1,1))
 
 			
-			local capsule = scene.Component_GetCollider(player.collider).GetCapsule()
+			local capsule = scene.Component_GetCharacter(player.model).GetCapsule()
 			DrawCapsule(capsule)
 
 			local str = "State: " .. player.state .. "\n"
@@ -996,8 +991,6 @@ runProcess(function()
 			DrawVoxelGrid(voxelgrid)
 
 		end
-
-		update()
 		
 		if not backlog_isactive() then
 			if(input.Press(KEYBOARD_BUTTON_ESCAPE)) then
@@ -1010,14 +1003,14 @@ runProcess(function()
 				for i,character in ipairs(scene.Component_GetCharacterArray()) do
 					character.StopAnimation()
 				end
-				application.SetActivePath(prevPath)
+				application.SetActivePath(prevPath, 0.5, 0, 0, 0, FadeType.CrossFade)
 				killProcesses()
 				return
 			end
 			if(input.Press(string.byte('R'))) then
 				-- reload script
 				backlog_post("RELOAD")
-				application.SetActivePath(prevPath, 0.5)
+				application.SetActivePath(prevPath, 0.5, 0, 0, 0, FadeType.CrossFade)
 				while not application.IsFaded() do
 					update()
 				end

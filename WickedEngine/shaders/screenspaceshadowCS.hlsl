@@ -101,7 +101,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint3 GTid :
 					continue;
 				}
 
-				if (light.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+				if (light.IsStaticLight())
 				{
 					continue; // static lights will be skipped (they are used in lightmap baking)
 				}
@@ -200,7 +200,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint3 GTid :
 					uint seed = 0;
 					float shadow = 0;
 
-					ray.Direction = L + max3(surface.sss);
+					ray.Direction = normalize(L + max3(surface.sss));
 
 #ifdef RTAPI
 					wiRayQuery q;
@@ -217,6 +217,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint3 GTid :
 						if(q.CandidateType() != CANDIDATE_NON_OPAQUE_TRIANGLE) // see xbox coherent ray traversal documentation
 							continue;
 						PrimitiveID prim;
+						prim.init();
 						prim.primitiveIndex = q.CandidatePrimitiveIndex();
 						prim.instanceIndex = q.CandidateInstanceID();
 						prim.subsetIndex = q.CandidateGeometryIndex();
@@ -225,6 +226,8 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint3 GTid :
 						surface.init();
 						if (!surface.load(prim, q.CandidateTriangleBarycentrics()))
 							break;
+	
+						surface.opacity = lerp(surface.opacity, 0.5, surface.material.GetCloak());
 
 						float alphatest = clamp(blue_noise(DTid.xy, q.CandidateTriangleRayT()).r, 0, 0.99);
 
@@ -236,7 +239,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint3 Gid : SV_GroupID, uint3 GTid :
 					}
 					shadow = q.CommittedStatus() == COMMITTED_TRIANGLE_HIT ? 0 : 1;
 #else
-					shadow = TraceRay_Any(newRay, asuint(postprocess.params1.x), groupIndex) ? 0 : 1;
+					shadow = TraceRay_Any(ray, asuint(postprocess.params1.x), groupIndex) ? 0 : 1;
 #endif // RTAPI
 
 #else

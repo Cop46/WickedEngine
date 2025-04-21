@@ -27,7 +27,7 @@ float4 main(VertexToPixel input) : SV_Target
 	V /= dist;
 	half emissive = 0;
 
-	const uint2 pixel = input.pos.xy; // no longer pixel center!
+	const min16uint2 pixel = input.pos.xy; // no longer pixel center!
 	const float2 ScreenCoord = input.pos.xy * GetCamera().internal_resolution_rcp; // use pixel center!
 
 	Surface surface;
@@ -45,12 +45,12 @@ float4 main(VertexToPixel input) : SV_Target
 	[branch]
 	if (GetCamera().texture_ao_index >= 0)
 	{
-		surface.occlusion *= bindless_textures_float[GetCamera().texture_ao_index].SampleLevel(sampler_linear_clamp, ScreenCoord, 0).r;
+		surface.occlusion *= bindless_textures_half4[descriptor_index(GetCamera().texture_ao_index)].SampleLevel(sampler_linear_clamp, ScreenCoord, 0).r;
 	}
 	[branch]
 	if (GetCamera().texture_ssgi_index >= 0)
 	{
-		surface.ssgi = bindless_textures[GetCamera().texture_ssgi_index].SampleLevel(sampler_linear_clamp, ScreenCoord, 0).rgb;
+		surface.ssgi = bindless_textures[descriptor_index(GetCamera().texture_ssgi_index)].SampleLevel(sampler_linear_clamp, ScreenCoord, 0).rgb;
 	}
 #endif // CARTOON
 #endif // TRANSPARENT
@@ -77,6 +77,8 @@ float4 main(VertexToPixel input) : SV_Target
 #endif // TRANSPARENT
 	
 	ApplyFog(dist, V, color);
+
+	color.rgb = mul(saturationMatrix(material.GetSaturation()), color.rgb);
 	
 	return color;
 }

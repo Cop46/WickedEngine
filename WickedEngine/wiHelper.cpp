@@ -9,6 +9,7 @@
 #include "Utility/stb_image_write.h"
 #include "Utility/basis_universal/encoder/basisu_comp.h"
 #include "Utility/basis_universal/encoder/basisu_gpu_texture.h"
+#include "Utility/basis_universal/zstd/zstd.h"
 
 #include <thread>
 #include <locale>
@@ -22,19 +23,21 @@
 #include <iostream>
 #include <cstdlib>
 
-#ifdef PLATFORM_LINUX
-#include <sys/sysinfo.h>
-#endif
-
 #if defined(_WIN32)
 #include <direct.h>
 #include <Psapi.h> // GetProcessMemoryInfo
 #include <Commdlg.h> // openfile
 #include <WinBase.h>
-#elif defined(PLATFORM_PS5)
-#else
-#include "Utility/portable-file-dialogs.h"
 #endif // _WIN32
+
+#ifdef PLATFORM_LINUX
+#include <sys/sysinfo.h>
+#include "Utility/portable-file-dialogs.h"
+#endif // PLATFORM_LINUX
+
+#ifdef PLATFORM_WINDOWS_DESKTOP
+#include <comdef.h> // com_error
+#endif // PLATFORM_WINDOWS_DESKTOP
 
 namespace wi::helper
 {
@@ -850,6 +853,40 @@ namespace wi::helper
 		return false;
 	}
 
+	bool saveBufferToMemory(const wi::graphics::GPUBuffer& buffer, wi::vector<uint8_t>& data)
+	{
+		using namespace wi::graphics;
+		GraphicsDevice* device = GetDevice();
+
+		GPUBufferDesc desc = buffer.desc;
+		desc.usage = wi::graphics::Usage::READBACK;
+		desc.bind_flags = {};
+		desc.misc_flags = {};
+		GPUBuffer staging;
+		bool success = device->CreateBuffer(&desc, nullptr, &staging);
+		assert(success);
+
+		if (success)
+		{
+			CommandList cmd = device->BeginCommandList();
+
+			device->Barrier(GPUBarrier::Memory(), cmd);
+			device->CopyResource(&staging, &buffer, cmd);
+			device->Barrier(GPUBarrier::Memory(), cmd);
+
+			device->SubmitCommandLists();
+			device->WaitForGPU();
+
+			data.reserve(staging.mapped_size);
+			for (size_t i = 0; i < staging.mapped_size; ++i)
+			{
+				data.push_back(((uint8_t*)staging.mapped_data)[i]);
+			}
+		}
+
+		return success;
+	}
+
 	std::string getCurrentDateTimeAsString()
 	{
 		time_t t = std::time(nullptr);
@@ -959,6 +996,13 @@ namespace wi::helper
 #define ToNativeString(x) (x)
 #endif // _WIN32
 
+	std::string FromWString(const std::wstring& fileName)
+	{
+		std::string fileName_u8;
+		StringConvert(fileName, fileName_u8);
+		return fileName_u8;
+	}
+
 	std::string GetPathRelative(const std::string& rootdir, const std::string& path)
 	{
 		std::string ret = path;
@@ -980,7 +1024,7 @@ namespace wi::helper
 			std::filesystem::path relative = std::filesystem::relative(filepath, rootpath);
 			if (!relative.empty())
 			{
-				path = relative.generic_u8string();
+				StringConvert(relative.generic_wstring(), path);
 			}
 		}
 
@@ -991,13 +1035,32 @@ namespace wi::helper
 		std::filesystem::path absolute = std::filesystem::absolute(ToNativeString(path));
 		if (!absolute.empty())
 		{
-			path = absolute.generic_u8string();
+			StringConvert(absolute.generic_wstring(), path);
 		}
 	}
 
 	void DirectoryCreate(const std::string& path)
 	{
 		std::filesystem::create_directories(ToNativeString(path));
+	}
+
+	size_t FileSize(const std::string& fileName)
+	{
+#if defined(PLATFORM_LINUX) || defined(PLATFORM_PS5)
+		std::string filepath = fileName;
+		std::replace(filepath.begin(), filepath.end(), '\\', '/'); // Linux cannot handle backslash in file path, need to convert it to forward slash
+		std::ifstream file(filepath, std::ios::binary | std::ios::ate);
+#else
+		std::ifstream file(ToNativeString(fileName), std::ios::binary | std::ios::ate);
+#endif // PLATFORM_LINUX || PLATFORM_PS5
+
+		if (file.is_open())
+		{
+			size_t dataSize = (size_t)file.tellg();
+			file.close();
+			return dataSize;
+		}
+		return 0;
 	}
 
 	template<template<typename T, typename A> typename vector_interface>
@@ -1080,7 +1143,7 @@ namespace wi::helper
 		return "";
 #else
 		auto path = std::filesystem::temp_directory_path();
-		return path.generic_u8string();
+		return FromWString(path.generic_wstring());
 #endif // PLATFORM_XBOX || PLATFORM_PS5
 	}
 
@@ -1110,7 +1173,7 @@ namespace wi::helper
 		return "/app0";
 #else
 		auto path = std::filesystem::current_path();
-		return path.generic_u8string();
+		return FromWString(path.generic_wstring());
 #endif // PLATFORM_PS5
 	}
 
@@ -1254,7 +1317,7 @@ namespace wi::helper
 		{
 			if (entry.is_directory())
 				continue;
-			std::string filename = entry.path().filename().generic_u8string();
+			std::string filename = FromWString(entry.path().filename().generic_wstring());
 			if (filter_extension.empty() || wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename)).compare(wi::helper::toUpper(filter_extension)) == 0)
 			{
 				onSuccess(directory + filename);
@@ -1272,7 +1335,7 @@ namespace wi::helper
 		{
 			if (!entry.is_directory())
 				continue;
-			std::string filename = entry.path().filename().generic_u8string();
+			std::string filename = FromWString(entry.path().filename().generic_wstring());
 			onSuccess(directory + filename);
 		}
 	}
@@ -1280,7 +1343,7 @@ namespace wi::helper
 	bool Bin2H(const uint8_t* data, size_t size, const std::string& dst_filename, const char* dataName)
 	{
 		std::string ss;
-		ss += "const uint8_t ";
+		ss += "const unsigned char ";
 		ss += dataName ;
 		ss += "[] = {";
 		for (size_t i = 0; i < size; ++i)
@@ -1292,6 +1355,29 @@ namespace wi::helper
 			ss += std::to_string((uint32_t)data[i]) + ",";
 		}
 		ss += "\n};\n";
+		return FileWrite(dst_filename, (uint8_t*)ss.c_str(), ss.length());
+	}
+
+	bool Bin2CPP(const uint8_t* data, size_t size, const std::string& dst_filename, const char* dataName)
+	{
+		std::string ss;
+		ss += "extern const unsigned char ";
+		ss += dataName;
+		ss += "[] = {";
+		for (size_t i = 0; i < size; ++i)
+		{
+			if (i % 32 == 0)
+			{
+				ss += "\n";
+			}
+			ss += std::to_string((uint32_t)data[i]) + ",";
+		}
+		ss += "\n};\n";
+		ss += "extern const unsigned long long ";
+		ss += dataName;
+		ss += "_size = sizeof(";
+		ss += dataName;
+		ss += ");";
 		return FileWrite(dst_filename, (uint8_t*)ss.c_str(), ss.length());
 	}
 
@@ -1388,12 +1474,15 @@ namespace wi::helper
 		default:
 		case DebugLevel::Normal:
 			std::cout << str;
+			std::flush(std::cout);
 			break;
 		case DebugLevel::Warning:
 			std::clog << str;
+			std::flush(std::clog);
 			break;
 		case DebugLevel::Error:
 			std::cerr << str;
+			std::flush(std::cerr);
 			break;
 	}
 #endif // _WIN32
@@ -1536,5 +1625,58 @@ namespace wi::helper
 			ss << timerSeconds / 60 / 60 << " hours";
 		}
 		return ss.str();
+	}
+
+	std::string GetPlatformErrorString(wi::platform::error_type code)
+	{
+		std::string str;
+
+#ifdef PLATFORM_WINDOWS_DESKTOP
+		_com_error err(code);
+		LPCTSTR errMsg = err.ErrorMessage();
+		wchar_t wtext[1024] = {};
+		_snwprintf_s(wtext, arraysize(wtext), arraysize(wtext), L"0x%08x (%s)", code, errMsg);
+		char text[1024] = {};
+		wi::helper::StringConvert(wtext, text, arraysize(text));
+		str = text;
+#endif // _WIN32
+
+#ifdef PLATFORM_XBOX
+		char text[1024] = {};
+		snprintf(text, arraysize(text), "HRESULT error: 0x%08x", code);
+		str = text;
+#endif // PLATFORM_XBOX
+
+		return str;
+	}
+
+	bool Compress(const uint8_t* src_data, size_t src_size, wi::vector<uint8_t>& dst_data, int level)
+	{
+		dst_data.resize(ZSTD_compressBound(src_size));
+		size_t res = ZSTD_compress(dst_data.data(), dst_data.size(), src_data, src_size, level);
+		if (ZSTD_isError(res))
+			return false;
+		dst_data.resize(res);
+		return true;
+	}
+
+	bool Decompress(const uint8_t* src_data, size_t src_size, wi::vector<uint8_t>& dst_data)
+	{
+		size_t res = ZSTD_getFrameContentSize(src_data, src_size);
+		if (ZSTD_isError(res))
+			return false;
+		dst_data.resize(res);
+		res = ZSTD_decompress(dst_data.data(), dst_data.size(), src_data, src_size);
+		return ZSTD_isError(res) == 0;
+	}
+
+	size_t HashByteData(const uint8_t* data, size_t size)
+	{
+		size_t hash = 0;
+		for (size_t i = 0; i < size; ++i)
+		{
+			hash_combine(hash, data[i]);
+		}
+		return hash;
 	}
 }

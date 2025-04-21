@@ -11,6 +11,8 @@
 #include "wiUnorderedMap.h"
 #include "wiVector.h"
 #include "wiSpinLock.h"
+#include "wiBacklog.h"
+#include "wiHelper.h"
 
 #ifdef PLATFORM_XBOX
 #include "wiGraphicsDevice_DX12_XBOX.h"
@@ -31,6 +33,9 @@
 #include <atomic>
 #include <mutex>
 
+#define dx12_assert(cond, fname) { wilog_assert(cond, "DX12 error: %s failed with %s (%s:%d)", fname, wi::helper::GetPlatformErrorString(hr).c_str(), relative_path(__FILE__), __LINE__); }
+#define dx12_check(call) [&]() { HRESULT hr = call; dx12_assert(SUCCEEDED(hr), extract_function_name(#call).c_str()); return hr; }()
+
 namespace wi::graphics
 {
 	class GraphicsDevice_DX12 final : public GraphicsDevice
@@ -46,14 +51,13 @@ namespace wi::graphics
 		Microsoft::WRL::ComPtr<ID3D12Fence> deviceRemovedFence;
 		HANDLE deviceRemovedWaitHandle = {};
 #endif // PLATFORM_WINDOWS_DESKTOP
-		std::mutex onDeviceRemovedMutex;
-		bool deviceRemoved = false;
 
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawInstancedIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawIndexedInstancedIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchMeshIndirectCommandSignature;
 
+		bool deviceRemoved = false;
 		bool tearingSupported = false;
 		bool additionalShadingRatesSupported = false;
 		bool casting_fully_typed_formats = false;
@@ -99,10 +103,8 @@ namespace wi::graphics
 				Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
 				Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
 				Microsoft::WRL::ComPtr<ID3D12Fence> fence;
-				uint64_t fenceValueSignaled = 0;
 				GPUBuffer uploadbuffer;
 				inline bool IsValid() const { return commandList != nullptr; }
-				inline bool IsCompleted() const { return fence->GetCompletedValue() >= fenceValueSignaled; }
 			};
 			wi::vector<CopyCMD> freelist;
 
@@ -112,7 +114,8 @@ namespace wi::graphics
 		};
 		mutable CopyAllocator copyAllocator;
 
-		Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence[BUFFERCOUNT][QUEUE_COUNT];
+		Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence_cpu[BUFFERCOUNT][QUEUE_COUNT];
+		Microsoft::WRL::ComPtr<ID3D12Fence> frame_fence_gpu[BUFFERCOUNT][QUEUE_COUNT];
 
 		struct DescriptorBinder
 		{
@@ -137,8 +140,8 @@ namespace wi::graphics
 			if (semaphore_pool.empty())
 			{
 				Semaphore& dependency = semaphore_pool.emplace_back();
-				HRESULT hr = device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(dependency.fence));
-				assert(SUCCEEDED(hr));
+				dx12_check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(dependency.fence)));
+				dx12_check(dependency.fence.Get()->SetName(L"DependencySemaphore"));
 			}
 			Semaphore semaphore = std::move(semaphore_pool.back());
 			semaphore_pool.pop_back();
@@ -160,7 +163,6 @@ namespace wi::graphics
 
 			QUEUE_TYPE queue = {};
 			uint32_t id = 0;
-			wi::vector<std::pair<QUEUE_TYPE, Semaphore>> wait_queues;
 			wi::vector<Semaphore> waits;
 			wi::vector<Semaphore> signals;
 
@@ -175,14 +177,15 @@ namespace wi::graphics
 			};
 			wi::vector<Discard> discards;
 			D3D_PRIMITIVE_TOPOLOGY prev_pt = {};
-			wi::vector<std::pair<size_t, Microsoft::WRL::ComPtr<ID3D12PipelineState>>> pipelines_worker;
-			size_t prev_pipeline_hash = {};
+			wi::vector<std::pair<PipelineHash, Microsoft::WRL::ComPtr<ID3D12PipelineState>>> pipelines_worker;
+			PipelineHash prev_pipeline_hash = {};
 			const PipelineState* active_pso = {};
 			const Shader* active_cs = {};
 			const RaytracingPipelineState* active_rt = {};
 			const ID3D12RootSignature* active_rootsig_graphics = {};
 			const ID3D12RootSignature* active_rootsig_compute = {};
 			ShadingRate prev_shadingrate = {};
+			uint32_t prev_stencilref = 0;
 			wi::vector<const SwapChain*> swapchains;
 			bool dirty_pso = {};
 			wi::vector<D3D12_RAYTRACING_GEOMETRY_DESC> accelerationstructure_build_geometries;
@@ -204,19 +207,19 @@ namespace wi::graphics
 			void reset(uint32_t bufferindex)
 			{
 				buffer_index = bufferindex;
-				wait_queues.clear();
 				waits.clear();
 				signals.clear();
 				binder.reset();
 				frame_allocators[buffer_index].reset();
 				prev_pt = D3D_PRIMITIVE_TOPOLOGY_UNDEFINED;
-				prev_pipeline_hash = 0;
+				prev_pipeline_hash = {};
 				active_pso = nullptr;
 				active_cs = nullptr;
 				active_rt = nullptr;
 				active_rootsig_graphics = nullptr;
 				active_rootsig_compute = nullptr;
 				prev_shadingrate = ShadingRate::RATE_INVALID;
+				prev_stencilref = 0;
 				dirty_pso = false;
 				swapchains.clear();
 				renderpass_info = {};
@@ -269,7 +272,7 @@ namespace wi::graphics
 			return *(CommandList_DX12*)cmd.internal_state;
 		}
 
-		wi::unordered_map<size_t, Microsoft::WRL::ComPtr<ID3D12PipelineState>> pipelines_global;
+		wi::unordered_map<PipelineHash, Microsoft::WRL::ComPtr<ID3D12PipelineState>> pipelines_global;
 
 		void pso_validate(CommandList cmd);
 
@@ -366,7 +369,6 @@ namespace wi::graphics
 		///////////////Thread-sensitive////////////////////////
 
 		void WaitCommandList(CommandList cmd, CommandList wait_for) override;
-		void WaitQueue(CommandList cmd, QUEUE_TYPE wait_for) override;
 		void RenderPassBegin(const SwapChain* swapchain, CommandList cmd) override;
 		void RenderPassBegin(const RenderPassImage* images, uint32_t image_count, CommandList cmd, RenderPassFlags flags = RenderPassFlags::NONE) override;
 		void RenderPassEnd(CommandList cmd) override;
@@ -452,8 +454,7 @@ namespace wi::graphics
 			{
 				// Descriptor heaps' progress is recorded by the GPU:
 				fenceValue = allocationOffset.load();
-				HRESULT hr = queue->Signal(fence.Get(), fenceValue);
-				assert(SUCCEEDED(hr));
+				dx12_check(queue->Signal(fence.Get(), fenceValue));
 				cached_completedValue = fence->GetCompletedValue();
 			}
 		};
@@ -488,8 +489,7 @@ namespace wi::graphics
 				void block_allocate()
 				{
 					heaps.emplace_back();
-					HRESULT hr = device->device->CreateDescriptorHeap(&desc, PPV_ARGS(heaps.back()));
-					assert(SUCCEEDED(hr));
+					dx12_check(device->device->CreateDescriptorHeap(&desc, PPV_ARGS(heaps.back())));
 					D3D12_CPU_DESCRIPTOR_HANDLE heap_start = heaps.back()->GetCPUDescriptorHandleForHeapStart();
 					for (UINT i = 0; i < desc.NumDescriptors; ++i)
 					{
@@ -539,137 +539,66 @@ namespace wi::graphics
 
 			~AllocationHandler()
 			{
-				Update(~0, 0); // destroy all remaining
+				Update(~0ull, 0); // destroy all remaining
 			}
 
 			// Deferred destroy of resources that the GPU is already finished with:
 			void Update(uint64_t FRAMECOUNT, uint32_t BUFFERCOUNT)
 			{
-				destroylocker.lock();
+				std::scoped_lock lck(destroylocker);
 				framecount = FRAMECOUNT;
-				while (!destroyer_allocations.empty())
+				while (!destroyer_allocations.empty() && destroyer_allocations.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_allocations.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_allocations.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_allocations.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_resources.empty())
+				while (!destroyer_resources.empty() && destroyer_resources.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_resources.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_resources.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_resources.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_queryheaps.empty())
+				while (!destroyer_queryheaps.empty() && destroyer_queryheaps.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_queryheaps.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_queryheaps.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_queryheaps.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_pipelines.empty())
+				while (!destroyer_pipelines.empty() && destroyer_pipelines.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_pipelines.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_pipelines.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_pipelines.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_rootSignatures.empty())
+				while (!destroyer_rootSignatures.empty() && destroyer_rootSignatures.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_rootSignatures.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_rootSignatures.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_rootSignatures.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_stateobjects.empty())
+				while (!destroyer_stateobjects.empty() && destroyer_stateobjects.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_stateobjects.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_stateobjects.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_stateobjects.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_video_decoder_heaps.empty())
+				while (!destroyer_video_decoder_heaps.empty() && destroyer_video_decoder_heaps.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_video_decoder_heaps.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_video_decoder_heaps.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_video_decoder_heaps.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_video_decoders.empty())
+				while (!destroyer_video_decoders.empty() && destroyer_video_decoders.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_video_decoders.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						destroyer_video_decoders.pop_front();
-						// comptr auto delete
-					}
-					else
-					{
-						break;
-					}
+					destroyer_video_decoders.pop_front();
+					// comptr auto delete
 				}
-				while (!destroyer_bindless_res.empty())
+				while (!destroyer_bindless_res.empty() && destroyer_bindless_res.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_bindless_res.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						int index = destroyer_bindless_res.front().first;
-						destroyer_bindless_res.pop_front();
-						free_bindless_res.push_back(index);
-					}
-					else
-					{
-						break;
-					}
+					int index = destroyer_bindless_res.front().first;
+					destroyer_bindless_res.pop_front();
+					free_bindless_res.push_back(index);
 				}
-				while (!destroyer_bindless_sam.empty())
+				while (!destroyer_bindless_sam.empty() && destroyer_bindless_sam.front().second + BUFFERCOUNT < FRAMECOUNT)
 				{
-					if (destroyer_bindless_sam.front().second + BUFFERCOUNT < FRAMECOUNT)
-					{
-						int index = destroyer_bindless_sam.front().first;
-						destroyer_bindless_sam.pop_front();
-						free_bindless_sam.push_back(index);
-					}
-					else
-					{
-						break;
-					}
+					int index = destroyer_bindless_sam.front().first;
+					destroyer_bindless_sam.pop_front();
+					free_bindless_sam.push_back(index);
 				}
-				destroylocker.unlock();
 			}
 		};
 		std::shared_ptr<AllocationHandler> allocationhandler;

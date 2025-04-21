@@ -479,6 +479,7 @@ namespace wi::graphics
 		// Other:
 		VIDEO_DECODE_SRC = 1 << 15,			// video decode operation source (bitstream buffer or DPB texture)
 		VIDEO_DECODE_DST = 1 << 16,			// video decode operation destination DPB texture
+		SWAPCHAIN = 1 << 17,				// resource state of swap chain's back buffer texture when it's not rendering
 	};
 
 	enum class RenderPassFlags
@@ -1273,6 +1274,28 @@ namespace wi::graphics
 		RaytracingPipelineStateDesc desc;
 
 		constexpr const RaytracingPipelineStateDesc& GetDesc() const { return desc; }
+	};
+
+	struct PipelineHash
+	{
+		const PipelineState* pso = nullptr;
+		uint64_t renderpass_hash = 0;
+
+		constexpr bool operator==(const PipelineHash& other) const
+		{
+			return (pso == other.pso) && (renderpass_hash == other.renderpass_hash);
+		}
+		constexpr uint64_t get_hash() const
+		{
+			union
+			{
+				const PipelineState* ptr;
+				uint64_t value;
+			} pso_hasher = {};
+			static_assert(sizeof(pso_hasher) == sizeof(uint64_t));
+			pso_hasher.ptr = pso; // reinterpret_cast in constexpr workaround
+			return (pso_hasher.value ^ (renderpass_hash << 1)) >> 1;
+		}
 	};
 
 	struct ShaderTable
@@ -2107,3 +2130,15 @@ template<>
 struct enable_bitmask_operators<wi::graphics::RenderPassFlags> {
 	static const bool enable = true;
 };
+
+namespace std
+{
+	template <>
+	struct hash<wi::graphics::PipelineHash>
+	{
+		inline uint64_t operator()(const wi::graphics::PipelineHash& hash) const
+		{
+			return hash.get_hash();
+		}
+	};
+}

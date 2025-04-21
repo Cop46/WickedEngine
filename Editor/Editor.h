@@ -32,6 +32,12 @@ public:
 	bool dummy_male = false;
 	XMFLOAT3 dummy_pos = XMFLOAT3(0, 0, 0);
 
+	bool drive_mode = false;
+	float drive_cam_dist_next = 7;
+	float drive_cam_dist = drive_cam_dist_next;
+	float drive_orbit_horizontal = 0;
+	float drive_steering_smoothed = 0;
+
 	wi::gui::Button navtestButton;
 	bool navtest_enabled = false;
 	wi::scene::PickResult navtest_start_pick;
@@ -65,6 +71,8 @@ public:
 	wi::gui::Button materialsButton;
 	wi::gui::Button paintToolButton;
 
+	wi::gui::ComboBox guiScalingCombo;
+
 	GeneralWindow generalWnd;
 	GraphicsWindow graphicsWnd;
 	CameraWindow cameraWnd;
@@ -85,6 +93,7 @@ public:
 	void FixedUpdate() override;
 	void Update(float dt) override;
 	void PostUpdate() override;
+	void PreRender() override;
 	void Render() const override;
 	void Compose(wi::graphics::CommandList cmd) const override;
 
@@ -222,6 +231,8 @@ public:
 
 	wi::jobsystem::context loadmodel_workload;
 	wi::SpriteFont loadmodel_font;
+
+	wi::TrailRenderer spline_renderer;
 };
 
 class Editor : public wi::Application

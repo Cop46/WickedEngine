@@ -29,7 +29,7 @@ namespace wi::gui
 			static wi::eventhandler::Handle handle = wi::eventhandler::Subscribe(wi::eventhandler::EVENT_RELOAD_SHADERS, [this](uint64_t userdata) { LoadShaders(); });
 			LoadShaders();
 
-			wi::backlog::post("wi::gui Initialized (" + std::to_string((int)std::round(timer.elapsed())) + " ms)");
+			wilog("wi::gui Initialized (%d ms)", (int)std::round(timer.elapsed()));
 		}
 
 		void LoadShaders()
@@ -92,15 +92,18 @@ namespace wi::gui
 				widget->priority = ~0u;
 			}
 
-			if (widget->IsVisible() && widget->hitBox.intersects(pointerHitbox))
+			const bool visible = widget->IsVisible();
+			const WIDGETSTATE state = widget->GetState();
+
+			if (visible && widget->hitBox.intersects(pointerHitbox))
 			{
 				focus = true;
 			}
-			if (widget->GetState() > IDLE)
+			if (visible && state > IDLE)
 			{
 				focus = true;
 			}
-			if (widget->GetState() > FOCUS)
+			if (visible && state > FOCUS)
 			{
 				force_disable = true;
 			}
@@ -328,9 +331,17 @@ namespace wi::gui
 			tooltipTimer = 0;
 		}
 
+		XMFLOAT2 highlight_pos = GetPointerHighlightPos(canvas);
+		for (auto& x : sprites)
+		{
+			if (x.params.isHighlightEnabled())
+			{
+				x.params.highlight_pos = highlight_pos;
+			}
+		}
+
 		sprites[state].Update(dt);
 		font.Update(dt);
-
 		angular_highlight_timer += dt;
 	}
 	void Widget::Render(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const
@@ -670,10 +681,25 @@ namespace wi::gui
 			theme.image.Apply(sprites[id].params);
 		}
 		theme.font.Apply(font.params);
+		if (theme.shadow >= 0)
+		{
+			SetShadowRadius(theme.shadow);
+		}
 		SetShadowColor(theme.shadow_color);
 		theme.tooltipFont.Apply(tooltipFont.params);
 		theme.tooltipImage.Apply(tooltipSprite.params);
+		if (theme.tooltip_shadow >= 0)
+		{
+			tooltip_shadow = theme.tooltip_shadow;
+		}
 		tooltip_shadow_color = theme.tooltip_shadow_color;
+		shadow_highlight = theme.shadow_highlight;
+		shadow_highlight_color = theme.shadow_highlight_color;
+		shadow_highlight_spread = theme.shadow_highlight_spread;
+		for (auto& x : sprites)
+		{
+			x.params.border_soften = theme.image.border_soften;
+		}
 	}
 
 	void Widget::AttachTo(Widget* parent)
@@ -773,6 +799,11 @@ namespace wi::gui
 		{
 			parent->HitboxConstrain(hb);
 		}
+	}
+	XMFLOAT2 Widget::GetPointerHighlightPos(const wi::Canvas& canvas) const
+	{
+		XMFLOAT4 pointer = wi::input::GetPointer();
+		return XMFLOAT2(pointer.x / canvas.GetLogicalWidth(), pointer.y / canvas.GetLogicalHeight());
 	}
 
 
@@ -968,6 +999,17 @@ namespace wi::gui
 						corner_rounding.radius += shadow;
 					}
 				}
+			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
 			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
@@ -1263,7 +1305,7 @@ namespace wi::gui
 
 		if (wrap_enabled)
 		{
-			font.params.h_wrap = scale.x;
+			font.params.h_wrap = scale.x - margin_left - margin_right;
 		}
 		else
 		{
@@ -1273,10 +1315,10 @@ namespace wi::gui
 		switch (font.params.h_align)
 		{
 		case wi::font::WIFALIGN_LEFT:
-			font.params.posX = translation.x + 2;
+			font.params.posX = translation.x + 2 + margin_left;
 			break;
 		case wi::font::WIFALIGN_RIGHT:
-			font.params.posX = translation.x + scale.x - 2;
+			font.params.posX = translation.x + scale.x - 2 - margin_right;
 			break;
 		case wi::font::WIFALIGN_CENTER:
 		default:
@@ -1286,10 +1328,10 @@ namespace wi::gui
 		switch (font.params.v_align)
 		{
 		case wi::font::WIFALIGN_TOP:
-			font.params.posY = translation.y + 2;
+			font.params.posY = translation.y + 2 + margin_top;
 			break;
 		case wi::font::WIFALIGN_BOTTOM:
-			font.params.posY = translation.y + scale.y - 2;
+			font.params.posY = translation.y + scale.y - 2 - margin_bottom;
 			break;
 		case wi::font::WIFALIGN_CENTER:
 		default:
@@ -1368,6 +1410,17 @@ namespace wi::gui
 					}
 				}
 			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
+			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
 
@@ -1412,6 +1465,8 @@ namespace wi::gui
 
 		font_description.params = font.params;
 		font_description.params.h_align = wi::font::WIFALIGN_RIGHT;
+
+		SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip); // disable localization of text because that can come from user input and musn't be overwritten!
 	}
 	void TextInputField::SetValue(const std::string& newValue)
 	{
@@ -1425,9 +1480,20 @@ namespace wi::gui
 	}
 	void TextInputField::SetValue(float newValue)
 	{
-		std::stringstream ss("");
-		ss << newValue;
-		font.SetText(ss.str());
+		if (newValue == FLT_MAX)
+		{
+			font.SetText(L"FLT_MAX");
+		}
+		else if (newValue == -FLT_MAX)
+		{
+			font.SetText(L"-FLT_MAX");
+		}
+		else
+		{
+			std::stringstream ss("");
+			ss << newValue;
+			font.SetText(ss.str());
+		}
 	}
 	const std::string TextInputField::GetValue()
 	{
@@ -1661,6 +1727,17 @@ namespace wi::gui
 					}
 				}
 			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
+			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
 
@@ -1835,7 +1912,7 @@ namespace wi::gui
 		valueInputField.Create(name + "_endInputField");
 		valueInputField.SetLocalizationEnabled(LocalizationEnabled::None);
 		valueInputField.SetShadowRadius(0);
-		valueInputField.SetTooltip("Enter number to modify value even outside slider limits. Enter \"reset\" to reset slider to initial state.");
+		valueInputField.SetTooltip("Enter number to modify value even outside slider limits. Other inputs:\n - reset : reset slider to initial state.\n - FLT_MAX : float max value\n - -FLT_MAX : negative float max value.");
 		valueInputField.SetValue(end);
 		valueInputField.OnInputAccepted([this, start, end, defaultValue](EventArgs args) {
 			if (args.sValue.compare("reset") == 0)
@@ -1843,6 +1920,18 @@ namespace wi::gui
 				this->value = defaultValue;
 				this->start = start;
 				this->end = end;
+				args.fValue = this->value;
+				args.iValue = (int)this->value;
+			}
+			else if (args.sValue.compare("FLT_MAX") == 0)
+			{
+				this->value = FLT_MAX;
+				args.fValue = this->value;
+				args.iValue = (int)this->value;
+			}
+			else if (args.sValue.compare("-FLT_MAX") == 0)
+			{
+				this->value = -FLT_MAX;
 				args.fValue = this->value;
 				args.iValue = (int)this->value;
 			}
@@ -2018,6 +2107,17 @@ namespace wi::gui
 					}
 				}
 			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
+			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
 
@@ -2188,6 +2288,17 @@ namespace wi::gui
 						corner_rounding.radius += shadow;
 					}
 				}
+			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
 			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
@@ -2542,6 +2653,17 @@ namespace wi::gui
 						corner_rounding.radius += shadow;
 					}
 				}
+			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
 			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
@@ -2903,71 +3025,78 @@ namespace wi::gui
 			sprites[i].params.color = sprites[IDLE].params.color;
 		}
 
-		// Add controls
-		if (has_flag(window_controls, WindowControls::MOVE))
+		if (!has_flag(window_controls, WindowControls::DISABLE_TITLE_BAR))
 		{
-			// Add a grabber onto the title bar
-			moveDragger.Create(name);
-			moveDragger.SetLocalizationEnabled(LocalizationEnabled::None);
-			moveDragger.SetShadowRadius(0);
-			moveDragger.SetText(name);
-			moveDragger.font.params.h_align = wi::font::WIFALIGN_LEFT;
-			moveDragger.OnDrag([this](EventArgs args) {
-				auto saved_parent = this->parent;
-				this->Detach();
-				this->Translate(XMFLOAT3(args.deltaPos.x, args.deltaPos.y, 0));
-				this->AttachTo(saved_parent);
-				});
-			AddWidget(&moveDragger, AttachmentOptions::NONE);
-		}
+			// Add title bar controls
+			if (has_flag(window_controls, WindowControls::MOVE))
+			{
+				// Add a grabber onto the title bar
+				moveDragger.Create(name);
+				moveDragger.SetLocalizationEnabled(LocalizationEnabled::None);
+				moveDragger.SetShadowRadius(0);
+				moveDragger.SetText(name);
+				moveDragger.font.params.h_align = wi::font::WIFALIGN_LEFT;
+				moveDragger.OnDrag([this](EventArgs args) {
+					auto saved_parent = this->parent;
+					this->Detach();
+					this->Translate(XMFLOAT3(args.deltaPos.x, args.deltaPos.y, 0));
+					this->AttachTo(saved_parent);
+					});
+				AddWidget(&moveDragger, AttachmentOptions::NONE);
+				has_titlebar = true;
+			}
 
-		if (has_flag(window_controls, WindowControls::CLOSE))
-		{
-			// Add close button to the top right corner
-			closeButton.Create(name + "_close_button");
-			closeButton.SetLocalizationEnabled(LocalizationEnabled::None);
-			closeButton.SetShadowRadius(0);
-			closeButton.SetText("x");
-			closeButton.OnClick([this](EventArgs args) {
-				this->SetVisible(false);
-				if (onClose)
-				{
-					onClose(args);
-				}
-				});
-			closeButton.SetTooltip("Close window");
-			AddWidget(&closeButton, AttachmentOptions::NONE);
-		}
+			if (has_flag(window_controls, WindowControls::CLOSE))
+			{
+				// Add close button to the top left corner
+				closeButton.Create(name + "_close_button");
+				closeButton.SetLocalizationEnabled(LocalizationEnabled::None);
+				closeButton.SetShadowRadius(0);
+				closeButton.SetText("x");
+				closeButton.OnClick([this](EventArgs args) {
+					this->SetVisible(false);
+					if (onClose)
+					{
+						onClose(args);
+					}
+					});
+				closeButton.SetTooltip("Close window");
+				AddWidget(&closeButton, AttachmentOptions::NONE);
+				has_titlebar = true;
+			}
 
-		if (has_flag(window_controls, WindowControls::COLLAPSE))
-		{
-			// Add minimize button to the top right corner
-			collapseButton.Create(name + "_collapse_button");
-			collapseButton.SetLocalizationEnabled(LocalizationEnabled::None);
-			collapseButton.SetShadowRadius(0);
-			collapseButton.SetText("-");
-			collapseButton.OnClick([this](EventArgs args) {
-				this->SetMinimized(!this->IsMinimized());
-				if (onCollapse)
-				{
-					onCollapse({});
-				}
-				});
-			collapseButton.SetTooltip("Collapse/Expand window");
-			AddWidget(&collapseButton, AttachmentOptions::NONE);
-		}
+			if (has_flag(window_controls, WindowControls::COLLAPSE))
+			{
+				// Add minimize button to the top left corner
+				collapseButton.Create(name + "_collapse_button");
+				collapseButton.SetLocalizationEnabled(LocalizationEnabled::None);
+				collapseButton.SetShadowRadius(0);
+				collapseButton.SetText("-");
+				collapseButton.OnClick([this](EventArgs args) {
+					this->SetMinimized(!this->IsMinimized());
+					if (onCollapse)
+					{
+						onCollapse({});
+					}
+					});
+				collapseButton.SetTooltip("Collapse/Expand window");
+				AddWidget(&collapseButton, AttachmentOptions::NONE);
+				has_titlebar = true;
+			}
 
-		if (!has_flag(window_controls, WindowControls::MOVE) && !name.empty())
-		{
-			// Simple title bar
-			label.Create(name);
-			label.SetLocalizationEnabled(LocalizationEnabled::None);
-			label.SetShadowRadius(0);
-			label.SetText(name);
-			label.font.params.h_align = wi::font::WIFALIGN_LEFT;
-			label.scrollbar.SetEnabled(false);
-			label.SetWrapEnabled(false);
-			AddWidget(&label, AttachmentOptions::NONE);
+			if (!has_flag(window_controls, WindowControls::MOVE) && !name.empty())
+			{
+				// Simple title bar
+				label.Create(name);
+				label.SetLocalizationEnabled(LocalizationEnabled::None);
+				label.SetShadowRadius(0);
+				label.SetText(name);
+				label.font.params.h_align = wi::font::WIFALIGN_LEFT;
+				label.scrollbar.SetEnabled(false);
+				label.SetWrapEnabled(false);
+				AddWidget(&label, AttachmentOptions::NONE);
+				has_titlebar = true;
+			}
 		}
 
 		scrollbar_horizontal.SetVertical(false);
@@ -3335,41 +3464,61 @@ namespace wi::gui
 		scrollable_area.ClearTransform();
 		scrollable_area.Translate(translation);
 
-		// Compute scrollable area:
-		if (scrollbar_horizontal.parent != nullptr || scrollbar_vertical.parent != nullptr)
+		float scroll_length_horizontal = 0;
+		float scroll_length_vertical = 0;
+		for (auto& widget : widgets)
 		{
-			float scroll_length_horizontal = 0;
-			float scroll_length_vertical = 0;
-			for (auto& widget : widgets)
+			if (!widget->IsVisible())
+				continue;
+			if (widget->parent == &scrollable_area)
 			{
-				if (!widget->IsVisible())
-					continue;
-				if (widget->parent == &scrollable_area)
+				XMFLOAT2 size = widget->GetSize();
+				scroll_length_horizontal = std::max(scroll_length_horizontal, widget->translation_local.x + size.x);
+				scroll_length_vertical = std::max(scroll_length_vertical, widget->translation_local.y + size.y);
+			}
+		}
+
+		if (has_flag(controls, WindowControls::FIT_ALL_WIDGETS_VERTICAL))
+		{
+			if (!IsCollapsed())
+			{
+				// it will be dynamically sized to fit all widgets:
+				auto saved_parent = this->parent;
+				this->Detach();
+				scale_local.y = control_size + 1 + scroll_length_vertical + 4; // some padding at the bottom
+				this->AttachTo(saved_parent);
+			}
+		}
+		else
+		{
+			// Compute scrollable area:
+			if (scrollbar_horizontal.parent != nullptr || scrollbar_vertical.parent != nullptr)
+			{
+				scrollbar_horizontal.SetListLength(scroll_length_horizontal);
+				scrollbar_vertical.SetListLength(scroll_length_vertical);
+				scrollbar_horizontal.Update(canvas, 0);
+				scrollbar_vertical.Update(canvas, 0);
+				scrollable_area.Translate(XMFLOAT3(scrollbar_horizontal.GetOffset(), 1 + scrollbar_vertical.GetOffset(), 0));
+				scrollable_area.scissorRect.left += 1;
+				if (scrollbar_horizontal.parent != nullptr && scrollbar_horizontal.IsScrollbarRequired())
 				{
-					XMFLOAT2 size = widget->GetSize();
-					scroll_length_horizontal = std::max(scroll_length_horizontal, widget->translation_local.x + size.x);
-					scroll_length_vertical = std::max(scroll_length_vertical, widget->translation_local.y + size.y);
+					scrollable_area.scissorRect.bottom -= (int32_t)control_size + 1;
 				}
+				if (scrollbar_vertical.parent != nullptr && scrollbar_vertical.IsScrollbarRequired())
+				{
+					scrollable_area.scissorRect.right -= (int32_t)control_size + 1;
+				}
+				scrollable_area.active_area.pos.x = float(scrollable_area.scissorRect.left);
+				scrollable_area.active_area.pos.y = float(scrollable_area.scissorRect.top);
+				scrollable_area.active_area.siz.x = float(scrollable_area.scissorRect.right) - float(scrollable_area.scissorRect.left);
+				scrollable_area.active_area.siz.y = float(scrollable_area.scissorRect.bottom) - float(scrollable_area.scissorRect.top);
 			}
-			scrollbar_horizontal.SetListLength(scroll_length_horizontal);
-			scrollbar_vertical.SetListLength(scroll_length_vertical);
-			scrollbar_horizontal.Update(canvas, 0);
-			scrollbar_vertical.Update(canvas, 0);
-			scrollable_area.Translate(XMFLOAT3(scrollbar_horizontal.GetOffset(), control_size + 1 + scrollbar_vertical.GetOffset(), 0));
-			scrollable_area.scissorRect.left += 1;
+		}
+
+		if (has_titlebar)
+		{
+			scrollable_area.Translate(XMFLOAT3(0, control_size, 0));
 			scrollable_area.scissorRect.top += (int32_t)control_size;
-			if (scrollbar_horizontal.parent != nullptr && scrollbar_horizontal.IsScrollbarRequired())
-			{
-				scrollable_area.scissorRect.bottom -= (int32_t)control_size + 1;
-			}
-			if (scrollbar_vertical.parent != nullptr && scrollbar_vertical.IsScrollbarRequired())
-			{
-				scrollable_area.scissorRect.right -= (int32_t)control_size + 1;
-			}
-			scrollable_area.active_area.pos.x = float(scrollable_area.scissorRect.left);
-			scrollable_area.active_area.pos.y = float(scrollable_area.scissorRect.top);
-			scrollable_area.active_area.siz.x = float(scrollable_area.scissorRect.right) - float(scrollable_area.scissorRect.left);
-			scrollable_area.active_area.siz.y = float(scrollable_area.scissorRect.bottom) - float(scrollable_area.scissorRect.top);
 		}
 
 		scrollable_area.AttachTo(this);
@@ -3512,6 +3661,17 @@ namespace wi::gui
 						corner_rounding.radius += shadow;
 					}
 				}
+			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
 			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}
@@ -5142,6 +5302,17 @@ namespace wi::gui
 						corner_rounding.radius += shadow;
 					}
 				}
+			}
+			if (shadow_highlight)
+			{
+				fx.enableHighlight();
+				fx.highlight_pos = GetPointerHighlightPos(canvas);
+				fx.highlight_color = shadow_highlight_color;
+				fx.highlight_spread = shadow_highlight_spread;
+			}
+			else
+			{
+				fx.disableHighlight();
 			}
 			wi::image::Draw(nullptr, fx, cmd);
 		}

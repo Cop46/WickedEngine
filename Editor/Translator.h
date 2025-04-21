@@ -12,6 +12,7 @@ private:
 	float angle_start = 0;
 	bool has_selected_transform = false;
 	wi::vector<uint64_t> temp_filters;
+	wi::vector<wi::ecs::Entity> selectedWithHierarchy; // all the selected entities and their descendants
 public:
 
 	void Update(const wi::scene::CameraComponent& camera, const XMFLOAT4& currentMouse, const wi::Canvas& canvas);
@@ -32,6 +33,7 @@ public:
 	float rotate_snap = XM_PIDIV4;
 	float translate_snap = 1;
 	float opacity = 1;
+	float darken_negative_axes = 1;
 
 	enum TRANSLATOR_STATE
 	{

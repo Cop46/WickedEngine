@@ -4,6 +4,7 @@
 // This is a helper include file pasted into all engine headers, try to keep it minimal!
 // Do not include engine features in this file!
 
+#include <cfloat>
 #include <cstdint>
 #include <type_traits>
 
@@ -17,6 +18,9 @@
 
 template <typename T>
 constexpr T sqr(T x) { return x * x; }
+
+template <typename T>
+constexpr T pow4(T x) { return x * x * x * x; }
 
 template <typename T>
 constexpr T clamp(T x, T a, T b)
@@ -65,6 +69,21 @@ constexpr float bilinear(float4 gather, float2 pixel_frac)
 	return lerp(top_row, bottom_row, pixel_frac.y);
 }
 
+// Stack allocated string utility:
+template <unsigned capacity = 256>
+struct StackString
+{
+	char chars[capacity] = {};
+	unsigned cnt = 0;
+	static_assert(capacity > 1);
+	constexpr operator const char* () const { return chars; }
+	constexpr const char* const c_str() const { return chars; }
+	constexpr void push_back(const char* str) { while (*str != 0 && (cnt < (capacity - 1))) { chars[cnt++] = *str; str++; } }
+	constexpr unsigned size() const { return capacity; }
+	constexpr unsigned length() const { return cnt; }
+	constexpr bool empty() const { return cnt == 0; }
+};
+
 // CPU intrinsics:
 #if defined(_WIN32)
 // Windows, Xbox:
@@ -105,14 +124,27 @@ inline unsigned int countbits(unsigned int value)
 {
 	return __popcnt(value);
 }
+inline unsigned long countbits(unsigned long value)
+{
+	return (unsigned long)__popcnt64((unsigned long long)value);
+}
 inline unsigned long long countbits(unsigned long long value)
 {
 	return __popcnt64(value);
 }
+inline unsigned int firstbithigh(unsigned int value)
+{
+	unsigned long bit_index;
+	if (_BitScanReverse(&bit_index, (unsigned long)value))
+	{
+		return 31u - (unsigned int)bit_index;
+	}
+	return 0;
+}
 inline unsigned long firstbithigh(unsigned long value)
 {
 	unsigned long bit_index;
-	if (_BitScanReverse(&bit_index, value))
+	if (_BitScanReverse64(&bit_index, (unsigned long long)value))
 	{
 		return 31ul - bit_index;
 	}
@@ -127,10 +159,19 @@ inline unsigned long firstbithigh(unsigned long long value)
 	}
 	return 0;
 }
-inline unsigned long firstbitlow(unsigned long value)
+inline unsigned int firstbitlow(unsigned int value)
 {
 	unsigned long bit_index;
 	if (_BitScanForward(&bit_index, value))
+	{
+		return (unsigned int)bit_index;
+	}
+	return 0;
+}
+inline unsigned long firstbitlow(unsigned long value)
+{
+	unsigned long bit_index;
+	if (_BitScanForward64(&bit_index, (unsigned long long)value))
 	{
 		return bit_index;
 	}
@@ -298,6 +339,34 @@ template<typename E>
 constexpr bool has_flag(E lhs, E rhs)
 {
 	return (lhs & rhs) == rhs;
+}
+
+// Extract file name from a path at compile-time
+constexpr const char* relative_path(const char* path)
+{
+	const char* startPosition = path;
+	for (const char* currentCharacter = path; *currentCharacter != '\0'; ++currentCharacter)
+	{
+		if (*currentCharacter == '\\' || *currentCharacter == '/')
+		{
+			startPosition = currentCharacter;
+		}
+	}
+
+	if (startPosition != path)
+	{
+		++startPosition;
+	}
+
+	return startPosition;
+}
+
+// Extract function name from a string at compile-time
+constexpr auto extract_function_name(const char* str)
+{
+	StackString ret;
+	ret.push_back(str);
+	return ret;
 }
 
 #endif //WICKEDENGINE_COMMONINCLUDE_H

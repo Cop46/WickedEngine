@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.19)
 
 file(GLOB SOURCE_FILES CONFIGURE_DEPENDS *.cpp)
 list(FILTER SOURCE_FILES EXCLUDE REGEX ${CMAKE_CURRENT_SOURCE_DIR}/main_.*)
@@ -25,6 +25,12 @@ else ()
 		WickedEngine
 	)
 	set(LIB_DXCOMPILER "libdxcompiler.so")
+
+	# needed for proper names in crash stacktrace
+	set_target_properties(WickedEngineEditor
+		PROPERTIES
+		ENABLE_EXPORTS ON
+	)
 
 endif ()
 

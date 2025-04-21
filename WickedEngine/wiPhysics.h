@@ -30,6 +30,10 @@ namespace wi::physics
 	void SetDebugDrawEnabled(bool value);
 	bool IsDebugDrawEnabled();
 
+	// Adjust constraint debugging sizes
+	void SetConstraintDebugSize(float value);
+	float GetConstraintDebugSize();
+
 	// Set the accuracy of the simulation
 	//	This value corresponds to maximum simulation step count
 	//	Higher values will be slower but more accurate
@@ -47,6 +51,17 @@ namespace wi::physics
 		float dt
 	);
 
+	// Teleport a dynamic rigid body:
+	void SetPosition(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& position
+	);
+	void SetPositionAndRotation(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& position,
+		const XMFLOAT4& rotation
+	);
+
 	// Set linear velocity to rigid body
 	void SetLinearVelocity(
 		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
@@ -57,6 +72,8 @@ namespace wi::physics
 		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
 		const XMFLOAT3& velocity
 	);
+
+	XMFLOAT3 GetVelocity(wi::scene::RigidBodyPhysicsComponent& physicscomponent);
 
 	// Apply force at body center
 	void ApplyForce(
@@ -101,6 +118,25 @@ namespace wi::physics
 		const XMFLOAT3& torque
 	);
 
+	// Set input from driver
+	//	forward:	Value between -1 and 1 for auto transmission and value between 0 and 1 indicating desired driving direction and amount the gas pedal is pressed
+	//	right:		Value between -1 and 1 indicating desired steering angle (1 = right)
+	//	brake:		Value between 0 and 1 indicating how strong the brake pedal is pressed
+	//	handbrake:	Value between 0 and 1 indicating how strong the hand brake is pulled (back brake for motorcycles)
+	void DriveVehicle(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		float forward,
+		float right = 0,
+		float brake = 0,
+		float handbrake = 0
+	);
+
+	// Signed velocity amount in forward direction
+	float GetVehicleForwardVelocity(wi::scene::RigidBodyPhysicsComponent& physicscomponent);
+
+	// Override all vehicle wheel transforms in world space
+	void OverrideWehicleWheelTransforms(wi::scene::Scene& scene);
+
 	enum class ActivationState
 	{
 		Active,
@@ -116,10 +152,22 @@ namespace wi::physics
 	);
 	void ActivateAllRigidBodies(wi::scene::Scene& scene);
 
+	void ResetPhysicsObjects(wi::scene::Scene& scene);
+
 	XMFLOAT3 GetSoftBodyNodePosition(
 		wi::scene::SoftBodyPhysicsComponent& physicscomponent,
 		uint32_t physicsIndex
 	);
+
+	void SetGhostMode(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		bool value
+	);
+	void SetGhostMode(
+		wi::scene::HumanoidComponent& humanoid,
+		bool value
+	);
+	void SetRagdollGhostMode(wi::scene::HumanoidComponent& humanoid, bool value);
 
 	struct RayIntersectionResult
 	{
@@ -143,9 +191,23 @@ namespace wi::physics
 		std::shared_ptr<void> internal_state;
 		inline bool IsValid() const { return internal_state != nullptr; }
 	};
+	enum class ConstraintType
+	{
+		Fixed,	// Fixes the whole object with the current orientation
+		Point,	// Fixes the object to rotate around a point
+	};
 	void PickDrag(
 		const wi::scene::Scene& scene,
 		wi::primitive::Ray ray,
-		PickDragOperation& op
+		PickDragOperation& op,
+		ConstraintType constraint_type = ConstraintType::Fixed
+	);
+
+	// Create the shape immediately, useful when you want to do this from a thread
+	//	Otherwise this will be created on demand before it's used for the first time
+	void CreateRigidBodyShape(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& scale_local = XMFLOAT3(1, 1, 1),
+		const wi::scene::MeshComponent* mesh = nullptr
 	);
 }

@@ -8,7 +8,7 @@ using namespace wi::scene;
 
 ModifierWindow::ModifierWindow(const std::string& name)
 {
-	wi::gui::Window::Create(name, wi::gui::Window::WindowControls::CLOSE_AND_COLLAPSE);
+	wi::gui::Window::Create(name, wi::gui::Window::WindowControls::CLOSE_AND_COLLAPSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(200, 100));
 
 	blendCombo.Create("Blend: ");
@@ -214,24 +214,39 @@ HeightmapModifierWindow::HeightmapModifierWindow() : ModifierWindow("Heightmap")
 				heightmap_modifier->width = 0;
 				heightmap_modifier->height = 0;
 				int bpp = 0;
-				if (stbi_is_16_bit(fileName.c_str()))
+				wi::vector<uint8_t> filedata;
+				if (!wi::helper::FileRead(fileName, filedata))
 				{
-					stbi_us* rgba = stbi_load_16(fileName.c_str(), &heightmap_modifier->width, &heightmap_modifier->height, &bpp, 1); if (rgba != nullptr)
+					wi::backlog::post("Heightmap loading failed, file couldn't be found: " + fileName, wi::backlog::LogLevel::Error);
+				}
+
+				if (stbi_is_16_bit_from_memory((const stbi_uc*)filedata.data(), (int)filedata.size()))
+				{
+					stbi_us* rgba = stbi_load_16_from_memory((const stbi_uc*)filedata.data(), (int)filedata.size(), &heightmap_modifier->width, &heightmap_modifier->height, &bpp, 1);
+					if (rgba != nullptr)
 					{
 						heightmap_modifier->data.resize(heightmap_modifier->width * heightmap_modifier->height * sizeof(uint16_t));
 						std::memcpy(heightmap_modifier->data.data(), rgba, heightmap_modifier->data.size());
 						stbi_image_free(rgba);
 						generation_callback(); // callback after heightmap load confirmation
 					}
+					else
+					{
+						wi::backlog::post("Heightmap loading unknown failure for 16-bit image: " + fileName, wi::backlog::LogLevel::Error);
+					}
 				}
 				else
 				{
-					stbi_uc* rgba = stbi_load(fileName.c_str(), &heightmap_modifier->width, &heightmap_modifier->height, &bpp, 1);
+					stbi_uc* rgba = stbi_load_from_memory((const stbi_uc*)filedata.data(), (int)filedata.size(), &heightmap_modifier->width, &heightmap_modifier->height, &bpp, 1);
 					if (rgba != nullptr)
 					{
 						heightmap_modifier->data.resize(heightmap_modifier->width * heightmap_modifier->height * sizeof(uint8_t));
 						std::memcpy(heightmap_modifier->data.data(), rgba, heightmap_modifier->data.size());
 						generation_callback(); // callback after heightmap load confirmation
+					}
+					else
+					{
+						wi::backlog::post("Heightmap loading failure for 8-bit image: " + fileName, wi::backlog::LogLevel::Error);
 					}
 				}
 			});
@@ -276,10 +291,13 @@ void HeightmapModifierWindow::From(wi::terrain::HeightmapModifier* ptr)
 	scaleSlider.SetValue(ptr->scale);
 }
 
-PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
+PropWindow::PropWindow(wi::terrain::Terrain* terrain, wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	:prop(prop)
 	,scene(scene)
 {
+	if (terrain == nullptr)
+		return;
+
 	std::string windowName = "Prop: ";
 	std::string propName = "NONE";
 	Entity entity = INVALID_ENTITY;
@@ -306,7 +324,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 		scene->Entity_Remove(entity);
 	}
 
-	wi::gui::Window::Create(windowName, wi::gui::Window::WindowControls::CLOSE_AND_COLLAPSE);
+	wi::gui::Window::Create(windowName, wi::gui::Window::WindowControls::CLOSE_AND_COLLAPSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 
 	constexpr auto elementSize = XMFLOAT2(100, 20);
 
@@ -317,8 +335,11 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	for (size_t i = 0; i < scene->objects.GetCount(); ++i)
 	{
 		const Entity ent = scene->objects.GetEntity(i);
-		const auto* name = scene->names.GetComponent(ent);
-		meshCombo.AddItem(name != nullptr ? name->name : std::to_string(ent), ent);
+		const NameComponent* name = scene->names.GetComponent(ent);
+		if (!scene->Entity_IsDescendant(ent, terrain->chunkGroupEntity))
+		{
+			meshCombo.AddItem(name != nullptr ? name->name : std::to_string(ent), ent);
+		}
 	}
 	AddWidget(&meshCombo);
 
@@ -351,9 +372,9 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	minCountPerChunkInput.Create("");
 	minCountPerChunkInput.SetDescription("Min count per chunk: ");
 	minCountPerChunkInput.SetSize(elementSize);
-	minCountPerChunkInput.SetValue(0);
+	minCountPerChunkInput.SetValue(prop->min_count_per_chunk);
 	minCountPerChunkInput.SetTooltip("A chunk will try to generate min this many props of this type");
-	minCountPerChunkInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	minCountPerChunkInput.OnInputAccepted([=](wi::gui::EventArgs args) {
 		prop->min_count_per_chunk = std::min(prop->max_count_per_chunk, args.iValue);
 		generation_callback();
 	});
@@ -362,9 +383,9 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	maxCountPerChunkInput.Create("");
 	maxCountPerChunkInput.SetDescription("Max count per chunk: ");
 	maxCountPerChunkInput.SetSize(elementSize);
-	maxCountPerChunkInput.SetValue(5);
+	maxCountPerChunkInput.SetValue(prop->max_count_per_chunk);
 	maxCountPerChunkInput.SetTooltip("A chunk will try to generate max this many props of this type");
-	maxCountPerChunkInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	maxCountPerChunkInput.OnInputAccepted([=](wi::gui::EventArgs args) {
 		prop->max_count_per_chunk = std::max(prop->min_count_per_chunk, args.iValue);
 		generation_callback();
 	});
@@ -385,6 +406,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 
 	regionPowerSlider.Create(0.0f, 1.0f, 1.0f, 1000, "Region power: ");
 	regionPowerSlider.SetSize(elementSize);
+	regionPowerSlider.SetValue(prop->region_power);
 	regionPowerSlider.SetTooltip("Region weight affection power factor");
 	regionPowerSlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->region_power = args.fValue;
@@ -394,6 +416,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 
 	noiseFrequencySlider.Create(0.0f, 1.0f, 1.0f, 1000, "Noise frequency: ");
 	noiseFrequencySlider.SetSize(elementSize);
+	noiseFrequencySlider.SetValue(prop->noise_frequency);
 	noiseFrequencySlider.SetTooltip("Perlin noise's frequency for placement factor");
 	noiseFrequencySlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->noise_frequency = args.fValue;
@@ -403,6 +426,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 
 	noisePowerSlider.Create(0.0f, 1.0f, 1.0f, 1000, "Noise pwer: ");
 	noisePowerSlider.SetSize(elementSize);
+	noisePowerSlider.SetValue(prop->noise_power);
 	noisePowerSlider.SetTooltip("Perlin noise's power");
 	noisePowerSlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->noise_power = args.fValue;
@@ -412,6 +436,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 
 	thresholdSlider.Create(0.0f, 1.0f, 0.5f, 1000, "Threshold: ");
 	thresholdSlider.SetSize(elementSize);
+	thresholdSlider.SetValue(prop->threshold);
 	thresholdSlider.SetTooltip("The chance of placement (higher is less chance)");
 	thresholdSlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->threshold = args.fValue;
@@ -419,8 +444,9 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	});
 	AddWidget(&thresholdSlider);
 
-	minSizeSlider.Create(0.0f, 1.0f, 1.0f, 1000, "Min size: ");
+	minSizeSlider.Create(0.0f, 10.0f, 1.0f, 1000, "Min size: ");
 	minSizeSlider.SetSize(elementSize);
+	minSizeSlider.SetValue(prop->min_size);
 	minSizeSlider.SetTooltip("Scaling randomization range min");
 	minSizeSlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->min_size = std::min(args.fValue, prop->max_size);
@@ -428,8 +454,9 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	});
 	AddWidget(&minSizeSlider);
 
-	maxSizeSlider.Create(0.0f, 1.0f, 1.0f, 1000, "Max size: ");
+	maxSizeSlider.Create(0.0f, 10.0f, 1.0f, 1000, "Max size: ");
 	maxSizeSlider.SetSize(elementSize);
+	maxSizeSlider.SetValue(prop->max_size);
 	maxSizeSlider.SetTooltip("Scaling randomization range max");
 	maxSizeSlider.OnSlide([=](wi::gui::EventArgs args) {
 		prop->max_size = std::max(args.fValue, prop->min_size);
@@ -440,7 +467,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	minYOffsetInput.Create("");
 	minYOffsetInput.SetDescription("Min vertical offset: ");
 	minYOffsetInput.SetSize(elementSize);
-	minYOffsetInput.SetValue(0);
+	minYOffsetInput.SetValue(prop->min_y_offset);
 	minYOffsetInput.SetTooltip("Minimal randomized offset on vertical axis");
 	minYOffsetInput.OnInputAccepted([=](wi::gui::EventArgs args) {
 		prop->min_y_offset = std::min(args.fValue, prop->max_y_offset);
@@ -451,7 +478,7 @@ PropWindow::PropWindow(wi::terrain::Prop* prop, wi::scene::Scene* scene)
 	maxYOffsetInput.Create("");
 	maxYOffsetInput.SetDescription("Max vertical offset: ");
 	maxYOffsetInput.SetSize(elementSize);
-	maxYOffsetInput.SetValue(0);
+	maxYOffsetInput.SetValue(prop->max_y_offset);
 	maxYOffsetInput.SetTooltip("Maximum randomized offset on vertical axis");
 	maxYOffsetInput.OnInputAccepted([=](wi::gui::EventArgs args) {
 		prop->max_y_offset = std::max(args.fValue, prop->min_y_offset);
@@ -528,7 +555,7 @@ void PropsWindow::Rebuild()
 	}
 
 	generation_callback = [&] {
-		terrain->Generation_Restart();
+		terrain->InvalidateProps();
 	};
 
 	for(auto i = terrain->props.begin(); i != terrain->props.end(); ++i)
@@ -539,7 +566,7 @@ void PropsWindow::Rebuild()
 
 void PropsWindow::AddWindow(wi::terrain::Prop& prop)
 {
-	PropWindow* wnd = new PropWindow(&prop, &editor->GetCurrentScene());
+	PropWindow* wnd = new PropWindow(terrain, &prop, &editor->GetCurrentScene());
 	wnd->generation_callback = generation_callback;
 	wnd->OnClose([&, wnd](wi::gui::EventArgs args) {
 		windows_to_remove.push_back(wnd);
@@ -646,7 +673,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 	RemoveWidgets();
 	ClearTransform();
 
-	wi::gui::Window::Create(ICON_TERRAIN " Terrain", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_TERRAIN " Terrain", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(420, 1000));
 
 	closeButton.SetTooltip("Delete Terrain.");
@@ -674,7 +701,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 		terrain->SetCenterToCamEnabled(centerToCamCheckBox.GetCheck());
 		terrain->SetRemovalEnabled(removalCheckBox.GetCheck());
 		terrain->SetGrassEnabled(grassCheckBox.GetCheck());
-		terrain->lod_multiplier = lodSlider.GetValue();
+		terrain->lod_bias = lodSlider.GetValue();
 		terrain->generation = (int)generationSlider.GetValue();
 		terrain->prop_generation = (int)propGenerationSlider.GetValue();
 		terrain->physics_generation = (int)physicsGenerationSlider.GetValue();
@@ -744,7 +771,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 		});
 	AddWidget(&tessellationCheckBox);
 
-	lodSlider.Create(0.0001f, 0.01f, 0.005f, 10000, "Mesh LOD Distance: ");
+	lodSlider.Create(-8, 8, 0, 100, "Chunk LOD Bias: ");
 	lodSlider.SetTooltip("Set the LOD (Level Of Detail) distance multiplier.\nLow values increase LOD detail in distance");
 	lodSlider.SetSize(XMFLOAT2(wid, hei));
 	lodSlider.SetPos(XMFLOAT2(x, y += step));
@@ -757,11 +784,11 @@ void TerrainWindow::Create(EditorComponent* _editor)
 				ObjectComponent* object = terrain->scene->objects.GetComponent(chunk_data.entity);
 				if (object != nullptr)
 				{
-					object->lod_distance_multiplier = args.fValue;
+					object->lod_bias = args.fValue;
 				}
 			}
 		}
-		terrain->lod_multiplier = args.fValue;
+		terrain->lod_bias = args.fValue;
 		});
 	AddWidget(&lodSlider);
 
@@ -1350,7 +1377,7 @@ void TerrainWindow::SetEntity(Entity entity)
 	grassCheckBox.SetCheck(terrain->IsGrassEnabled());
 	physicsCheckBox.SetCheck(terrain->IsPhysicsEnabled());
 	tessellationCheckBox.SetCheck(terrain->IsTessellationEnabled());
-	lodSlider.SetValue(terrain->lod_multiplier);
+	lodSlider.SetValue(terrain->lod_bias);
 	generationSlider.SetValue((float)terrain->generation);
 	propGenerationSlider.SetValue((float)terrain->prop_generation);
 	physicsGenerationSlider.SetValue((float)terrain->physics_generation);
@@ -1742,7 +1769,6 @@ void TerrainWindow::SetupAssets()
 		{
 			terrain_preset.grassEntity = grassScene.hairs.GetEntity(0);
 			currentScene.Merge(grassScene);
-			currentScene.Component_Attach(terrain_preset.grassEntity, entity);
 		}
 	}
 	else

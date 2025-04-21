@@ -8,7 +8,7 @@ using namespace wi::scene;
 void LightWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
-	wi::gui::Window::Create(ICON_POINTLIGHT " Light", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_POINTLIGHT " Light", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(650, 940));
 
 	closeButton.SetTooltip("Delete LightComponent");
@@ -248,7 +248,7 @@ void LightWindow::Create(EditorComponent* _editor)
 		}
 	});
 	staticCheckBox.SetEnabled(false);
-	staticCheckBox.SetTooltip("Static lights will only be used for baking into lightmaps.");
+	staticCheckBox.SetTooltip("Static lights will only be used for baking into lightmaps, DDGI and Surfel GI.");
 	AddWidget(&staticCheckBox);
 
 	volumetricCloudsCheckBox.Create("Volumetric Clouds: ");
@@ -319,7 +319,12 @@ void LightWindow::Create(EditorComponent* _editor)
 	shadowResolutionComboBox.SetSelected(0);
 	AddWidget(&shadowResolutionComboBox);
 
-	y += step * 0.5f;
+
+	tipLabel.Create("TipLabel");
+	tipLabel.SetText("Tip: you can add a material to this entity, and the base color texture of it will be used to tint the light color.");
+	tipLabel.SetPos(XMFLOAT2(mod_x, y += step));
+	tipLabel.SetSize(XMFLOAT2(100, 50));
+	AddWidget(&tipLabel);
 
 	lensflare_Label.Create("Lens flare textures: ");
 	lensflare_Label.SetPos(XMFLOAT2(mod_x, y += step));
@@ -587,6 +592,10 @@ void LightWindow::ResizeLayout()
 		}
 		add_fullwidth(addCascadeButton);
 	}
+
+	y += jump;
+
+	add_fullwidth(tipLabel);
 
 	y += jump;
 

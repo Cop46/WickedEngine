@@ -4,6 +4,7 @@
 #include "wiGraphicsDevice.h"
 #include "wiResourceManager.h"
 #include "wiScene.h"
+#include "wiUnorderedMap.h"
 
 namespace wi
 {
@@ -57,6 +58,7 @@ namespace wi
 		float reflectionRoughnessCutoff = 0.6f;
 		float ssgiDepthRejection = 8;
 		wi::renderer::Tonemap tonemap = wi::renderer::Tonemap::ACES;
+		float hdr_calibration = 1;
 
 		AO ao = AO_DISABLED;
 		bool fxaaEnabled = false;
@@ -84,6 +86,9 @@ namespace wi
 		bool fsr2Enabled = false;
 
 		mutable bool first_frame = true;
+		mutable bool prerender_happened = false;
+
+		void RenderCameraComponents(wi::jobsystem::context& ctx) const;
 
 	public:
 		wi::graphics::Texture rtMain;
@@ -106,7 +111,7 @@ namespace wi
 		wi::graphics::Texture rtBloom_tmp; // temporary for bloom downsampling
 		wi::graphics::Texture rtAO; // full res AO
 		wi::graphics::Texture rtShadow; // raytraced shadows mask
-		wi::graphics::Texture rtSun[2]; // 0: sun render target used for lightshafts (can be MSAA), 1: radial blurred lightshafts
+		wi::graphics::Texture rtSun[3]; // 0: sun render target used for lightshafts (can be MSAA), 1: radial blurred lightshafts
 		wi::graphics::Texture rtSun_resolved; // sun render target, but the resolved version if MSAA is enabled
 		wi::graphics::Texture rtGUIBlurredBackground[3];	// downsampled, gaussian blurred scene for GUI
 		wi::graphics::Texture rtShadingRate; // UINT8 shading rate per tile
@@ -215,6 +220,7 @@ namespace wi
 		const wi::graphics::Texture* GetGUIBlurredBackground() const override { return &rtGUIBlurredBackground[2]; }
 
 		constexpr float getExposure() const { return exposure; }
+		constexpr float getHDRCalibration() const { return hdr_calibration; }
 		constexpr float getBrightness() const { return brightness; }
 		constexpr float getContrast() const { return contrast; }
 		constexpr float getSaturation() const { return saturation; }
@@ -270,6 +276,7 @@ namespace wi
 		constexpr bool getVisibilityComputeShadingEnabled() const { return visibility_shading_in_compute; }
 
 		constexpr void setExposure(float value) { exposure = value; }
+		constexpr void setHDRCalibration(float value) { hdr_calibration = value; }
 		constexpr void setBrightness(float value) { brightness = value; }
 		constexpr void setContrast(float value) { contrast = value; }
 		constexpr void setSaturation(float value) { saturation = value; }
@@ -340,6 +347,7 @@ namespace wi
 
 		void PreUpdate() override;
 		void Update(float dt) override;
+		void PreRender() override;
 		void Render() const override;
 		void Compose(wi::graphics::CommandList cmd) const override;
 

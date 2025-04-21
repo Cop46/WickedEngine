@@ -162,6 +162,21 @@ void GraphicsWindow::Create(EditorComponent* _editor)
 	AddWidget(&meshletOcclusionCullingCheckBox);
 	meshletOcclusionCullingCheckBox.SetEnabled(wi::graphics::GetDevice()->CheckCapability(wi::graphics::GraphicsDeviceCapability::MESH_SHADER));
 
+	shadowLODCheckBox.Create("Shadow LOD override: ");
+	shadowLODCheckBox.SetTooltip("Enable custom LOD selection for shadow maps.\nThis can cause LOD mismatch between objects in the camera and shadows, but can be a performance benefit.");
+	shadowLODCheckBox.SetPos(XMFLOAT2(x, y += step));
+	shadowLODCheckBox.SetSize(XMFLOAT2(itemheight, itemheight));
+	if (editor->main->config.GetSection("graphics").Has("shadow_lod_override"))
+	{
+		wi::renderer::SetShadowLODOverrideEnabled(editor->main->config.GetSection("graphics").GetBool("shadow_lod_override"));
+	}
+	shadowLODCheckBox.OnClick([=](wi::gui::EventArgs args) {
+		wi::renderer::SetShadowLODOverrideEnabled(args.bValue);
+		editor->main->config.GetSection("graphics").Set("shadow_lod_override", args.bValue);
+		editor->main->config.Commit();
+		});
+	AddWidget(&shadowLODCheckBox);
+
 	GIBoostSlider.Create(1, 10, 1.0f, 1000.0f, "GI Boost: ");
 	GIBoostSlider.SetTooltip("Adjust the strength of GI.\nNote that values other than 1.0 will cause mismatch with path tracing reference!");
 	GIBoostSlider.SetSize(XMFLOAT2(wid, itemheight));
@@ -696,11 +711,24 @@ void GraphicsWindow::Create(EditorComponent* _editor)
 	wid = 140;
 	float mod_wid = 60;
 
+	hdrcalibrationSlider.Create(0, 8, 1, 100, "HDR calibration: ");
+	hdrcalibrationSlider.SetTooltip("Set multiplier for HDR output, this only takes effect when swapchain output format is non-SRGB");
+	hdrcalibrationSlider.OnSlide([=](wi::gui::EventArgs args) {
+		editor->renderPath->setHDRCalibration(args.fValue);
+		editor->main->config.GetSection("graphics").Set("hdr_calibration", args.fValue);
+		editor->main->config.Commit();
+		});
+	if (editor->main->config.GetSection("graphics").Has("hdr_calibration"))
+	{
+		editor->renderPath->setHDRCalibration(editor->main->config.GetSection("graphics").GetFloat("hdr_calibration"));
+	}
+	AddWidget(&hdrcalibrationSlider);
+
 	tonemapCombo.Create("Tonemap: ");
 	tonemapCombo.SetTooltip("Choose tone mapping type");
 	tonemapCombo.SetScriptTip("RenderPath3D::SetTonemap(Tonemap value)");
-	tonemapCombo.AddItem("Reinhard");
-	tonemapCombo.AddItem("ACES");
+	tonemapCombo.AddItem("Reinhard", (uint64_t)wi::renderer::Tonemap::Reinhard);
+	tonemapCombo.AddItem("ACES", (uint64_t)wi::renderer::Tonemap::ACES);
 	tonemapCombo.OnSelect([=](wi::gui::EventArgs args) {
 		editor->renderPath->setTonemap((wi::renderer::Tonemap)args.iValue);
 		editor->main->config.GetSection("graphics").Set("tonemap", args.iValue);
@@ -812,6 +840,53 @@ void GraphicsWindow::Create(EditorComponent* _editor)
 		editor->main->config.Commit();
 		});
 	AddWidget(&lightShaftsStrengthStrengthSlider);
+
+	capsuleshadowCheckbox.Create("Capsule Shadows: ");
+	capsuleshadowCheckbox.SetTooltip("Enable ambient occlusion capsule shadows.");
+	capsuleshadowCheckbox.SetSize(XMFLOAT2(hei, hei));
+	capsuleshadowCheckbox.SetPos(XMFLOAT2(x, y += step));
+	if (editor->main->config.GetSection("graphics").Has("capsule_shadows"))
+	{
+		wi::renderer::SetCapsuleShadowEnabled(editor->main->config.GetSection("graphics").GetBool("capsule_shadows"));
+	}
+	capsuleshadowCheckbox.OnClick([=](wi::gui::EventArgs args) {
+		wi::renderer::SetCapsuleShadowEnabled(args.bValue);
+		editor->main->config.GetSection("graphics").Set("capsule_shadows", args.bValue);
+		editor->main->config.Commit();
+	});
+	AddWidget(&capsuleshadowCheckbox);
+
+	capsuleshadowFadeSlider.Create(0, 1, 0.2f, 100, "CapsuleShadow.Fade: ");
+	capsuleshadowFadeSlider.SetText("Capsule Shadow Fade: ");
+	capsuleshadowFadeSlider.SetTooltip("Set capsule shadow fading.");
+	capsuleshadowFadeSlider.SetSize(XMFLOAT2(mod_wid, hei));
+	capsuleshadowFadeSlider.SetPos(XMFLOAT2(x + 100, y));
+	if (editor->main->config.GetSection("graphics").Has("capsule_shadow_fade"))
+	{
+		wi::renderer::SetCapsuleShadowFade(editor->main->config.GetSection("graphics").GetFloat("capsule_shadow_fade"));
+	}
+	capsuleshadowFadeSlider.OnSlide([=](wi::gui::EventArgs args) {
+		wi::renderer::SetCapsuleShadowFade(args.fValue);
+		editor->main->config.GetSection("graphics").Set("capsule_shadow_fade", args.fValue);
+		editor->main->config.Commit();
+	});
+	AddWidget(&capsuleshadowFadeSlider);
+
+	capsuleshadowAngleSlider.Create(0, 90, 45, 90, "CapsuleShadow.Angle: ");
+	capsuleshadowAngleSlider.SetText("Angle: ");
+	capsuleshadowAngleSlider.SetTooltip("Set capsule shadow spread angle.");
+	capsuleshadowAngleSlider.SetSize(XMFLOAT2(mod_wid, hei));
+	capsuleshadowAngleSlider.SetPos(XMFLOAT2(x + 100, y));
+	if (editor->main->config.GetSection("graphics").Has("capsule_shadow_angle"))
+	{
+		wi::renderer::SetCapsuleShadowAngle(wi::math::DegreesToRadians(editor->main->config.GetSection("graphics").GetFloat("capsule_shadow_angle")));
+	}
+	capsuleshadowAngleSlider.OnSlide([=](wi::gui::EventArgs args) {
+		wi::renderer::SetCapsuleShadowAngle(wi::math::DegreesToRadians(args.fValue));
+		editor->main->config.GetSection("graphics").Set("capsule_shadow_angle", args.fValue);
+		editor->main->config.Commit();
+	});
+	AddWidget(&capsuleshadowAngleSlider);
 
 	aoComboBox.Create("AO: ");
 	aoComboBox.SetTooltip("Choose Ambient Occlusion type. RTAO is only available if hardware supports ray tracing");
@@ -1528,15 +1603,17 @@ void GraphicsWindow::Update()
 	ddgiY.SetValue(std::to_string(scene.ddgi.grid_dimensions.y));
 	ddgiZ.SetValue(std::to_string(scene.ddgi.grid_dimensions.z));
 
+	hdrcalibrationSlider.SetValue(editor->renderPath->getHDRCalibration());
 	occlusionCullingCheckBox.SetCheck(wi::renderer::GetOcclusionCullingEnabled());
 	GIBoostSlider.SetValue(wi::renderer::GetGIBoost());
 	visibilityComputeShadingCheckBox.SetCheck(editor->renderPath->getVisibilityComputeShadingEnabled());
 	meshShaderCheckBox.SetCheck(wi::renderer::IsMeshShaderAllowed());
 	meshletOcclusionCullingCheckBox.SetCheck(wi::renderer::IsMeshletOcclusionCullingEnabled());
+	shadowLODCheckBox.SetCheck(wi::renderer::IsShadowLODOverrideEnabled());
 	resolutionScaleSlider.SetValue(editor->resolutionScale);
 	streamingSlider.SetValue(wi::resourcemanager::GetStreamingMemoryThreshold());
 	MSAAComboBox.SetSelectedByUserdataWithoutCallback(editor->renderPath->getMSAASampleCount());
-	tonemapCombo.SetSelectedByUserdataWithoutCallback((int)editor->renderPath->getTonemap());
+	tonemapCombo.SetSelectedByUserdataWithoutCallback((uint64_t)editor->renderPath->getTonemap());
 	exposureSlider.SetValue(editor->renderPath->getExposure());
 	brightnessSlider.SetValue(editor->renderPath->getBrightness());
 	contrastSlider.SetValue(editor->renderPath->getContrast());
@@ -1544,6 +1621,9 @@ void GraphicsWindow::Update()
 	lensFlareCheckBox.SetCheck(editor->renderPath->getLensFlareEnabled());
 	lightShaftsCheckBox.SetCheck(editor->renderPath->getLightShaftsEnabled());
 	lightShaftsStrengthStrengthSlider.SetValue(editor->renderPath->getLightShaftsStrength());
+	capsuleshadowCheckbox.SetCheck(wi::renderer::IsCapsuleShadowEnabled());
+	capsuleshadowAngleSlider.SetValue(wi::math::RadiansToDegrees(wi::renderer::GetCapsuleShadowAngle()));
+	capsuleshadowFadeSlider.SetValue(wi::renderer::GetCapsuleShadowFade());
 	aoComboBox.SetSelectedWithoutCallback(editor->renderPath->getAO());
 	aoPowerSlider.SetValue((float)editor->renderPath->getAOPower());
 
@@ -1674,6 +1754,7 @@ void GraphicsWindow::ResizeLayout()
 
 	add_right(vsyncCheckBox);
 	add(swapchainComboBox);
+	add(hdrcalibrationSlider);
 	add(renderPathComboBox);
 	add(resolutionScaleSlider);
 	add(streamingSlider);
@@ -1697,6 +1778,7 @@ void GraphicsWindow::ResizeLayout()
 		visibilityComputeShadingCheckBox.SetVisible(false);
 		meshShaderCheckBox.SetVisible(false);
 		meshletOcclusionCullingCheckBox.SetVisible(false);
+		shadowLODCheckBox.SetVisible(false);
 		tessellationCheckBox.SetVisible(false);
 	}
 	else
@@ -1715,6 +1797,7 @@ void GraphicsWindow::ResizeLayout()
 		visibilityComputeShadingCheckBox.SetVisible(true);
 		meshShaderCheckBox.SetVisible(true);
 		meshletOcclusionCullingCheckBox.SetVisible(true);
+		shadowLODCheckBox.SetVisible(true);
 		tessellationCheckBox.SetVisible(true);
 
 		add(shadowTypeComboBox);
@@ -1731,6 +1814,7 @@ void GraphicsWindow::ResizeLayout()
 		add_right(visibilityComputeShadingCheckBox);
 		add_right(meshShaderCheckBox);
 		add_right(meshletOcclusionCullingCheckBox);
+		add_right(shadowLODCheckBox);
 		add_right(tessellationCheckBox);
 	}
 
@@ -1830,6 +1914,9 @@ void GraphicsWindow::ResizeLayout()
 	add_right(lensFlareCheckBox);
 	add_right(lightShaftsStrengthStrengthSlider);
 	lightShaftsCheckBox.SetPos(XMFLOAT2(lightShaftsStrengthStrengthSlider.GetPos().x - lightShaftsCheckBox.GetSize().x - 80, lightShaftsStrengthStrengthSlider.GetPos().y));
+	add_right(capsuleshadowAngleSlider);
+	add_right(capsuleshadowFadeSlider);
+	capsuleshadowCheckbox.SetPos(XMFLOAT2(capsuleshadowAngleSlider.GetPos().x - capsuleshadowCheckbox.GetSize().x - 80, capsuleshadowAngleSlider.GetPos().y));
 	add(aoComboBox);
 	add(aoPowerSlider);
 	add(aoRangeSlider);

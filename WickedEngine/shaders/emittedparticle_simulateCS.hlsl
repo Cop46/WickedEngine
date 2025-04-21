@@ -10,13 +10,15 @@ static const float3 BILLBOARD[] = {
 	float3(1, 1, 0),	// 4
 };
 
+Texture1D<float> opacityCurveTex : register(t0);
+
 RWStructuredBuffer<Particle> particleBuffer : register(u0);
 RWStructuredBuffer<uint> aliveBuffer_CURRENT : register(u1);
 RWStructuredBuffer<uint> aliveBuffer_NEW : register(u2);
 RWStructuredBuffer<uint> deadBuffer : register(u3);
 RWByteAddressBuffer counterBuffer : register(u4);
 RWStructuredBuffer<float> distanceBuffer : register(u6);
-RWByteAddressBuffer vertexBuffer_POS : register(u7);
+RWBuffer<float4> vertexBuffer_POS : register(u7);
 RWBuffer<float4> vertexBuffer_NOR : register(u8);
 RWBuffer<float4> vertexBuffer_UVS : register(u9);
 RWBuffer<float4> vertexBuffer_COL : register(u10);
@@ -41,8 +43,11 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 	Particle particle = particleBuffer[particleIndex];
 	uint v0 = particleIndex * 4;
 
+	particle.life -= dt;
+
 	const float lifeLerp = 1 - particle.life / particle.maxLife;
 	const float particleSize = lerp(particle.sizeBeginEnd.x, particle.sizeBeginEnd.y, lifeLerp);
+	const float lifeOpa = opacityCurveTex.SampleLevel(sampler_linear_clamp, lifeLerp, 0);
 
 	// integrate:
 	particle.force += xParticleGravity;
@@ -60,7 +65,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 	[branch]
 	if ((xEmitterOptions & EMITTER_OPTION_BIT_USE_RAIN_BLOCKER) && GetFrame().texture_shadowatlas_index >= 0 && any(GetFrame().rain_blocker_mad_prev))
 	{
-		Texture2D texture_shadowatlas = bindless_textures[GetFrame().texture_shadowatlas_index];
+		Texture2D texture_shadowatlas = bindless_textures[descriptor_index(GetFrame().texture_shadowatlas_index)];
 		float3 shadow_pos = mul(GetFrame().rain_blocker_matrix_prev, float4(particle.position, 1)).xyz;
 		float3 shadow_uv = clipspace_to_uv(shadow_pos);
 		if (is_saturated(shadow_uv))
@@ -258,7 +263,9 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 
 		}
 
-		particle.life -= dt;
+		float2 rotation_rotationVel = unpack_half2(particle.rotation_rotationVelocity);
+		rotation_rotationVel.x += rotation_rotationVel.y * dt;
+		particle.rotation_rotationVelocity = pack_half2(rotation_rotationVel);
 
 		// write back simulated particle:
 		particleBuffer[particleIndex] = particle;
@@ -271,23 +278,23 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 		// Write out render buffers:
 		//	These must be persistent, not culled (raytracing, surfels...)
 
-		float opacity = saturate(lerp(1, 0, lifeLerp) * EmitterGetMaterial().GetBaseColor().a);
+		float opacity = saturate(lifeOpa * EmitterGetMaterial().GetBaseColor().a);
 		float4 particleColor = unpack_rgba(particle.color);
 		particleColor.a *= opacity;
-
-		float rotation = lifeLerp * particle.rotationalVelocity;
+		
+		float rotation = rotation_rotationVel.x;
 		float2x2 rot = float2x2(
 			cos(rotation), -sin(rotation),
 			sin(rotation), cos(rotation)
 			);
 
 		// Sprite sheet frame:
-		const float spriteframe = xEmitterFrameRate == 0 ?
+		const bool anim_over_lifetime = xEmitterFrameRate == 0;
+		const float spriteframe = anim_over_lifetime ?
 			lerp(xEmitterFrameStart, xEmitterFrameCount, lifeLerp) :
-			((xEmitterFrameStart + particle.life * xEmitterFrameRate) % xEmitterFrameCount);
+			((xEmitterFrameStart + (particle.maxLife - particle.life) * xEmitterFrameRate) % xEmitterFrameCount);
 		const uint currentFrame = floor(spriteframe);
-		const uint nextFrame = ceil(spriteframe);
-		const float frameBlend = frac(spriteframe);
+		const uint nextFrame = anim_over_lifetime ? min(ceil(spriteframe), xEmitterFrameCount - 1) : (uint(ceil(spriteframe)) % xEmitterFrameCount); // anim_over_lifetime doesn't wrap around
 		uint2 offset = uint2(currentFrame % xEmitterFramesXY.x, currentFrame / xEmitterFramesXY.x);
 		uint2 offset2 = uint2(nextFrame % xEmitterFramesXY.x, nextFrame / xEmitterFramesXY.x);
 
@@ -318,11 +325,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 			quadPos = mul(quadPos, (float3x3)GetCamera().view); // reversed mul for inverse camera rotation!
 
 			// write out vertex:
-#ifdef __PSSL__
-			vertexBuffer_POS.TypedStore<float3>((v0 + vertexID) * sizeof(float3), particle.position + quadPos);
-#else
-			vertexBuffer_POS.Store<float3>((v0 + vertexID) * sizeof(float3), particle.position + quadPos);
-#endif // __PSSL__
+			vertexBuffer_POS[v0 + vertexID] = float4(particle.position + quadPos, 0);
 			vertexBuffer_NOR[v0 + vertexID] = float4(normalize(-GetCamera().forward), 0);
 			vertexBuffer_UVS[v0 + vertexID] = float4(uv, uv2);
 			vertexBuffer_COL[v0 + vertexID] = particleColor;
@@ -357,16 +360,9 @@ void main(uint3 DTid : SV_DispatchThreadID, uint Gid : SV_GroupIndex)
 		counterBuffer.InterlockedAdd(PARTICLECOUNTER_OFFSET_DEADCOUNT, 1, deadIndex);
 		deadBuffer[deadIndex] = particleIndex;
 		
-#ifdef __PSSL__
-		vertexBuffer_POS.TypedStore<float3>((v0 + 0) * sizeof(float3), 0);
-		vertexBuffer_POS.TypedStore<float3>((v0 + 1) * sizeof(float3), 0);
-		vertexBuffer_POS.TypedStore<float3>((v0 + 2) * sizeof(float3), 0);
-		vertexBuffer_POS.TypedStore<float3>((v0 + 3) * sizeof(float3), 0);
-#else
-		vertexBuffer_POS.Store<float3>((v0 + 0) * sizeof(float3), 0);
-		vertexBuffer_POS.Store<float3>((v0 + 1) * sizeof(float3), 0);
-		vertexBuffer_POS.Store<float3>((v0 + 2) * sizeof(float3), 0);
-		vertexBuffer_POS.Store<float3>((v0 + 3) * sizeof(float3), 0);
-#endif // __PSSL__
+		vertexBuffer_POS[v0 + 0] = 0;
+		vertexBuffer_POS[v0 + 1] = 0;
+		vertexBuffer_POS[v0 + 2] = 0;
+		vertexBuffer_POS[v0 + 3] = 0;
 	}
 }

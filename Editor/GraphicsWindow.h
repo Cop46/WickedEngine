@@ -10,6 +10,7 @@ public:
 
 	wi::gui::CheckBox vsyncCheckBox;
 	wi::gui::ComboBox swapchainComboBox;
+	wi::gui::Slider hdrcalibrationSlider;
 	wi::gui::ComboBox renderPathComboBox;
 	wi::gui::Slider pathTraceTargetSlider;
 	wi::gui::Label pathTraceStatisticsLabel;
@@ -17,6 +18,7 @@ public:
 	wi::gui::CheckBox visibilityComputeShadingCheckBox;
 	wi::gui::CheckBox meshShaderCheckBox;
 	wi::gui::CheckBox meshletOcclusionCullingCheckBox;
+	wi::gui::CheckBox shadowLODCheckBox;
 	wi::gui::Slider resolutionScaleSlider;
 	wi::gui::Slider streamingSlider;
 	wi::gui::Slider GIBoostSlider;
@@ -55,6 +57,9 @@ public:
 	wi::gui::CheckBox lensFlareCheckBox;
 	wi::gui::CheckBox lightShaftsCheckBox;
 	wi::gui::Slider lightShaftsStrengthStrengthSlider;
+	wi::gui::CheckBox capsuleshadowCheckbox;
+	wi::gui::Slider capsuleshadowFadeSlider;
+	wi::gui::Slider capsuleshadowAngleSlider;
 	wi::gui::ComboBox aoComboBox;
 	wi::gui::Slider aoPowerSlider;
 	wi::gui::Slider aoRangeSlider;

@@ -23,7 +23,6 @@ HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 Editor editor;
-bool window_recreating = false;
 
 // Forward declarations of functions included in this code module:
 ATOM                MyRegisterClass(HINSTANCE hInstance);
@@ -72,6 +71,8 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
 		}
 	}
+
+	wi::jobsystem::ShutDown();
 
     return (int) msg.wParam;
 }
@@ -300,13 +301,26 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 		}
 		break;
     case WM_DESTROY:
-		if (window_recreating)
-			window_recreating = false;
-		else
-			PostQuitMessage(0);
+		PostQuitMessage(0);
         break;
 	case WM_SETCURSOR:
-		// cursor is handled by wi::input, if this is passed through here, it can cause cursor flickering
+		switch (LOWORD(lParam))
+		{
+		case HTBOTTOM:
+		case HTBOTTOMLEFT:
+		case HTBOTTOMRIGHT:
+		case HTLEFT:
+		case HTRIGHT:
+		case HTTOP:
+		case HTTOPLEFT:
+		case HTTOPRIGHT:
+			// allow the system to handle these window resize cursors:
+			return DefWindowProc(hWnd, message, wParam, lParam);
+		default:
+			// notify the engine at other cursor changes to set its own cursor instead
+			wi::input::NotifyCursorChanged();
+			break;
+		}
 		break;
     default:
         return DefWindowProc(hWnd, message, wParam, lParam);

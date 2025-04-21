@@ -7,7 +7,8 @@
 [![Forum](https://img.shields.io/badge/forum-join-blue)](https://wickedengine.net/forum/)
 <a href="https://twitter.com/intent/follow?screen_name=turanszkij"><img src="https://img.shields.io/twitter/follow/turanszkij.svg?style=social" alt="follow on Twitter"></a>
 <br/>
-[![Steam](https://img.shields.io/badge/-Steam-383838.svg?style=for-the-badge&logo=steam)](https://store.steampowered.com/app/1967460/Wicked_Engine/)
+[![Steam](https://img.shields.io/badge/Steam-%23000000.svg?logo=steam&logoColor=white)](https://store.steampowered.com/app/1967460/Wicked_Engine/)
+[![Itch.io](https://img.shields.io/badge/itch.io-%23FF0B34.svg?logo=Itch.io&logoColor=white)](https://turanszkij.itch.io/wicked-engine)
 
 
 <br/>
@@ -17,10 +18,10 @@ Wicked Engine is an open-source 3D engine with modern graphics. Use this as a C+
 - [Website](https://wickedengine.net/)<br/>
 - [Forum](https://wickedengine.net/forum/)<br/>
 - [Features](features.txt)<br/>
-- [Videos](https://www.youtube.com/playlist?list=PLLN-1FTGyLU_HJoC5zx6hJkB3D2XLiaxS)<br/>
-- [Editor Documentation](https://wickedengine.net/wp-content/uploads/2024/09/Wicked-Engine-Editor-Documentation.pdf)<br/>
+- [Editor Manual](Content/Documentation/WickedEditor-Manual.pdf)<br/>
 - [C++ Documentation](Content/Documentation/WickedEngine-Documentation.md)<br/>
 - [Lua Documentation](Content/Documentation/ScriptingAPI-Documentation.md)<br/>
+- [Videos](https://www.youtube.com/playlist?list=PLLN-1FTGyLU_HJoC5zx6hJkB3D2XLiaxS)<br/>
 
 You can get the full source code by using Git version control and cloning https://github.com/turanszkij/WickedEngine.git, or downloading it as zip. You can also download nightly packaged builds of the Editor here (requires Github sign in): [![Github Build Status](https://github.com/turanszkij/WickedEngine/workflows/Build/badge.svg)](https://github.com/turanszkij/WickedEngine/actions)
 <br/>
@@ -37,7 +38,7 @@ You can get the full source code by using Git version control and cloning https:
 ### How to build: 
 
 #### Windows
-To build Wicked Engine for Windows (10 or later), use the latest version of Visual Studio and the provided `WickedEngine.sln` solution file. By simply pressing F5, the Editor application will be built. There are other example projects that you can build as well within the solution.
+To build Wicked Engine for Windows 10 or later, use the latest version of Visual Studio and the provided `WickedEngine.sln` solution file. By simply pressing F5, Wicked Engine and the Editor application will be built and then start. There are other example projects that you can build as well within the solution.
 
 <img align="right" src="https://github.com/turanszkij/wickedengine-gifs/raw/main/fighting_game.gif" width="320px"/>
 
@@ -72,10 +73,10 @@ You can also download prebuilt and packaged versions of the Editor and Tests her
 If you have questions or stuck, please use the `linux` communication channel on Discord: [![Discord chat](https://img.shields.io/discord/602811659224088577?logo=discord)](https://discord.gg/CFjRYmE)
 
 #### Xbox Series X|S
-To build for Xbox Series natively, download and install the Xbox SDK from your Xbox developer account. Using the latest version of Visual Studio, create a new static library project for the Xbox Series platform and reference the WickedEngine_SOURCE shared project. Xbox specific extension files required for building, or sample projects will be provided for registered Xbox developers on request.
+Xbox Series specific extension files required for building are currently private.
 
 #### PlayStation 5
-To build for PlayStation 5, download and install the PlayStation 5 SDK from your PlayStation developer account. Using the latest Visual Studio, create a new PlayStation 5 static library project and reference the WickedEngine_SOURCE shared project. PlayStation 5 specific extension files requierd for building, or sample projects will be provided for registered PlayStation developers on request.
+PlayStation 5 specific extension files required for building are currently private.
 
 
 ### Examples:
@@ -104,10 +105,8 @@ while(true) {
 ```cpp
 application.Initialize(); // application will start initializing at this point (asynchronously). If you start calling engine functionality immediately before application.Run() gets called, then you must first initialize the application yourself.
 
-wi::initializer::InitializeComponentsImmediate(); // (Optional) allows to initialize all components immediately and block the application until finished. Otherwise the initialization will take place at the first application.Run() asynchronously. This is useful if you want to start using other parts of the engine before application.Run() is called.
-
 wi::RenderPath3D myGame; // Declare a game screen component, aka "RenderPath" (you could also override its Update(), Render() etc. functions). 
-application.ActivatePath(&myGame); // Register your game to the application. It will call Start(), Update(), Render(), etc. from now on...
+application.ActivatePath(&myGame); // Register your game to the application. It will call Start() once, then Update(), Render(), etc. from now on every frame...
 
 wi::scene::LoadModel("myModel.wiscene"); // Simply load a model into the current global scene
 wi::scene::GetScene(); // Get the current global scene
@@ -119,7 +118,7 @@ wi::scene::GetScene().Merge(scene2); // Combine separate scene with global scene
 myGame.setFXAAEnabled(true); // You can enable post process effects this way...
 
 wi::RenderPath2D myMenuScreen; // This is an other render path, but now a simple 2D one. It can only render 2D graphics by default (like a menu for example)
-application.ActivatePath(&myMenuScreen); // activate the menu, the previous path (myGame) will be stopped
+application.ActivatePath(&myMenuScreen, 0.8f); // activate the menu after a 0.8 second fade out, the previous path (myGame) will be stopped
 
 wi::Sprite mySprite("image.png"); // There are many utilities, such as a "sprite" helper class
 myMenuScreen.AddSprite(&mySprite); // The 2D render path is ready to handle sprite and font rendering for you
@@ -198,9 +197,10 @@ The native model format is the <b>WISCENE</b> format. Any application using Wick
 
 In addition, the Editor supports importing some common model formats: 
 - <b>OBJ</b>
-- <b>GLTF 2.0</b>
-- <b>VRM</b>
 - <b>FBX</b>
+- <b>GLTF</b>
+- <b>GLB</b>
+- <b>VRM</b>
 
 The preferred workflow is to import models into the Editor, and save them as <b>WISCENE</b>, then any Wicked Engine application can open them.<br/>
 
@@ -248,6 +248,8 @@ You can specify command line arguments (without any prefix) to switch between re
 - <a href="https://www.game-guru.com/max">Game Guru MAX</a>: Easy to use game creator software
 - <a href="https://www.youtube.com/watch?v=0SxXmnSQ6Q4">Flytrap</a>: Demoscene production by qop
 - <a href="https://youtu.be/mbmNU5QVM8A?si=9sDMS1LrMsz03f5r">doddering</a>: Demoscene production by qop
+- <a href="https://turanszkij.itch.io/wicked-shooter">Wicked Shooter</a>: FPS sample game in Wicked Engine
+- <a href="https://turanszkij.itch.io/grass-zen">Grass Zen</a>: A relaxing game made with Wicked Engine where you control the wind
 - Your project: add your project to this readme and open a pull request
 
 <br/>
@@ -261,7 +263,7 @@ If you are having trouble getting the applications to run, make sure that you sa
 
 - If you experience crashes, you can try these to find out the problem:
 	- make sure your environment is up to date, with latest graphics drivers and operating system updates.
-	- see if there is a wiBackLog.txt in your user temp folder (for example: C:\Users\username\AppData\Local\Temp)
+	- see if there is a log.txt in the working directory of the application (most likely near the application exe)
 	- request help on the [Forum](https://wickedengine.net/forum/), [Discord](https://discord.gg/CFjRYmE) or [Github issue](https://github.com/turanszkij/WickedEngine/issues)
 	- build the engine in Debug mode and try to run it, see where it crashes
 	- run the engine with the `debugdevice` command argument and post the text from your console output window when the crash happens

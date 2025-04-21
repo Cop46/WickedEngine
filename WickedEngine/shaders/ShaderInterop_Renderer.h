@@ -39,14 +39,11 @@ struct alignas(16) ShaderScene
 		uint3 grid_dimensions;
 		uint probe_count;
 
-		uint2 color_texture_resolution;
-		float2 color_texture_resolution_rcp;
-
 		uint2 depth_texture_resolution;
 		float2 depth_texture_resolution_rcp;
 
 		float3 grid_min;
-		int color_texture;
+		int probe_buffer;
 
 		float3 grid_extents;
 		int depth_texture;
@@ -55,7 +52,7 @@ struct alignas(16) ShaderScene
 		float max_distance;
 
 		float3 grid_extents_rcp;
-		int offset_texture;
+		float padding;
 
 		float3 cell_size_rcp;
 		float smooth_backface;
@@ -81,6 +78,7 @@ enum SHADERMATERIAL_OPTIONS
 	SHADERMATERIAL_OPTION_BIT_ADDITIVE = 1 << 9,
 	SHADERMATERIAL_OPTION_BIT_UNLIT = 1 << 10,
 	SHADERMATERIAL_OPTION_BIT_USE_VERTEXAO = 1 << 11,
+	SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED = 1 << 12,
 };
 
 // Same as MaterialComponent::TEXTURESLOT
@@ -105,6 +103,7 @@ enum TEXTURESLOT
 	TEXTURESLOT_COUNT
 };
 
+static const float SVT_MIP_BIAS = 0.5;
 static const uint SVT_TILE_SIZE = 256u;
 static const uint SVT_TILE_BORDER = 4u;
 static const uint SVT_TILE_SIZE_PADDED = SVT_TILE_SIZE + SVT_TILE_BORDER * 2;
@@ -121,28 +120,56 @@ static const uint2 SVT_PACKED_MIP_OFFSETS[SVT_PACKED_MIP_COUNT] = {
 
 #ifndef __cplusplus
 #ifdef TEXTURE_SLOT_NONUNIFORM
-#define UniformTextureSlot(x) NonUniformResourceIndex(x)
+#define UniformTextureSlot(x) NonUniformResourceIndex(descriptor_index(x))
 #else
-#define UniformTextureSlot(x) (x)
+#define UniformTextureSlot(x) descriptor_index(x)
 #endif // TEXTURE_SLOT_NONUNIFORM
 
-inline float get_lod(in uint2 dim, in float2 uv_dx, in float2 uv_dy)
+inline float get_lod(in uint2 dim, in float2 uv_dx, in float2 uv_dy, uint anisotropy = 0)
 {
-	// https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#7.18.11%20LOD%20Calculations
-	return log2(max(length(uv_dx * dim), length(uv_dy * dim)));
+	// LOD calculations DirectX specs: https://microsoft.github.io/DirectX-Specs/d3d/archive/D3D11_3_FunctionalSpec.htm#7.18.11%20LOD%20Calculations
+
+	// Isotropic:
+	if (anisotropy == 0)
+		return log2(max(length(uv_dx * dim), length(uv_dy * dim)));
+
+	// Anisotropic:
+	uv_dx *= dim;
+	uv_dy *= dim;
+	float squaredLengthX = dot(uv_dx, uv_dx);
+	float squaredLengthY = dot(uv_dy, uv_dy);
+	float determinant = abs(uv_dx.x * uv_dy.y - uv_dx.y * uv_dy.x);
+	bool isMajorX = squaredLengthX > squaredLengthY;
+	float squaredLengthMajor = isMajorX ? squaredLengthX : squaredLengthY;
+	float lengthMajor = sqrt(squaredLengthMajor);
+	float ratioOfAnisotropy = squaredLengthMajor / determinant;
+
+	float lengthMinor = 0;
+	if (ratioOfAnisotropy > anisotropy)
+	{
+		// ratio is clamped - LOD is based on ratio (preserves area)
+		lengthMinor = lengthMajor / anisotropy;
+	}
+	else
+	{
+		// ratio not clamped - LOD is based on area
+		lengthMinor = determinant / lengthMajor;
+	}
+
+	return log2(lengthMinor);
 }
 #endif // __cplusplus
 
 struct alignas(16) ShaderTextureSlot
 {
-	uint uvset_lodclamp;
+	uint uvset_aniso_lodclamp;
 	int texture_descriptor;
 	int sparse_residencymap_descriptor;
 	int sparse_feedbackmap_descriptor;
 
 	inline void init()
 	{
-		uvset_lodclamp = 0;
+		uvset_aniso_lodclamp = 0;
 		texture_descriptor = -1;
 		sparse_residencymap_descriptor = -1;
 		sparse_feedbackmap_descriptor = -1;
@@ -154,20 +181,24 @@ struct alignas(16) ShaderTextureSlot
 	}
 	inline uint GetUVSet()
 	{
-		return uvset_lodclamp & 1u;
+		return uvset_aniso_lodclamp & 1u;
+	}
+	inline uint GetAnisotropy()
+	{
+		return (uvset_aniso_lodclamp >> 1u) & 0x7F;
 	}
 
 #ifndef __cplusplus
 	inline float GetLodClamp()
 	{
-		return f16tof32((uvset_lodclamp >> 1u) & 0xFFFF);
+		return f16tof32((uvset_aniso_lodclamp >> 16u) & 0xFFFF);
 	}
-	Texture2D GetTexture()
+	Texture2D<half4> GetTexture()
 	{
-		return bindless_textures[UniformTextureSlot(texture_descriptor)];
+		return bindless_textures_half4[UniformTextureSlot(texture_descriptor)];
 	}
-	float4 SampleVirtual(
-		in Texture2D tex,
+	half4 SampleVirtual(
+		in Texture2D<half4> tex,
 		in SamplerState sam,
 		in float2 uv,
 		in Texture2D<uint4> residency_map,
@@ -202,7 +233,7 @@ struct alignas(16) ShaderTextureSlot
 		const float clamped_lod = virtual_lod < max_nonpacked_lod ? max(virtual_lod, residency.z) : virtual_lod;
 
 		// Mip - more detailed:
-		float4 value0;
+		half4 value0;
 		{
 			uint lod0 = uint(clamped_lod);
 			const uint packed_mip_idx = packed_mips ? uint(virtual_lod - max_nonpacked_lod - 1) : 0;
@@ -216,7 +247,7 @@ struct alignas(16) ShaderTextureSlot
 		}
 
 		// Mip - less detailed:
-		float4 value1;
+		half4 value1;
 		{
 			uint lod1 = uint(clamped_lod + 1);
 			packed_mips = uint(lod1) > max_nonpacked_lod;
@@ -232,11 +263,11 @@ struct alignas(16) ShaderTextureSlot
 			value1 = tex.SampleLevel(sam, atlas_uv, 0);
 		}
 
-		return lerp(value0, value1, frac(clamped_lod)); // custom trilinear filtering
+		return lerp(value0, value1, (half)frac(clamped_lod)); // custom trilinear filtering
 	}
-	float4 Sample(in SamplerState sam, in float4 uvsets)
+	half4 Sample(in SamplerState sam, in float4 uvsets)
 	{
-		Texture2D tex = GetTexture();
+		Texture2D<half4> tex = GetTexture();
 		float2 uv = GetUVSet() == 0 ? uvsets.xy : uvsets.zw;
 
 #ifndef DISABLE_SVT
@@ -247,7 +278,7 @@ struct alignas(16) ShaderTextureSlot
 			float2 virtual_tile_count;
 			residency_map.GetDimensions(virtual_tile_count.x, virtual_tile_count.y);
 			float2 virtual_image_dim = virtual_tile_count * SVT_TILE_SIZE;
-			float virtual_lod = get_lod(virtual_image_dim, ddx_coarse(uv), ddy_coarse(uv));
+			float virtual_lod = get_lod(virtual_image_dim, ddx_coarse(uv), ddy_coarse(uv), GetAnisotropy()) + SVT_MIP_BIAS;
 			return SampleVirtual(tex, sam, uv, residency_map, virtual_tile_count, virtual_image_dim, virtual_lod);
 		}
 #endif // DISABLE_SVT
@@ -255,9 +286,9 @@ struct alignas(16) ShaderTextureSlot
 		return tex.Sample(sam, uv);
 	}
 
-	float4 SampleLevel(in SamplerState sam, in float4 uvsets, in float lod)
+	half4 SampleLevel(in SamplerState sam, in float4 uvsets, in float lod)
 	{
-		Texture2D tex = GetTexture();
+		Texture2D<half4> tex = GetTexture();
 		float2 uv = GetUVSet() == 0 ? uvsets.xy : uvsets.zw;
 
 #ifndef DISABLE_SVT
@@ -275,9 +306,9 @@ struct alignas(16) ShaderTextureSlot
 		return tex.SampleLevel(sam, uv, lod);
 	}
 
-	float4 SampleBias(in SamplerState sam, in float4 uvsets, in float bias)
+	half4 SampleBias(in SamplerState sam, in float4 uvsets, in float bias)
 	{
-		Texture2D tex = GetTexture();
+		Texture2D<half4> tex = GetTexture();
 		float2 uv = GetUVSet() == 0 ? uvsets.xy : uvsets.zw;
 
 #ifndef DISABLE_SVT
@@ -288,7 +319,7 @@ struct alignas(16) ShaderTextureSlot
 			float2 virtual_tile_count;
 			residency_map.GetDimensions(virtual_tile_count.x, virtual_tile_count.y);
 			float2 virtual_image_dim = virtual_tile_count * SVT_TILE_SIZE;
-			float virtual_lod = get_lod(virtual_image_dim, ddx_coarse(uv), ddy_coarse(uv));
+			float virtual_lod = get_lod(virtual_image_dim, ddx_coarse(uv), ddy_coarse(uv), GetAnisotropy()) + SVT_MIP_BIAS;
 			virtual_lod += bias;
 			return SampleVirtual(tex, sam, uv, residency_map, virtual_tile_count, virtual_image_dim, virtual_lod + bias);
 		}
@@ -297,9 +328,9 @@ struct alignas(16) ShaderTextureSlot
 		return tex.SampleBias(sam, uv, bias);
 	}
 
-	float4 SampleGrad(in SamplerState sam, in float4 uvsets, in float4 uvsets_dx, in float4 uvsets_dy)
+	half4 SampleGrad(in SamplerState sam, in float4 uvsets, in float4 uvsets_dx, in float4 uvsets_dy)
 	{
-		Texture2D tex = GetTexture();
+		Texture2D<half4> tex = GetTexture();
 		float2 uv = GetUVSet() == 0 ? uvsets.xy : uvsets.zw;
 		float2 uv_dx = GetUVSet() == 0 ? uvsets_dx.xy : uvsets_dx.zw;
 		float2 uv_dy = GetUVSet() == 0 ? uvsets_dy.xy : uvsets_dy.zw;
@@ -312,7 +343,7 @@ struct alignas(16) ShaderTextureSlot
 			float2 virtual_tile_count;
 			residency_map.GetDimensions(virtual_tile_count.x, virtual_tile_count.y);
 			float2 virtual_image_dim = virtual_tile_count * SVT_TILE_SIZE;
-			float virtual_lod = get_lod(virtual_image_dim, uv_dx, uv_dy);
+			float virtual_lod = get_lod(virtual_image_dim, uv_dx, uv_dy, GetAnisotropy()) + SVT_MIP_BIAS;
 			return SampleVirtual(tex, sam, uv, residency_map, virtual_tile_count, virtual_image_dim, virtual_lod);
 		}
 #endif // DISABLE_SVT
@@ -408,6 +439,9 @@ struct alignas(16) ShaderMaterial
 	inline half GetAnisotropySin() { return unpack_half4(aniso_anisosin_anisocos_terrainblend).y; }
 	inline half GetAnisotropyCos() { return unpack_half4(aniso_anisosin_anisocos_terrainblend).z; }
 	inline half GetTerrainBlendRcp() { return unpack_half4(aniso_anisosin_anisocos_terrainblend).w; }
+	inline half3 GetInteriorScale() { return unpack_half3(subsurfaceScattering); }
+	inline half3 GetInteriorOffset() { return unpack_half3(subsurfaceScattering_inv); }
+	inline half2 GetInteriorSinCos() { return half2(unpack_half4(subsurfaceScattering).w, unpack_half4(subsurfaceScattering_inv).w); }
 	inline uint GetStencilRef() { return options_stencilref >> 24u; }
 #endif // __cplusplus
 
@@ -424,6 +458,7 @@ struct alignas(16) ShaderMaterial
 	inline bool IsTransparent() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_TRANSPARENT; }
 	inline bool IsAdditive() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_ADDITIVE; }
 	inline bool IsDoubleSided() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_DOUBLE_SIDED; }
+	inline bool IsCapsuleShadowDisabled() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED; }
 };
 
 // For binning shading based on shader types:
@@ -437,7 +472,7 @@ struct alignas(16) ShaderTypeBin
 	uint4 padding; // 32-byte alignment
 #endif // __SCE__ || __PSSL__
 };
-static const uint SHADERTYPE_BIN_COUNT = 11;
+static const uint SHADERTYPE_BIN_COUNT = 12;
 
 struct alignas(16) VisibilityTile
 {
@@ -607,46 +642,53 @@ struct alignas(16) ShaderTransform
 			0, 0, 0, 1
 		);
 	}
+#ifndef __cplusplus
+	float3x3 GetMatrixAdjoint()
+	{
+		return adjoint(GetMatrix());
+	}
+#endif // __cplusplus
 };
 
 struct alignas(16) ShaderMeshInstance
 {
-	uint uid;
+	uint64_t uid;
 	uint flags;	// high 8 bits: user stencilRef
 	uint layerMask;
-	uint geometryOffset;	// offset of all geometries for currently active LOD
 
-	uint2 emissive;
-	uint color;
-	uint geometryCount;		// number of all geometries in currently active LOD
-
-	uint meshletOffset; // offset in the global meshlet buffer for first subset (for LOD0)
-	float fadeDistance;
+	uint meshletOffset;			// offset in the global meshlet buffer for first subset (for LOD0)
+	uint geometryOffset;		// offset of all geometries for currently active LOD
+	uint geometryCount;			// number of all geometries in currently active LOD
 	uint baseGeometryOffset;	// offset of all geometries of the instance (if no LODs, then it is equal to geometryOffset)
-	uint baseGeometryCount;		// number of all geometries of the instance (if no LODs, then it is equal to geometryCount)
 
-	float3 center;
-	float radius;
+	uint2 rimHighlight;			// packed half4
+	uint baseGeometryCount;		// number of all geometries of the instance (if no LODs, then it is equal to geometryCount)
+	float fadeDistance;
+
+	uint2 color; // packed half4
+	uint2 emissive; // packed half4
 
 	int vb_ao;
 	int vb_wetmap;
 	int lightmap;
-	uint alphaTest_size;
+	uint alphaTest_size; // packed half2
 
-	uint2 rimHighlight;
-	uint2 padding;
+	float3 center;
+	float radius;
 
-	float4 quaternion;
-	ShaderTransform transform;
-	ShaderTransform transformPrev;
-	ShaderTransform transformRaw; // without quantization remapping applied
+	ShaderTransform transform; // Note: this could contain quantization remapping from UNORM -> FLOAT depending on vertex position format
+	ShaderTransform transformPrev; // Note: this could contain quantization remapping from UNORM -> FLOAT depending on vertex position format
+	ShaderTransform transformRaw; // Note: this is the world matrix without any quantization remapping
 
 	void init()
 	{
+#ifdef __cplusplus
+		using namespace wi::math;
+#endif // __cplusplus
 		uid = 0;
 		flags = 0;
 		layerMask = 0;
-		color = ~0u;
+		color = pack_half4(1, 1, 1, 1);
 		emissive = uint2(0, 0);
 		lightmap = -1;
 		geometryOffset = 0;
@@ -660,7 +702,6 @@ struct alignas(16) ShaderMeshInstance
 		vb_ao = -1;
 		vb_wetmap = -1;
 		alphaTest_size = 0;
-		quaternion = float4(0, 0, 0, 1);
 		rimHighlight = uint2(0, 0);
 		transform.init();
 		transformPrev.init();
@@ -677,7 +718,7 @@ struct alignas(16) ShaderMeshInstance
 	}
 
 #ifndef __cplusplus
-	inline half4 GetColor() { return (half4)unpack_rgba(color); }
+	inline half4 GetColor() { return unpack_half4(color); }
 	inline half3 GetEmissive() { return unpack_half3(emissive); }
 	inline half GetAlphaTest() { return unpack_half2(alphaTest_size).x; }
 	inline half GetSize() { return unpack_half2(alphaTest_size).y; }
@@ -725,9 +766,31 @@ struct ObjectPushConstants
 };
 
 
-// Warning: the size of this structure directly affects shader performance.
-//	Try to reduce it as much as possible!
-//	Keep it aligned to 16 bytes for best performance!
+enum SHADER_ENTITY_TYPE
+{
+	ENTITY_TYPE_DIRECTIONALLIGHT,
+	ENTITY_TYPE_POINTLIGHT,
+	ENTITY_TYPE_SPOTLIGHT,
+	ENTITY_TYPE_DECAL,
+	ENTITY_TYPE_ENVMAP,
+	ENTITY_TYPE_FORCEFIELD_POINT,
+	ENTITY_TYPE_FORCEFIELD_PLANE,
+	ENTITY_TYPE_COLLIDER_SPHERE,
+	ENTITY_TYPE_COLLIDER_CAPSULE,
+	ENTITY_TYPE_COLLIDER_PLANE,
+
+	ENTITY_TYPE_COUNT
+};
+
+enum SHADER_ENTITY_FLAGS
+{
+	ENTITY_FLAG_LIGHT_STATIC = 1 << 0,
+	ENTITY_FLAG_LIGHT_CASTING_SHADOW = 1 << 1,
+	ENTITY_FLAG_LIGHT_VOLUMETRICCLOUDS = 1 << 2,
+	ENTITY_FLAG_DECAL_BASECOLOR_ONLY_ALPHA = 1 << 3,
+	ENTITY_FLAG_CAPSULE_SHADOW_COLLIDER = 1 << 4,
+};
+
 struct alignas(16) ShaderEntity
 {
 	float3 position;
@@ -808,15 +871,19 @@ struct alignas(16) ShaderEntity
 	}
 	inline min16uint GetMatrixIndex()
 	{
-		return indices & 0xFFFF;
+		return indices & 0xFFF;
 	}
 	inline min16uint GetTextureIndex()
 	{
-		return indices >> 16u;
+		return indices >> 12u;
 	}
 	inline bool IsCastingShadow()
 	{
-		return indices != ~0;
+		return GetFlags() & ENTITY_FLAG_LIGHT_CASTING_SHADOW;
+	}
+	inline bool IsStaticLight()
+	{
+		return GetFlags() & ENTITY_FLAG_LIGHT_STATIC;
 	}
 	inline half GetGravity()
 	{
@@ -888,8 +955,8 @@ struct alignas(16) ShaderEntity
 	}
 	inline void SetIndices(uint matrixIndex, uint textureIndex)
 	{
-		indices = matrixIndex & 0xFFFF;
-		indices |= (textureIndex & 0xFFFF) << 16u;
+		indices = matrixIndex & 0xFFF;
+		indices |= (textureIndex & 0xFFFFF) << 12u;
 	}
 	inline void SetGravity(float value)
 	{
@@ -955,28 +1022,8 @@ struct alignas(16) ShaderFrustumCorners
 #endif // __cplusplus
 };
 
-enum SHADER_ENTITY_TYPE
-{
-	ENTITY_TYPE_DIRECTIONALLIGHT,
-	ENTITY_TYPE_POINTLIGHT,
-	ENTITY_TYPE_SPOTLIGHT,
-	ENTITY_TYPE_DECAL,
-	ENTITY_TYPE_ENVMAP,
-	ENTITY_TYPE_FORCEFIELD_POINT,
-	ENTITY_TYPE_FORCEFIELD_PLANE,
-	ENTITY_TYPE_COLLIDER_SPHERE,
-	ENTITY_TYPE_COLLIDER_CAPSULE,
-	ENTITY_TYPE_COLLIDER_PLANE,
-
-	ENTITY_TYPE_COUNT
-};
-
-enum SHADER_ENTITY_FLAGS
-{
-	ENTITY_FLAG_LIGHT_STATIC = 1 << 0,
-	ENTITY_FLAG_LIGHT_VOLUMETRICCLOUDS = 1 << 1,
-	ENTITY_FLAG_DECAL_BASECOLOR_ONLY_ALPHA = 1 << 0,
-};
+static const float CAPSULE_SHADOW_AFFECTION_RANGE = 2; // how far away the capsule shadow can reach outside of their own radius
+static const float CAPSULE_SHADOW_BOLDEN = 1.1f; // multiplier for capsule shadow capsule radiuses globally
 
 static const uint SHADER_ENTITY_COUNT = 256;
 static const uint SHADER_ENTITY_TILE_BUCKET_COUNT = SHADER_ENTITY_COUNT / 32;
@@ -1089,6 +1136,7 @@ enum FRAME_OPTIONS
 	OPTION_BIT_REALISTIC_SKY_HIGH_QUALITY = 1 << 17,
 	OPTION_BIT_REALISTIC_SKY_RECEIVE_SHADOW = 1 << 18,
 	OPTION_BIT_VOLUMETRICCLOUDS_RECEIVE_SHADOW = 1 << 19,
+	OPTION_BIT_CAPSULE_SHADOW_ENABLED = 1 << 20,
 };
 
 // ---------- Common Constant buffers: -----------------
@@ -1113,8 +1161,13 @@ struct alignas(16) FrameCB
 
 	float		cloudShadowFarPlaneKm;
 	int			texture_volumetricclouds_shadow_index;
-	float		gi_boost;
+	uint		giboost_packed; // force fp16 load
 	uint		entity_culling_count;
+
+	uint		capsuleshadow_fade_angle;
+	int			indirect_debugbufferindex;
+	int			padding0;
+	int			padding1;
 
 	float		blue_noise_phase;
 	int			texture_random64x64_index;
@@ -1151,7 +1204,7 @@ struct alignas(16) FrameCB
 	uint lights;
 	uint decals;
 	uint forces;
-	uint padding;
+	uint padding2;
 
 	ShaderEntity entityArray[SHADER_ENTITY_COUNT];
 	float4x4 matrixArray[SHADER_ENTITY_COUNT];
@@ -1631,6 +1684,13 @@ struct VirtualTextureTileRequestsPush
 	int padding2;
 };
 
+struct StencilBitPush
+{
+	float2 output_resolution_rcp;
+	uint input_resolution;
+	uint bit;
+};
+
 CBUFFER(TrailRendererCB, CBSLOT_TRAILRENDERER)
 {
 	float4x4	g_xTrailTransform;
@@ -1655,5 +1715,41 @@ CBUFFER(PaintDecalCB, CBSLOT_RENDERER_MISC)
 	int g_xPaintDecalpadding;
 };
 
+#ifdef __cplusplus
+// Copied here from SH_Lite.hlsli to share with C++:
+namespace SH
+{
+	struct L1
+	{
+		static const uint NumCoefficients = 4;
+		float C[NumCoefficients];
+	};
+	struct L1_RGB
+	{
+		static const uint NumCoefficients = 4;
+		float3 C[NumCoefficients];
+		struct Packed
+		{
+			uint C[3 * NumCoefficients / 2];
+		};
+	};
+	struct L2
+	{
+		static const uint NumCoefficients = 9;
+		float C[NumCoefficients];
+	};
+	struct L2_RGB
+	{
+		static const uint NumCoefficients = 9;
+		float3 C[NumCoefficients];
+	};
+}
+#endif // __cplusplus
+
+struct alignas(16) DDGIProbe
+{
+	SH::L1_RGB::Packed radiance;
+	uint2 offset;
+};
 
 #endif // WI_SHADERINTEROP_RENDERER_H

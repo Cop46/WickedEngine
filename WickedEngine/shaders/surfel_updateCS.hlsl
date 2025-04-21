@@ -1,3 +1,4 @@
+#define TEXTURE_SLOT_NONUNIFORM
 #include "globals.hlsli"
 #include "ShaderInterop_SurfelGI.h"
 #include "brdf.hlsli"
@@ -26,6 +27,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	float radius = SURFEL_MAX_RADIUS;
 
 	PrimitiveID prim;
+	prim.init();
 	prim.unpack2(surfel_data.primitiveID);
 
 	Surface surface;
@@ -37,7 +39,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 		{
 			surface.facenormal = -surface.facenormal;
 		}
-		surfel.normal = pack_unitvector(surface.facenormal);
+		surfel.normal = pack_half3(surface.facenormal);
 		surfel.position = surface.P;
 
 		int3 center_cell = surfel_cell(surfel.position);

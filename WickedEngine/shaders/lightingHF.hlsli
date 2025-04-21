@@ -40,7 +40,7 @@ struct Lighting
 
 inline void ApplyLighting(in Surface surface, in Lighting lighting, inout half4 color)
 {
-	half3 diffuse = lighting.direct.diffuse / PI + lighting.indirect.diffuse * GetFrame().gi_boost * (1 - surface.F) * surface.occlusion + surface.ssgi;
+	half3 diffuse = lighting.direct.diffuse / PI + lighting.indirect.diffuse * GetGIBoost() * (1 - surface.F) * surface.occlusion + surface.ssgi;
 	half3 specular = lighting.direct.specular + lighting.indirect.specular * surface.occlusion; // reminder: cannot apply surface.F for whole indirect specular, because multiple layers have separate fresnels (sheen, clearcoat)
 	color.rgb = lerp(surface.albedo * diffuse, surface.refraction.rgb, surface.refraction.a);
 	color.rgb += specular;
@@ -126,7 +126,7 @@ inline void light_directional(in ShaderEntity light, in Surface surface, inout L
 	const ShaderOcean ocean = GetWeather().ocean;
 	if (ocean.texture_displacementmap >= 0)
 	{
-		Texture2D displacementmap = bindless_textures[ocean.texture_displacementmap];
+		Texture2D displacementmap = bindless_textures[descriptor_index(ocean.texture_displacementmap)];
 		float2 ocean_uv = surface.P.xz * ocean.patch_size_rcp;
 		float3 displacement = displacementmap.SampleLevel(sampler_linear_wrap, ocean_uv, 0).xzy;
 		float water_height = ocean.water_height + displacement.y;
@@ -209,6 +209,14 @@ inline void light_point(in ShaderEntity light, in Surface surface, inout Lightin
 		
 		if (!any(light_color))
 			return; // light color lost after shadow
+	}
+
+	const uint maskTex = light.GetTextureIndex();
+	[branch]
+	if (maskTex > 0)
+	{
+		half4 mask = bindless_cubemaps_half4[descriptor_index(maskTex)].SampleLevel(sampler_linear_clamp, -LunnormalizedShadow, 0);
+		light_color *= mask.rgb * mask.a;
 	}
 		
 	light_color *= attenuation_pointlight(dist2, range, range2);
@@ -295,7 +303,7 @@ inline void light_spot(in ShaderEntity light, in Surface surface, inout Lighting
 		return; // outside spotlight cone
 
 	half3 light_color = light.GetColor().rgb * shadow_mask;
-
+	
 	[branch]
 	if (light.IsCastingShadow() && surface.IsReceiveShadow())
 	{
@@ -316,6 +324,17 @@ inline void light_spot(in ShaderEntity light, in Surface surface, inout Lighting
 		
 		if (!any(light_color))
 			return; // light color lost after shadow
+	}
+
+	const uint maskTex = light.GetTextureIndex();
+	[branch]
+	if (maskTex > 0)
+	{
+		float4 shadow_pos = mul(load_entitymatrix(light.GetMatrixIndex() + 0), float4(surface.P, 1));
+		shadow_pos.xyz /= shadow_pos.w;
+		float2 shadow_uv = clipspace_to_uv(shadow_pos.xy);
+		half4 mask = bindless_textures_half4[descriptor_index(maskTex)].SampleLevel(sampler_linear_clamp, shadow_uv, 0);
+		light_color *= mask.rgb * mask.a;
 	}
 	
 	light_color *= attenuation_spotlight(dist2, range, range2, spot_factor, light.GetAngleScale(), light.GetAngleOffset());
@@ -364,11 +383,11 @@ inline half3 GetAmbient(in float3 N)
 	[branch]
 	if (GetScene().globalprobe >= 0)
 	{
-		TextureCube cubemap = bindless_cubemaps[GetScene().globalprobe];
+		TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(GetScene().globalprobe)];
 		uint2 dim;
-		uint mips;
-		cubemap.GetDimensions(0, dim.x, dim.y, mips);
-		ambient = (half3)cubemap.SampleLevel(sampler_linear_clamp, N, mips).rgb;
+		uint mipcount;
+		cubemap.GetDimensions(0, dim.x, dim.y, mipcount);
+		ambient = cubemap.SampleLevel(sampler_linear_clamp, N, mipcount).rgb;
 	}
 	
 #endif // ENVMAPRENDERING
@@ -408,24 +427,25 @@ inline half3 EnvironmentReflection_Global(in Surface surface)
 	if (GetScene().globalprobe < 0)
 		return 0;
 	
-	TextureCube cubemap = bindless_cubemaps[GetScene().globalprobe];
+	TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(GetScene().globalprobe)];
 	uint2 dim;
-	uint mips;
-	cubemap.GetDimensions(0, dim.x, dim.y, mips);
+	uint mipcount;
+	cubemap.GetDimensions(0, dim.x, dim.y, mipcount);
+	half mipcount16f = half(mipcount);
 
-	half MIP = surface.roughness * mips;
-	envColor = (half3)cubemap.SampleLevel(sampler_linear_clamp, surface.R, MIP).rgb * surface.F;
+	half MIP = surface.roughness * mipcount16f;
+	envColor = cubemap.SampleLevel(sampler_linear_clamp, surface.R, MIP).rgb * surface.F;
 
 #ifdef SHEEN
 	envColor *= surface.sheen.albedoScaling;
-	MIP = surface.sheen.roughness * mips;
-	envColor += (half3)cubemap.SampleLevel(sampler_linear_clamp, surface.R, MIP).rgb * surface.sheen.color * surface.sheen.DFG;
+	MIP = surface.sheen.roughness * mipcount16f;
+	envColor += cubemap.SampleLevel(sampler_linear_clamp, surface.R, MIP).rgb * surface.sheen.color * surface.sheen.DFG;
 #endif // SHEEN
 
 #ifdef CLEARCOAT
 	envColor *= 1 - surface.clearcoat.F;
-	MIP = surface.clearcoat.roughness * mips;
-	envColor += (half3)cubemap.SampleLevel(sampler_linear_clamp, surface.clearcoat.R, MIP).rgb * surface.clearcoat.F;
+	MIP = surface.clearcoat.roughness * mipcount16f;
+	envColor += cubemap.SampleLevel(sampler_linear_clamp, surface.clearcoat.R, MIP).rgb * surface.clearcoat.F;
 #endif // CLEARCOAT
 
 #endif // ENVMAPRENDERING
@@ -439,46 +459,45 @@ inline half3 EnvironmentReflection_Global(in Surface surface)
 // clipSpacePos:		world space pixel position transformed into OBB space by probeProjection matrix
 // MIP:					mip level to sample
 // return:				color of the environment map (rgb), blend factor of the environment map (a)
-inline half4 EnvironmentReflection_Local(in TextureCube cubemap, in Surface surface, in ShaderEntity probe, in float4x4 probeProjection, in half3 clipSpacePos)
+inline half4 EnvironmentReflection_Local(in TextureCube<half4> cubemap, in Surface surface, in ShaderEntity probe, in float4x4 probeProjection, in half3 clipSpacePos)
 {
 	if ((probe.layerMask & surface.layerMask) == 0)
 		return 0; // early exit: layer mismatch
 		
 	// Perform parallax correction of reflection ray (R) into OBB:
 	half3 RayLS = mul((half3x3)probeProjection, surface.R);
-	half3 FirstPlaneIntersect = (half3(1, 1, 1) - clipSpacePos) / RayLS;
-	half3 SecondPlaneIntersect = (-half3(1, 1, 1) - clipSpacePos) / RayLS;
+	half3 FirstPlaneIntersect = (1 - clipSpacePos) / RayLS;
+	half3 SecondPlaneIntersect = (-1 - clipSpacePos) / RayLS;
 	half3 FurthestPlane = max(FirstPlaneIntersect, SecondPlaneIntersect);
 	half Distance = min(FurthestPlane.x, min(FurthestPlane.y, FurthestPlane.z));
-	half3 IntersectPositionWS = surface.P + surface.R * Distance;
-	half3 R_parallaxCorrected = IntersectPositionWS - probe.position;
+	half3 R_parallaxCorrected = surface.P - probe.position + surface.R * Distance;
 
 	uint2 dim;
-	uint mips;
-	cubemap.GetDimensions(0, dim.x, dim.y, mips);
+	uint mipcount;
+	cubemap.GetDimensions(0, dim.x, dim.y, mipcount);
+	half mipcount16f = half(mipcount);
 
 	// Sample cubemap texture:
-	half MIP = surface.roughness * mips;
-	half3 envColor = (half3)cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.F;
+	half MIP = surface.roughness * mipcount16f;
+	half3 envColor = cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.F;
 
 #ifdef SHEEN
 	envColor *= surface.sheen.albedoScaling;
-	MIP = surface.sheen.roughness * mips;
-	envColor += (half3)cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.sheen.color * surface.sheen.DFG;
+	MIP = surface.sheen.roughness * mipcount16f;
+	envColor += cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.sheen.color * surface.sheen.DFG;
 #endif // SHEEN
 
 #ifdef CLEARCOAT
 	RayLS = mul((half3x3)probeProjection, surface.clearcoat.R);
-	FirstPlaneIntersect = (half3(1, 1, 1) - clipSpacePos) / RayLS;
-	SecondPlaneIntersect = (-half3(1, 1, 1) - clipSpacePos) / RayLS;
+	FirstPlaneIntersect = (1 - clipSpacePos) / RayLS;
+	SecondPlaneIntersect = (-1 - clipSpacePos) / RayLS;
 	FurthestPlane = max(FirstPlaneIntersect, SecondPlaneIntersect);
 	Distance = min(FurthestPlane.x, min(FurthestPlane.y, FurthestPlane.z));
-	IntersectPositionWS = surface.P + surface.clearcoat.R * Distance;
-	R_parallaxCorrected = IntersectPositionWS - probe.position;
+	R_parallaxCorrected = surface.P - probe.position + surface.clearcoat.R * Distance;
 
 	envColor *= 1 - surface.clearcoat.F;
-	MIP = surface.clearcoat.roughness * mips;
-	envColor += (half3)cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.clearcoat.F;
+	MIP = surface.clearcoat.roughness * mipcount16f;
+	envColor += cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, MIP).rgb * surface.clearcoat.F;
 #endif // CLEARCOAT
 
 	// blend out if close to any cube edge:
@@ -496,7 +515,7 @@ inline void VoxelGI(inout Surface surface, inout Lighting lighting)
 	[branch]
 	if (GetFrame().vxgi.resolution != 0 && GetFrame().vxgi.texture_radiance >= 0)
 	{
-		Texture3D voxels = bindless_textures3D[GetFrame().vxgi.texture_radiance];
+		Texture3D<half4> voxels = bindless_textures3D_half4[descriptor_index(GetFrame().vxgi.texture_radiance)];
 
 		// diffuse:
 		half4 trace = ConeTraceDiffuse(voxels, surface.P, surface.N);

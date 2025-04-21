@@ -28,6 +28,8 @@ namespace wi::lua
 		int SetFrameRate(lua_State* L);
 		int GetFrameRate(lua_State* L);
 
+		int SetPosition(lua_State* L);
+		int SetPositionAndRotation(lua_State* L);
 		int SetLinearVelocity(lua_State* L);
 		int SetAngularVelocity(lua_State* L);
 		int ApplyForce(lua_State* L);
@@ -37,9 +39,16 @@ namespace wi::lua
 		int ApplyTorque(lua_State* L);
 		int SetActivationState(lua_State* L);
 		int ActivateAllRigidBodies(lua_State* L);
+		int ResetPhysicsObjects(lua_State* L);
+		int GetVelocity(lua_State* L);
+		int SetGhostMode(lua_State* L);
+		int SetRagdollGhostMode(lua_State* L);
 
 		int Intersects(lua_State* L);
 		int PickDrag(lua_State* L);
+
+		int DriveVehicle(lua_State* L);
+		int GetVehicleForwardVelocity(lua_State* L);
 
 		static void Bind();
 	};

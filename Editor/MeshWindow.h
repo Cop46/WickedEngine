@@ -13,6 +13,7 @@ public:
 
 	wi::gui::Label meshInfoLabel;
 	wi::gui::Button subsetRemoveButton;
+	wi::gui::Button subsetLastButton;
 	wi::gui::ComboBox subsetComboBox;
 	wi::gui::ComboBox subsetMaterialComboBox;
 	wi::gui::CheckBox doubleSidedCheckBox;
@@ -22,6 +23,7 @@ public:
 	wi::gui::Button impostorCreateButton;
 	wi::gui::Slider impostorDistanceSlider;
 	wi::gui::Slider tessellationFactorSlider;
+	wi::gui::Button instanceSelectButton;
 	wi::gui::Button flipCullingButton;
 	wi::gui::Button flipNormalsButton;
 	wi::gui::Button computeNormalsSmoothButton;

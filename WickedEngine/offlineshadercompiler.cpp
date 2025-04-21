@@ -22,13 +22,9 @@ wi::vector<ShaderEntry> shaders = {
 	{"hairparticle_simulateCS", wi::graphics::ShaderStage::CS},
 	{"emittedparticle_simulateCS", wi::graphics::ShaderStage::CS},
 	{"generateMIPChainCubeCS_float4", wi::graphics::ShaderStage::CS},
-	{"generateMIPChainCubeCS_unorm4", wi::graphics::ShaderStage::CS},
 	{"generateMIPChainCubeArrayCS_float4", wi::graphics::ShaderStage::CS},
-	{"generateMIPChainCubeArrayCS_unorm4", wi::graphics::ShaderStage::CS},
 	{"generateMIPChain3DCS_float4", wi::graphics::ShaderStage::CS},
-	{"generateMIPChain3DCS_unorm4", wi::graphics::ShaderStage::CS},
 	{"generateMIPChain2DCS_float4", wi::graphics::ShaderStage::CS},
-	{"generateMIPChain2DCS_unorm4", wi::graphics::ShaderStage::CS},
 	{"blockcompressCS_BC1", wi::graphics::ShaderStage::CS},
 	{"blockcompressCS_BC3", wi::graphics::ShaderStage::CS},
 	{"blockcompressCS_BC4", wi::graphics::ShaderStage::CS},
@@ -50,8 +46,6 @@ wi::vector<ShaderEntry> shaders = {
 	{"vxgi_resolve_specularCS", wi::graphics::ShaderStage::CS},
 	{"upsample_bilateral_float1CS", wi::graphics::ShaderStage::CS},
 	{"upsample_bilateral_float4CS", wi::graphics::ShaderStage::CS},
-	{"upsample_bilateral_unorm1CS", wi::graphics::ShaderStage::CS},
-	{"upsample_bilateral_unorm4CS", wi::graphics::ShaderStage::CS},
 	{"temporalaaCS", wi::graphics::ShaderStage::CS},
 	{"tonemapCS", wi::graphics::ShaderStage::CS},
 	{"underwaterCS", wi::graphics::ShaderStage::CS},
@@ -142,32 +136,18 @@ wi::vector<ShaderEntry> shaders = {
 	{"depthoffield_mainCS_earlyexit", wi::graphics::ShaderStage::CS },
 	{"depthoffield_postfilterCS", wi::graphics::ShaderStage::CS },
 	{"copytexture2D_float4_borderexpandCS", wi::graphics::ShaderStage::CS },
-	{"copytexture2D_unorm4_borderexpandCS", wi::graphics::ShaderStage::CS },
-	{"copytexture2D_unorm4CS", wi::graphics::ShaderStage::CS },
 	{"copytexture2D_float4CS", wi::graphics::ShaderStage::CS },
 	{"chromatic_aberrationCS", wi::graphics::ShaderStage::CS },
 	{"bvh_hierarchyCS", wi::graphics::ShaderStage::CS },
 	{"bvh_primitivesCS", wi::graphics::ShaderStage::CS },
 	{"bvh_propagateaabbCS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_wide_unorm1CS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_wide_unorm4CS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_unorm1CS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_unorm4CS", wi::graphics::ShaderStage::CS },
 	{"blur_gaussian_wide_float1CS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_wide_float3CS", wi::graphics::ShaderStage::CS },
 	{"blur_gaussian_wide_float4CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_wide_unorm4CS", wi::graphics::ShaderStage::CS },
 	{"blur_gaussian_float1CS", wi::graphics::ShaderStage::CS },
-	{"blur_gaussian_float3CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_unorm4CS", wi::graphics::ShaderStage::CS },
 	{"blur_bilateral_wide_float1CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_wide_float3CS", wi::graphics::ShaderStage::CS },
 	{"blur_bilateral_wide_float4CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_wide_unorm1CS", wi::graphics::ShaderStage::CS },
 	{"blur_bilateral_float1CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_float3CS", wi::graphics::ShaderStage::CS },
 	{"blur_bilateral_float4CS", wi::graphics::ShaderStage::CS },
-	{"blur_bilateral_unorm1CS", wi::graphics::ShaderStage::CS },
 	{"normalsfromdepthCS", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_curlnoiseCS", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_detailnoiseCS", wi::graphics::ShaderStage::CS },
@@ -175,7 +155,6 @@ wi::vector<ShaderEntry> shaders = {
 	{"volumetricCloud_renderCS_capture", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_renderCS_capture_MSAA", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_reprojectCS", wi::graphics::ShaderStage::CS },
-	{"volumetricCloud_shadow_filterCS", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_shadow_renderCS", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_shapenoiseCS", wi::graphics::ShaderStage::CS },
 	{"volumetricCloud_upsamplePS", wi::graphics::ShaderStage::PS },
@@ -232,6 +211,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"causticsCS", wi::graphics::ShaderStage::CS },
 	{"depth_reprojectCS", wi::graphics::ShaderStage::CS },
 	{"depth_pyramidCS", wi::graphics::ShaderStage::CS },
+	{"lightmap_expandCS", wi::graphics::ShaderStage::CS },
 
 
 	{"emittedparticlePS_soft", wi::graphics::ShaderStage::PS },
@@ -268,7 +248,6 @@ wi::vector<ShaderEntry> shaders = {
 	{"objectPS_debug", wi::graphics::ShaderStage::PS },
 	{"objectPS_prepass", wi::graphics::ShaderStage::PS },
 	{"objectPS_prepass_alphatest", wi::graphics::ShaderStage::PS },
-	{"objectPS_prepass_depthonly", wi::graphics::ShaderStage::PS },
 	{"objectPS_prepass_depthonly_alphatest", wi::graphics::ShaderStage::PS },
 	{"lightVisualizerPS", wi::graphics::ShaderStage::PS },
 	{"lensFlarePS", wi::graphics::ShaderStage::PS },
@@ -290,6 +269,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"ddgi_debugPS", wi::graphics::ShaderStage::PS },
 	{"copyDepthPS", wi::graphics::ShaderStage::PS },
 	{"copyStencilBitPS", wi::graphics::ShaderStage::PS },
+	{"extractStencilBitPS", wi::graphics::ShaderStage::PS },
 	{"trailPS", wi::graphics::ShaderStage::PS },
 
 
@@ -393,7 +373,7 @@ int main(int argc, char* argv[])
 	std::cout << "\trebuild : \t\tAll shaders will be rebuilt, regardless if they are outdated or not\n";
 	std::cout << "\tdisable_optimization : \tShaders will be compiled without optimizations\n";
 	std::cout << "\tstrip_reflection : \tReflection will be stripped from shader binary to reduce file size\n";
-	std::cout << "\tshaderdump : \t\tShaders will be saved to wiShaderDump.h C++ header file (rebuild is assumed)\n";
+	std::cout << "\tshaderdump : \t\tShaders will be saved to wiShaderDump.h C++ header file (can be combined with \"rebuild\")\n";
 	std::cout << "Command arguments used: ";
 
 	wi::arguments::Parse(argc, argv);
@@ -427,7 +407,6 @@ int main(int argc, char* argv[])
 	if (wi::arguments::HasArgument("shaderdump"))
 	{
 		shaderdump_enabled = true;
-		rebuild = true;
 		std::cout << "shaderdump ";
 	}
 
@@ -502,6 +481,10 @@ int main(int argc, char* argv[])
 	shaders.push_back({ "ssgi_upsampleCS", wi::graphics::ShaderStage::CS });
 	shaders.back().permutations.emplace_back().defines = { "WIDE" };
 
+	// permutations for copyStencilBitPS:
+	shaders.push_back({ "copyStencilBitPS", wi::graphics::ShaderStage::PS });
+	shaders.back().permutations.emplace_back().defines = { "MSAA" };
+
 	wi::jobsystem::Initialize();
 	wi::jobsystem::context ctx;
 
@@ -546,9 +529,35 @@ int main(int argc, char* argv[])
 						shaderbinaryfilename += "_" + def;
 					}
 					shaderbinaryfilename += ".cso";
-					if (!rebuild && !wi::shadercompiler::IsShaderOutdated(shaderbinaryfilename))
+
+					wi::shadercompiler::CompilerOutput output;
+
+					if (!wi::shadercompiler::IsShaderOutdated(shaderbinaryfilename))
 					{
-						return;
+						if (!rebuild)
+						{
+							if (shaderdump_enabled)
+							{
+								auto vec = std::make_shared<std::vector<uint8_t>>();
+
+								if (wi::helper::FileRead(shaderbinaryfilename, *vec))
+								{
+									output.internal_state = vec;
+									output.shaderdata = vec->data();
+									output.shadersize = vec->size();
+									locker.lock();
+									results[shaderbinaryfilename] = output;
+									std::cout << "up-to-date: " << shaderbinaryfilename << std::endl;
+									locker.unlock();
+								}
+								else {
+									locker.lock();
+									std::cerr << "ERROR reading binary shader: " << shaderbinaryfilename << std::endl;
+									locker.unlock();
+								}
+							}
+							return;
+						}
 					}
 
 					wi::shadercompiler::CompilerInput input;
@@ -577,7 +586,6 @@ int main(int argc, char* argv[])
 						return;
 					}
 
-					wi::shadercompiler::CompilerOutput output;
 					wi::shadercompiler::Compile(input, output);
 
 					if (output.IsValid())
@@ -616,6 +624,8 @@ int main(int argc, char* argv[])
 	{
 		std::cout << "[Wicked Engine Offline Shader Compiler] Creating ShaderDump...\n";
 		timer.record();
+		size_t total_raw = 0;
+		size_t total_compressed = 0;
 		std::string ss;
 		ss += "namespace wiShaderDump {\n";
 		for (auto& x : results)
@@ -623,23 +633,35 @@ int main(int argc, char* argv[])
 			auto& name = x.first;
 			auto& output = x.second;
 
+			wi::vector<uint8_t> compressed;
+			bool success = wi::helper::Compress(output.shaderdata, output.shadersize, compressed, 9);
+			if (success) {
+				total_raw += output.shadersize;
+				total_compressed += compressed.size();
+			}
+			else
+			{
+				wi::helper::DebugOut("Compression failed while creating shader dump!", wi::helper::DebugLevel::Error);
+				continue;
+			}
+
 			std::string name_repl = name;
 			std::replace(name_repl.begin(), name_repl.end(), '/', '_');
 			std::replace(name_repl.begin(), name_repl.end(), '.', '_');
 			std::replace(name_repl.begin(), name_repl.end(), '-', '_');
-			ss += "const uint8_t " + name_repl + "[] = {";
-			for (size_t i = 0; i < output.shadersize; ++i)
+			ss += "static const uint8_t " + name_repl + "[] = {";
+			for (size_t i = 0; i < compressed.size(); ++i)
 			{
-				ss += std::to_string((uint32_t)output.shaderdata[i]) + ",";
+				ss += std::to_string((uint32_t)compressed[i]) + ",";
 			}
 			ss += "};\n";
 		}
+		std::cout << "[Wicked Engine Offline Shader Compiler] Compressed shaders: " << total_raw << " -> " << total_compressed << " (" << std::setprecision(3) << (100. * total_compressed / total_raw) << "%)" << std::endl;
 		ss += "struct ShaderDumpEntry{const uint8_t* data; size_t size;};\n";
-		ss += "const wi::unordered_map<std::string, ShaderDumpEntry> shaderdump = {\n";
+		ss += "static const wi::unordered_map<std::string, ShaderDumpEntry> shaderdump = {\n";
 		for (auto& x : results)
 		{
 			auto& name = x.first;
-			auto& output = x.second;
 
 			std::string name_repl = name;
 			std::replace(name_repl.begin(), name_repl.end(), '/', '_');

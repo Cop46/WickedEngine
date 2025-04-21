@@ -20,10 +20,13 @@
 #include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <Jolt/Physics/Collision/Shape/ConvexHullShape.h>
 #include <Jolt/Physics/Collision/Shape/MeshShape.h>
+#include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
+#include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
+#include <Jolt/Physics/Collision/GroupFilterTable.h>
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Body/BodyActivationListener.h>
 #include <Jolt/Physics/SoftBody/SoftBodySharedSettings.h>
@@ -32,10 +35,17 @@
 #include <Jolt/Physics/SoftBody/SoftBodyShape.h>
 #include <Jolt/Physics/Constraints/DistanceConstraint.h>
 #include <Jolt/Physics/Constraints/FixedConstraint.h>
+#include <Jolt/Physics/Constraints/PointConstraint.h>
 #include <Jolt/Physics/Constraints/SwingTwistConstraint.h>
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
+#include <Jolt/Physics/Constraints/ConeConstraint.h>
+#include <Jolt/Physics/Constraints/SixDOFConstraint.h>
+#include <Jolt/Physics/Constraints/SliderConstraint.h>
 #include <Jolt/Physics/Ragdoll/Ragdoll.h>
 #include <Jolt/Skeleton/Skeleton.h>
+#include <Jolt/Physics/Vehicle/VehicleConstraint.h>
+#include <Jolt/Physics/Vehicle/WheeledVehicleController.h>
+#include <Jolt/Physics/Vehicle/MotorcycleController.h>
 
 #ifdef JPH_DEBUG_RENDERER
 #include <Jolt/Renderer/DebugRendererSimple.h>
@@ -66,11 +76,14 @@ namespace wi::physics
 		return XMMATRIX(T, B, N, XMVectorSetW(P0, 1));
 	}
 
+	static constexpr uint32_t dispatchGroupSize = 256u;
+
 	namespace jolt
 	{
 		bool ENABLED = true;
 		bool SIMULATION_ENABLED = true;
 		bool DEBUGDRAW_ENABLED = false;
+		float CONSTRAINT_DEBUGSIZE = 1;
 		int ACCURACY = 4;
 		int softbodyIterationCount = 6;
 		float TIMESTEP = 1.0f / 60.0f;
@@ -94,6 +107,12 @@ namespace wi::physics
 				Vec4(v._41, v._42, v._43, v._44)
 			);
 		}
+		inline Mat44 cast(const XMMATRIX& v)
+		{
+			XMFLOAT4X4 m;
+			XMStoreFloat4x4(&m, v);
+			return cast(m);
+		}
 		inline XMFLOAT3 cast(Vec3Arg v) { return XMFLOAT3(v.GetX(), v.GetY(), v.GetZ()); }
 		inline XMFLOAT4 cast(QuatArg v) { return XMFLOAT4(v.GetX(), v.GetY(), v.GetZ(), v.GetW()); }
 		inline XMFLOAT4X4 cast(Mat44 v)
@@ -103,11 +122,14 @@ namespace wi::physics
 			return ret;
 		}
 
+		static std::atomic<uint32_t> collisionGroupID{}; // generate unique collision group for each ragdoll to enable collision between them
+
 		namespace Layers
 		{
 			static constexpr ObjectLayer NON_MOVING = 0;
 			static constexpr ObjectLayer MOVING = 1;
-			static constexpr ObjectLayer NUM_LAYERS = 2;
+			static constexpr ObjectLayer GHOST = 2;
+			static constexpr ObjectLayer NUM_LAYERS = 3;
 		};
 
 		/// Class that determines if two object layers can collide
@@ -121,7 +143,9 @@ namespace wi::physics
 				case Layers::NON_MOVING:
 					return inObject2 == Layers::MOVING; // Non moving only collides with moving
 				case Layers::MOVING:
-					return true; // Moving collides with everything
+					return inObject2 == Layers::MOVING || inObject2 == Layers::NON_MOVING; // Moving collides with moving and non moving
+				case Layers::GHOST:
+					return false; // collides with nothing
 				default:
 					JPH_ASSERT(false);
 					return false;
@@ -151,6 +175,7 @@ namespace wi::physics
 				// Create a mapping table from object to broad phase layer
 				mObjectToBroadPhase[Layers::NON_MOVING] = BroadPhaseLayers::NON_MOVING;
 				mObjectToBroadPhase[Layers::MOVING] = BroadPhaseLayers::MOVING;
+				mObjectToBroadPhase[Layers::GHOST] = BroadPhaseLayers::MOVING;
 			}
 
 			virtual uint GetNumBroadPhaseLayers() const override
@@ -179,7 +204,9 @@ namespace wi::physics
 				case Layers::NON_MOVING:
 					return inLayer2 == BroadPhaseLayers::MOVING;
 				case Layers::MOVING:
-					return true;
+					return inLayer2 == BroadPhaseLayers::MOVING || inLayer2 == BroadPhaseLayers::NON_MOVING;
+				case Layers::GHOST:
+					return false;
 				default:
 					JPH_ASSERT(false);
 					return false;
@@ -191,11 +218,12 @@ namespace wi::physics
 		{
 			~JoltDestroyer()
 			{
-				UnregisterTypes();
+				// we don't call UnregisterTypes() here, this is intentional
+				// see #945 and jrouwe/JoltPhysics#1458 for more information
 				delete Factory::sInstance;
 				Factory::sInstance = nullptr;
 			}
-		} jolt_destroyer; 
+		} jolt_destroyer;
 
 		struct PhysicsScene
 		{
@@ -235,9 +263,24 @@ namespace wi::physics
 		struct RigidBody
 		{
 			std::shared_ptr<void> physics_scene;
+			Entity entity = INVALID_ENTITY;
 			ShapeRefC shape;
 			BodyID bodyID;
-			Entity entity = INVALID_ENTITY;
+
+			// property tracking:
+			float friction = 0;
+			float restitution = 0;
+			EMotionType motiontype = EMotionType::Static;
+			uint8_t start_deactivated : 1;
+			uint8_t was_underwater : 1;
+			uint8_t was_active_prev_frame : 1;
+			uint8_t teleporting : 1;
+			Vec3 initial_position = Vec3::sZero();
+			Quat initial_rotation = Quat::sIdentity();
+
+			// Things for parented objects:
+			XMFLOAT4X4 parentMatrix = wi::math::IDENTITY_MATRIX;
+			XMFLOAT4X4 parentMatrixInverse = wi::math::IDENTITY_MATRIX;
 
 			// Interpolation state:
 			Vec3 prev_position = Vec3::sZero();
@@ -256,20 +299,48 @@ namespace wi::physics
 			wi::scene::HumanoidComponent::HumanoidBone humanoid_bone = wi::scene::HumanoidComponent::HumanoidBone::Count;
 			wi::primitive::Capsule capsule;
 
-			~RigidBody()
+			// vehicle:
+			VehicleConstraint* vehicle_constraint = nullptr;
+			Vec3 prev_wheel_positions[4] = { Vec3::sZero(), Vec3::sZero(), Vec3::sZero(), Vec3::sZero() };
+			Quat prev_wheel_rotations[4] = { Quat::sIdentity(), Quat::sIdentity(), Quat::sIdentity(), Quat::sIdentity() };
+
+			void Delete()
 			{
 				if (physics_scene == nullptr || bodyID.IsInvalid())
 					return;
-				BodyInterface& body_interface = ((PhysicsScene*)physics_scene.get())->physics_system.GetBodyInterface(); // locking version because destructor can be called from any thread
+				PhysicsScene* jolt_physics_scene = (PhysicsScene*)physics_scene.get();
+				BodyInterface& body_interface = jolt_physics_scene->physics_system.GetBodyInterface(); // locking version because destructor can be called from any thread
 				body_interface.RemoveBody(bodyID);
 				body_interface.DestroyBody(bodyID);
+				bodyID = {};
+				if (vehicle_constraint != nullptr)
+				{
+					jolt_physics_scene->physics_system.RemoveStepListener(vehicle_constraint);
+					jolt_physics_scene->physics_system.RemoveConstraint(vehicle_constraint);
+					vehicle_constraint = nullptr;
+				}
+				shape = nullptr;
+			}
+
+			RigidBody()
+			{
+				start_deactivated = 0;
+				was_underwater = 0;
+				was_active_prev_frame = 0;
+				teleporting = 0;
+			}
+			~RigidBody()
+			{
+				Delete();
 			}
 		};
 		struct SoftBody
 		{
 			std::shared_ptr<void> physics_scene;
-			BodyID bodyID;
 			Entity entity = INVALID_ENTITY;
+			BodyID bodyID;
+			float friction = 0;
+			float restitution = 0;
 
 			SoftBodySharedSettings shared_settings;
 			wi::vector<XMFLOAT4X4> inverseBindMatrices;
@@ -294,6 +365,39 @@ namespace wi::physics
 				body_interface.DestroyBody(bodyID);
 			}
 		};
+		struct Constraint
+		{
+			std::shared_ptr<void> physics_scene;
+			Entity entity = INVALID_ENTITY;
+			Ref<TwoBodyConstraint> constraint;
+			BodyID body1_self;
+			BodyID body2_self;
+
+			// to detect the case when referenced rigidbody is deleted by someone:
+			BodyID body1_ref;
+			BodyID body2_ref;
+
+			~Constraint()
+			{
+				if (physics_scene == nullptr)
+					return;
+				if (constraint != nullptr)
+				{
+					((PhysicsScene*)physics_scene.get())->physics_system.RemoveConstraint(constraint);
+				}
+				BodyInterface& body_interface = ((PhysicsScene*)physics_scene.get())->physics_system.GetBodyInterface(); // locking version because destructor can be called from any thread
+				if (!body1_self.IsInvalid())
+				{
+					body_interface.RemoveBody(body1_self);
+					body_interface.DestroyBody(body1_self);
+				}
+				if (!body2_self.IsInvalid())
+				{
+					body_interface.RemoveBody(body2_self);
+					body_interface.DestroyBody(body2_self);
+				}
+			}
+		};
 
 		RigidBody& GetRigidBody(wi::scene::RigidBodyPhysicsComponent& physicscomponent)
 		{
@@ -301,6 +405,10 @@ namespace wi::physics
 			{
 				physicscomponent.physicsobject = std::make_shared<RigidBody>();
 			}
+			return *(RigidBody*)physicscomponent.physicsobject.get();
+		}
+		const RigidBody& GetRigidBody(const wi::scene::RigidBodyPhysicsComponent& physicscomponent)
+		{
 			return *(RigidBody*)physicscomponent.physicsobject.get();
 		}
 		SoftBody& GetSoftBody(wi::scene::SoftBodyPhysicsComponent& physicscomponent)
@@ -311,121 +419,63 @@ namespace wi::physics
 			}
 			return *(SoftBody*)physicscomponent.physicsobject.get();
 		}
+		const SoftBody& GetSoftBody(const wi::scene::SoftBodyPhysicsComponent& physicscomponent)
+		{
+			return *(SoftBody*)physicscomponent.physicsobject.get();
+		}
+		Constraint& GetConstraint(wi::scene::PhysicsConstraintComponent& physicscomponent)
+		{
+			if (physicscomponent.physicsobject == nullptr)
+			{
+				physicscomponent.physicsobject = std::make_shared<Constraint>();
+			}
+			return *(Constraint*)physicscomponent.physicsobject.get();
+		}
+		const Constraint& GetConstraint(const wi::scene::PhysicsConstraintComponent& physicscomponent)
+		{
+			return *(Constraint*)physicscomponent.physicsobject.get();
+		}
 
 		void AddRigidBody(
 			wi::scene::Scene& scene,
 			Entity entity,
 			wi::scene::RigidBodyPhysicsComponent& physicscomponent,
-			const wi::scene::TransformComponent& transform,
+			const wi::scene::TransformComponent& _transform,
 			const wi::scene::MeshComponent* mesh
 		)
 		{
-			ShapeSettings::ShapeResult shape_result;
+			RigidBody& physicsobject = GetRigidBody(physicscomponent);
 
-			// The default convex radius caused issues when creating small box shape, etc, so I decrease it:
-			const float convexRadius = 0.001f;
+			const bool refresh = physicsobject.bodyID.IsInvalid() == false;
+			physicsobject.Delete(); // if it was already existing, we handle recreation
 
-			switch (physicscomponent.shape)
-			{
-			case RigidBodyPhysicsComponent::CollisionShape::BOX:
-			{
-				BoxShapeSettings settings(Vec3(physicscomponent.box.halfextents.x * transform.scale_local.x, physicscomponent.box.halfextents.y * transform.scale_local.y, physicscomponent.box.halfextents.z * transform.scale_local.z), convexRadius);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			break;
-			case RigidBodyPhysicsComponent::CollisionShape::SPHERE:
-			{
-				SphereShapeSettings settings(physicscomponent.sphere.radius * transform.scale_local.x);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			break;
-			case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
-			{
-				CapsuleShapeSettings settings(physicscomponent.capsule.height * transform.scale_local.y, physicscomponent.capsule.radius * transform.scale_local.x);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			break;
-			case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
-			{
-				CylinderShapeSettings settings(physicscomponent.capsule.height * transform.scale_local.y, physicscomponent.capsule.radius * transform.scale_local.x, convexRadius);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			break;
+			TransformComponent transform = _transform;
 
-			case RigidBodyPhysicsComponent::CollisionShape::CONVEX_HULL:
-			if (mesh != nullptr)
-			{
-				Array<Vec3> points;
-				points.reserve(mesh->vertex_positions.size());
-				for (auto& pos : mesh->vertex_positions)
-				{
-					points.push_back(Vec3(pos.x * transform.scale_local.x, pos.y * transform.scale_local.y, pos.z * transform.scale_local.z));
-				}
-				ConvexHullShapeSettings settings(points, convexRadius);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			else
-			{
-				wi::backlog::post("AddRigidBody failed: convex hull physics requested, but no MeshComponent provided!", wi::backlog::LogLevel::Error);
-				return;
-			}
-			break;
+			scene.locker.lock();
+			XMMATRIX parentMatrix = scene.ComputeParentMatrixRecursive(entity);
+			scene.locker.unlock();
 
-			case RigidBodyPhysicsComponent::CollisionShape::TRIANGLE_MESH:
-			if (mesh != nullptr)
-			{
-				TriangleList trianglelist;
+			transform.ApplyTransform();
 
-				uint32_t first_subset = 0;
-				uint32_t last_subset = 0;
-				mesh->GetLODSubsetRange(physicscomponent.mesh_lod, first_subset, last_subset);
-				for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
-				{
-					const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
-					const uint32_t* indices = mesh->indices.data() + subset.indexOffset;
-					for (uint32_t i = 0; i < subset.indexCount; i += 3)
-					{
-						Triangle triangle;
-						triangle.mMaterialIndex = 0;
-						triangle.mV[0] = Float3(mesh->vertex_positions[indices[i + 0]].x * transform.scale_local.x, mesh->vertex_positions[indices[i + 0]].y * transform.scale_local.y, mesh->vertex_positions[indices[i + 0]].z * transform.scale_local.z);
-						triangle.mV[2] = Float3(mesh->vertex_positions[indices[i + 1]].x * transform.scale_local.x, mesh->vertex_positions[indices[i + 1]].y * transform.scale_local.y, mesh->vertex_positions[indices[i + 1]].z * transform.scale_local.z);
-						triangle.mV[1] = Float3(mesh->vertex_positions[indices[i + 2]].x * transform.scale_local.x, mesh->vertex_positions[indices[i + 2]].y * transform.scale_local.y, mesh->vertex_positions[indices[i + 2]].z * transform.scale_local.z);
-						trianglelist.push_back(triangle);
-					}
-				}
-
-				MeshShapeSettings settings(trianglelist);
-				settings.SetEmbedded();
-				shape_result = settings.Create();
-			}
-			else
+			if (mesh != nullptr && mesh->precomputed_rigidbody_physics_shape.physicsobject != nullptr)
 			{
-				wi::backlog::post("AddRigidBody failed: triangle mesh physics requested, but no MeshComponent provided!", wi::backlog::LogLevel::Error);
-				return;
-			}
-			break;
+				// The shape comes from mesh's precomputed shape:
+				const RigidBody& precomputed_rigidbody_with_shape = GetRigidBody(mesh->precomputed_rigidbody_physics_shape);
+				physicsobject.shape = precomputed_rigidbody_with_shape.shape;
 			}
 
-			if (!shape_result.IsValid())
+			if (physicsobject.shape == nullptr) // shape creation can be called from outside as optimization from threads
 			{
-				char text[1024] = {};
-				snprintf(text, arraysize(text), "AddRigidBody failed, shape_result: %s", shape_result.GetError().c_str());
-				wi::backlog::post(text, wi::backlog::LogLevel::Error);
-				return;
+				CreateRigidBodyShape(physicscomponent, transform.scale_local, mesh);
 			}
-			else
+
+			if (physicsobject.shape != nullptr)
 			{
-				RigidBody& physicsobject = GetRigidBody(physicscomponent);
 				physicsobject.physics_scene = scene.physics_scene;
 				physicsobject.entity = entity;
+				XMStoreFloat4x4(&physicsobject.parentMatrix, parentMatrix);
+				XMStoreFloat4x4(&physicsobject.parentMatrixInverse, XMMatrixInverse(nullptr, parentMatrix));
 				PhysicsScene& physics_scene = GetPhysicsScene(scene);
-
-				physicsobject.shape = shape_result.Get();
 
 				Mat44 mat = cast(transform.world);
 				Vec3 local_offset = cast(physicscomponent.local_offset);
@@ -435,6 +485,13 @@ namespace wi::physics
 
 				physicsobject.prev_position = mat.GetTranslation();
 				physicsobject.prev_rotation = mat.GetQuaternion().Normalized();
+
+				if (!refresh)
+				{
+					// only set initial orientation when created for the first time:
+					physicsobject.initial_position = physicsobject.prev_position;
+					physicsobject.initial_rotation = physicsobject.prev_rotation;
+				}
 
 				const EMotionType motionType = physicscomponent.mass == 0 ? EMotionType::Static : (physicscomponent.IsKinematic() ? EMotionType::Kinematic : EMotionType::Dynamic);
 
@@ -461,25 +518,329 @@ namespace wi::physics
 				settings.mAllowSleeping = !physicscomponent.IsDisableDeactivation();
 				settings.mMotionQuality = cMotionQuality;
 				settings.mUserData = (uint64_t)&physicsobject;
+				if (motionType == EMotionType::Static)
+				{
+					settings.mObjectLayer = Layers::NON_MOVING;
+				}
+
+				physicsobject.friction = settings.mFriction;
+				physicsobject.restitution = settings.mRestitution;
+				physicsobject.motiontype = settings.mMotionType;
+
+				physicsobject.start_deactivated = physicscomponent.IsStartDeactivated();
+				const EActivation activation = physicsobject.start_deactivated ? EActivation::DontActivate : EActivation::Activate;
 
 				BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking version because this is called from job system!
-
-				const EActivation activation = physicscomponent.IsStartDeactivated() ? EActivation::DontActivate : EActivation::Activate;
-
-				physicsobject.bodyID = body_interface.CreateAndAddBody(settings, activation);
-				if (physicsobject.bodyID.IsInvalid())
+				Body* body = body_interface.CreateBody(settings);
+				if (body == nullptr || body->GetID().IsInvalid())
 				{
 					wi::backlog::post("AddRigidBody failed: body couldn't be created! This could mean that there are too many physics objects.", wi::backlog::LogLevel::Error);
 					return;
 				}
+				physicsobject.bodyID = body->GetID();
+				body_interface.AddBody(physicsobject.bodyID, activation);
 
-				if (motionType == EMotionType::Dynamic)
+				body->SetUserData((uint64_t)&physicsobject);
+
+				// Vehicle const settings:
+				static constexpr bool	sAntiRollbar = true;
+				static constexpr bool	sLimitedSlipDifferentials = true;
+				static constexpr float	sFrontCasterAngle = 0.0f;
+				static constexpr float	sFrontKingPinAngle = 0.0f;
+				static constexpr float	sFrontCamber = 0.0f;
+				static constexpr float	sFrontToe = 0.0f;
+				static constexpr float	sFrontSuspensionForwardAngle = 0.0f;
+				static constexpr float	sFrontSuspensionSidewaysAngle = 0.0f;
+				static constexpr float	sRearSuspensionForwardAngle = 0.0f;
+				static constexpr float	sRearSuspensionSidewaysAngle = 0.0f;
+				static constexpr float	sRearCasterAngle = 0.0f;
+				static constexpr float	sRearKingPinAngle = 0.0f;
+				static constexpr float	sRearCamber = 0.0f;
+				static constexpr float	sRearToe = 0.0f;
+
+				if (physicscomponent.IsCar())
 				{
-					// We must detach dynamic objects, because their physics object is created in world space
-					//	and attachment would apply double transformation to the transform
-					scene.locker.lock();
-					scene.Component_Detach(entity);
-					scene.locker.unlock();
+					const float wheel_radius = physicscomponent.vehicle.wheel_radius;
+					const float wheel_width = physicscomponent.vehicle.wheel_width;
+					const float half_vehicle_length = physicscomponent.vehicle.chassis_half_length;
+					const float half_vehicle_width = physicscomponent.vehicle.chassis_half_width;
+					const float half_vehicle_height = physicscomponent.vehicle.chassis_half_height;
+					const float front_wheel_offset = physicscomponent.vehicle.front_wheel_offset;
+					const float rear_wheel_offset = physicscomponent.vehicle.rear_wheel_offset;
+					const bool four_wheel_drive = physicscomponent.vehicle.car.four_wheel_drive;
+					const float max_engine_torque = physicscomponent.vehicle.max_engine_torque;
+					const float clutch_strength = physicscomponent.vehicle.clutch_strength;
+
+					const float	sFrontSuspensionMinLength = physicscomponent.vehicle.front_suspension.min_length;
+					const float	sFrontSuspensionMaxLength = physicscomponent.vehicle.front_suspension.max_length;
+					const float	sFrontSuspensionFrequency = physicscomponent.vehicle.front_suspension.frequency;
+					const float	sFrontSuspensionDamping = physicscomponent.vehicle.front_suspension.damping;
+
+					const float	sRearSuspensionMinLength = physicscomponent.vehicle.rear_suspension.min_length;
+					const float	sRearSuspensionMaxLength = physicscomponent.vehicle.rear_suspension.max_length;
+					const float	sRearSuspensionFrequency = physicscomponent.vehicle.rear_suspension.frequency;
+					const float	sRearSuspensionDamping = physicscomponent.vehicle.rear_suspension.damping;
+
+					const float	sMaxRollAngle = physicscomponent.vehicle.max_roll_angle;
+					const float	sMaxSteeringAngle = physicscomponent.vehicle.max_steering_angle;
+
+					// Create collision testers
+					VehicleCollisionTester* vehicle_tester = nullptr;
+					switch (physicscomponent.vehicle.collision_mode)
+					{
+					default:
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Ray:
+						vehicle_tester = new VehicleCollisionTesterRay(Layers::MOVING);
+						break;
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Sphere:
+						vehicle_tester = new VehicleCollisionTesterCastSphere(Layers::MOVING, 0.5f * wheel_width);
+						break;
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Cylinder:
+						vehicle_tester = new VehicleCollisionTesterCastCylinder(Layers::MOVING);
+						break;
+					}
+
+					// Create vehicle constraint
+					VehicleConstraintSettings vehicle;
+					vehicle.mDrawConstraintSize = 0.1f;
+					vehicle.mMaxPitchRollAngle = sMaxRollAngle;
+
+					// Suspension direction
+					Vec3 front_suspension_dir = Vec3(Tan(sFrontSuspensionSidewaysAngle), -1, Tan(sFrontSuspensionForwardAngle)).Normalized();
+					Vec3 front_steering_axis = Vec3(-Tan(sFrontKingPinAngle), 1, -Tan(sFrontCasterAngle)).Normalized();
+					Vec3 front_wheel_up = Vec3(Sin(sFrontCamber), Cos(sFrontCamber), 0);
+					Vec3 front_wheel_forward = Vec3(-Sin(sFrontToe), 0, Cos(sFrontToe));
+					Vec3 rear_suspension_dir = Vec3(Tan(sRearSuspensionSidewaysAngle), -1, Tan(sRearSuspensionForwardAngle)).Normalized();
+					Vec3 rear_steering_axis = Vec3(-Tan(sRearKingPinAngle), 1, -Tan(sRearCasterAngle)).Normalized();
+					Vec3 rear_wheel_up = Vec3(Sin(sRearCamber), Cos(sRearCamber), 0);
+					Vec3 rear_wheel_forward = Vec3(-Sin(sRearToe), 0, Cos(sRearToe));
+					Vec3 flip_x(-1, 1, 1);
+
+					// Wheels, left front
+					WheelSettingsWV* w1 = new WheelSettingsWV;
+					w1->mPosition = Vec3(-half_vehicle_width, half_vehicle_height, half_vehicle_length + front_wheel_offset);
+					w1->mSuspensionDirection = front_suspension_dir;
+					w1->mSteeringAxis = front_steering_axis;
+					w1->mWheelUp = front_wheel_up;
+					w1->mWheelForward = front_wheel_forward;
+					w1->mSuspensionMinLength = sFrontSuspensionMinLength;
+					w1->mSuspensionMaxLength = sFrontSuspensionMaxLength;
+					w1->mSuspensionSpring.mFrequency = sFrontSuspensionFrequency;
+					w1->mSuspensionSpring.mDamping = sFrontSuspensionDamping;
+					w1->mMaxSteerAngle = sMaxSteeringAngle;
+					w1->mMaxHandBrakeTorque = 0.0f; // Front wheel doesn't have hand brake
+
+					// Right front
+					WheelSettingsWV* w2 = new WheelSettingsWV;
+					w2->mPosition = Vec3(half_vehicle_width, half_vehicle_height, half_vehicle_length + front_wheel_offset);
+					w2->mSuspensionDirection = flip_x * front_suspension_dir;
+					w2->mSteeringAxis = flip_x * front_steering_axis;
+					w2->mWheelUp = flip_x * front_wheel_up;
+					w2->mWheelForward = flip_x * front_wheel_forward;
+					w2->mSuspensionMinLength = sFrontSuspensionMinLength;
+					w2->mSuspensionMaxLength = sFrontSuspensionMaxLength;
+					w2->mSuspensionSpring.mFrequency = sFrontSuspensionFrequency;
+					w2->mSuspensionSpring.mDamping = sFrontSuspensionDamping;
+					w2->mMaxSteerAngle = sMaxSteeringAngle;
+					w2->mMaxHandBrakeTorque = 0.0f; // Front wheel doesn't have hand brake
+
+					// Left rear
+					WheelSettingsWV* w3 = new WheelSettingsWV;
+					w3->mPosition = Vec3(-half_vehicle_width, half_vehicle_height, -half_vehicle_length + rear_wheel_offset);
+					w3->mSuspensionDirection = rear_suspension_dir;
+					w3->mSteeringAxis = rear_steering_axis;
+					w3->mWheelUp = rear_wheel_up;
+					w3->mWheelForward = rear_wheel_forward;
+					w3->mSuspensionMinLength = sRearSuspensionMinLength;
+					w3->mSuspensionMaxLength = sRearSuspensionMaxLength;
+					w3->mSuspensionSpring.mFrequency = sRearSuspensionFrequency;
+					w3->mSuspensionSpring.mDamping = sRearSuspensionDamping;
+					w3->mMaxSteerAngle = 0.0f;
+
+					// Right rear
+					WheelSettingsWV* w4 = new WheelSettingsWV;
+					w4->mPosition = Vec3(half_vehicle_width, half_vehicle_height, -half_vehicle_length + rear_wheel_offset);
+					w4->mSuspensionDirection = flip_x * rear_suspension_dir;
+					w4->mSteeringAxis = flip_x * rear_steering_axis;
+					w4->mWheelUp = flip_x * rear_wheel_up;
+					w4->mWheelForward = flip_x * rear_wheel_forward;
+					w4->mSuspensionMinLength = sRearSuspensionMinLength;
+					w4->mSuspensionMaxLength = sRearSuspensionMaxLength;
+					w4->mSuspensionSpring.mFrequency = sRearSuspensionFrequency;
+					w4->mSuspensionSpring.mDamping = sRearSuspensionDamping;
+					w4->mMaxSteerAngle = 0.0f;
+
+					vehicle.mWheels = { w1, w2, w3, w4 };
+
+					for (WheelSettings* w : vehicle.mWheels)
+					{
+						w->mRadius = wheel_radius;
+						w->mWidth = wheel_width;
+					}
+
+					WheeledVehicleControllerSettings* controller_settings = new WheeledVehicleControllerSettings;
+
+					controller_settings->mEngine.mMaxTorque = max_engine_torque;
+					controller_settings->mTransmission.mClutchStrength = clutch_strength;
+
+					// Set slip ratios to the same for everything
+					float limited_slip_ratio = sLimitedSlipDifferentials ? 1.4f : FLT_MAX;
+					controller_settings->mDifferentialLimitedSlipRatio = limited_slip_ratio;
+					for (auto& diff : controller_settings->mDifferentials)
+					{
+						diff.mLimitedSlipRatio = limited_slip_ratio;
+					}
+
+					vehicle.mController = controller_settings;
+
+					// Differential
+					controller_settings->mDifferentials.resize(four_wheel_drive ? 2 : 1);
+					controller_settings->mDifferentials[0].mLeftWheel = 0;
+					controller_settings->mDifferentials[0].mRightWheel = 1;
+					if (four_wheel_drive)
+					{
+						controller_settings->mDifferentials[1].mLeftWheel = 2;
+						controller_settings->mDifferentials[1].mRightWheel = 3;
+
+						// Split engine torque
+						controller_settings->mDifferentials[0].mEngineTorqueRatio = controller_settings->mDifferentials[1].mEngineTorqueRatio = 0.5f;
+					}
+
+					// Anti rollbars
+					if (sAntiRollbar)
+					{
+						vehicle.mAntiRollBars.resize(2);
+						vehicle.mAntiRollBars[0].mLeftWheel = 0;
+						vehicle.mAntiRollBars[0].mRightWheel = 1;
+						vehicle.mAntiRollBars[1].mLeftWheel = 2;
+						vehicle.mAntiRollBars[1].mRightWheel = 3;
+					}
+
+					physicsobject.vehicle_constraint = new VehicleConstraint(*body, vehicle);
+					physicsobject.vehicle_constraint->SetVehicleCollisionTester(vehicle_tester);
+
+					// The vehicle settings were tweaked with a buggy implementation of the longitudinal tire impulses, this meant that PhysicsSettings::mNumVelocitySteps times more impulse
+					// could be applied than intended. To keep the behavior of the vehicle the same we increase the max longitudinal impulse by the same factor. In a future version the vehicle
+					// will be retweaked.
+					static_cast<WheeledVehicleController*>(physicsobject.vehicle_constraint->GetController())->SetTireMaxImpulseCallback([](uint, float& outLongitudinalImpulse, float& outLateralImpulse, float inSuspensionImpulse, float inLongitudinalFriction, float inLateralFriction, float, float, float) {
+						outLongitudinalImpulse = 10.0f * inLongitudinalFriction * inSuspensionImpulse;
+						outLateralImpulse = inLateralFriction * inSuspensionImpulse;
+					});
+
+					physics_scene.physics_system.AddConstraint(physicsobject.vehicle_constraint);
+					physics_scene.physics_system.AddStepListener(physicsobject.vehicle_constraint);
+				}
+				else if (physicscomponent.IsMotorcycle())
+				{
+					const float max_engine_torque = physicscomponent.vehicle.max_engine_torque;
+					const float clutch_strength = physicscomponent.vehicle.clutch_strength;
+
+					const float back_wheel_radius = physicscomponent.vehicle.wheel_radius;
+					const float back_wheel_width = physicscomponent.vehicle.wheel_width;
+					const float back_wheel_pos_z = -physicscomponent.vehicle.chassis_half_length + physicscomponent.vehicle.rear_wheel_offset;
+					const float back_suspension_min_length = physicscomponent.vehicle.rear_suspension.min_length;
+					const float back_suspension_max_length = physicscomponent.vehicle.rear_suspension.max_length;
+					const float back_suspension_freq = physicscomponent.vehicle.rear_suspension.frequency;
+					const float back_brake_torque = physicscomponent.vehicle.motorcycle.rear_brake_torque;
+
+					const float front_wheel_radius = physicscomponent.vehicle.wheel_radius;
+					const float front_wheel_width = physicscomponent.vehicle.wheel_width;
+					const float front_wheel_pos_z = physicscomponent.vehicle.chassis_half_length + physicscomponent.vehicle.front_wheel_offset;
+					const float front_suspension_min_length = physicscomponent.vehicle.front_suspension.min_length;
+					const float front_suspension_max_length = physicscomponent.vehicle.front_suspension.max_length;
+					const float front_suspension_freq = physicscomponent.vehicle.front_suspension.frequency;
+					const float front_brake_torque = physicscomponent.vehicle.motorcycle.front_brake_torque;
+					const float half_vehicle_height = physicscomponent.vehicle.chassis_half_height;
+
+					const float max_steering_angle = physicscomponent.vehicle.max_steering_angle;
+
+					const float caster_angle = physicscomponent.vehicle.motorcycle.front_suspension_angle;
+
+					const float	sMaxRollAngle = physicscomponent.vehicle.max_roll_angle;
+
+					const bool sOverrideFrontSuspensionForcePoint = false;	///< If true, the front suspension force point is overridden
+					const bool sOverrideRearSuspensionForcePoint = false;	///< If true, the rear suspension force point is overridden
+
+					// Create collision testers
+					VehicleCollisionTester* vehicle_tester = nullptr;
+					switch (physicscomponent.vehicle.collision_mode)
+					{
+					default:
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Ray:
+						vehicle_tester = new VehicleCollisionTesterRay(Layers::MOVING);
+						break;
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Sphere:
+						vehicle_tester = new VehicleCollisionTesterCastSphere(Layers::MOVING, 0.5f * std::max(back_wheel_radius, front_wheel_radius));
+						break;
+					case RigidBodyPhysicsComponent::Vehicle::CollisionMode::Cylinder:
+						vehicle_tester = new VehicleCollisionTesterCastCylinder(Layers::MOVING);
+						break;
+					}
+
+					// Create vehicle constraint
+					VehicleConstraintSettings vehicle;
+					vehicle.mDrawConstraintSize = 0.1f;
+					vehicle.mMaxPitchRollAngle = sMaxRollAngle;
+
+					// Wheels
+					WheelSettingsWV* front = new WheelSettingsWV;
+					front->mPosition = Vec3(0.0f, half_vehicle_height, front_wheel_pos_z);
+					front->mMaxSteerAngle = max_steering_angle;
+					front->mSuspensionDirection = Vec3(0, -1, Tan(caster_angle)).Normalized();
+					front->mSteeringAxis = -front->mSuspensionDirection;
+					front->mRadius = front_wheel_radius;
+					front->mWidth = front_wheel_width;
+					front->mSuspensionMinLength = front_suspension_min_length;
+					front->mSuspensionMaxLength = front_suspension_max_length;
+					front->mSuspensionSpring.mFrequency = front_suspension_freq;
+					front->mMaxBrakeTorque = front_brake_torque;
+
+					WheelSettingsWV* back = new WheelSettingsWV;
+					back->mPosition = Vec3(0.0f, half_vehicle_height, back_wheel_pos_z);
+					back->mMaxSteerAngle = 0.0f;
+					back->mRadius = back_wheel_radius;
+					back->mWidth = back_wheel_width;
+					back->mSuspensionMinLength = back_suspension_min_length;
+					back->mSuspensionMaxLength = back_suspension_max_length;
+					back->mSuspensionSpring.mFrequency = back_suspension_freq;
+					back->mMaxBrakeTorque = back_brake_torque;
+
+					if (sOverrideFrontSuspensionForcePoint)
+					{
+						front->mEnableSuspensionForcePoint = true;
+						front->mSuspensionForcePoint = front->mPosition + front->mSuspensionDirection * front->mSuspensionMinLength;
+					}
+
+					if (sOverrideRearSuspensionForcePoint)
+					{
+						back->mEnableSuspensionForcePoint = true;
+						back->mSuspensionForcePoint = back->mPosition + back->mSuspensionDirection * back->mSuspensionMinLength;
+					}
+
+					vehicle.mWheels = { front, back };
+
+					MotorcycleControllerSettings* controller = new MotorcycleControllerSettings;
+					controller->mEngine.mMaxTorque = max_engine_torque;
+					controller->mEngine.mMinRPM = 1000.0f;
+					controller->mEngine.mMaxRPM = 10000.0f;
+					controller->mTransmission.mShiftDownRPM = 2000.0f;
+					controller->mTransmission.mShiftUpRPM = 8000.0f;
+					controller->mTransmission.mGearRatios = { 2.27f, 1.63f, 1.3f, 1.09f, 0.96f, 0.88f }; // From: https://www.blocklayer.com/rpm-gear-bikes
+					controller->mTransmission.mReverseGearRatios = { -4.0f };
+					controller->mTransmission.mClutchStrength = clutch_strength;
+					//controller->mMaxLeanAngle = sMaxRollAngle;
+					vehicle.mController = controller;
+
+					// Differential (not really applicable to a motorcycle but we need one anyway to drive it)
+					controller->mDifferentials.resize(1);
+					controller->mDifferentials[0].mLeftWheel = -1;
+					controller->mDifferentials[0].mRightWheel = 1;
+					controller->mDifferentials[0].mDifferentialRatio = 1.93f * 40.0f / 16.0f; // Combining primary and final drive (back divided by front sprockets) from: https://www.blocklayer.com/rpm-gear-bikes
+
+					physicsobject.vehicle_constraint = new VehicleConstraint(*body, vehicle);
+					physicsobject.vehicle_constraint->SetVehicleCollisionTester(vehicle_tester);
+					physics_scene.physics_system.AddConstraint(physicsobject.vehicle_constraint);
+					physics_scene.physics_system.AddStepListener(physicsobject.vehicle_constraint);
 				}
 			}
 		}
@@ -565,6 +926,9 @@ namespace wi::physics
 			settings.mAllowSleeping = !physicscomponent.IsDisableDeactivation();
 			settings.mUserData = (uint64_t)&physicsobject;
 
+			physicsobject.friction = settings.mFriction;
+			physicsobject.restitution = settings.mRestitution;
+
 			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking version because this is called from job system!
 
 			physicsobject.bodyID = body_interface.CreateAndAddSoftBody(settings, EActivation::Activate);
@@ -574,6 +938,183 @@ namespace wi::physics
 				wi::backlog::post("AddSoftBody failed: body couldn't be created! This could mean that there are too many physics objects.", wi::backlog::LogLevel::Error);
 				return;
 			}
+		}
+		void AddConstraint(
+			wi::scene::Scene& scene,
+			Entity entity,
+			wi::scene::PhysicsConstraintComponent& physicscomponent,
+			const wi::scene::TransformComponent& transform
+		)
+		{
+			Constraint& physicsobject = GetConstraint(physicscomponent);
+			physicsobject.physics_scene = scene.physics_scene;
+			PhysicsScene& physics_scene = GetPhysicsScene(scene);
+			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface();
+
+			Body* body1 = nullptr;
+			Body* body2 = nullptr;
+
+			const RigidBodyPhysicsComponent* rigidbodyA = scene.rigidbodies.GetComponent(physicscomponent.bodyA);
+			if (rigidbodyA == nullptr || rigidbodyA->physicsobject == nullptr)
+			{
+				body1 = body_interface.CreateBody(BodyCreationSettings(new SphereShape(0.01f), cast(transform.GetPosition()), cast(transform.GetRotation()).Normalized(), EMotionType::Kinematic, Layers::GHOST));
+				physicsobject.body1_self = body1->GetID();
+				body_interface.AddBody(physicsobject.body1_self, EActivation::Activate);
+			}
+			else
+			{
+				const RigidBody& rb = GetRigidBody(*rigidbodyA);
+				BodyLockWrite lock(physics_scene.physics_system.GetBodyLockInterface(), rb.bodyID);
+				if (!lock.Succeeded())
+				{
+					wilog_error("AddConstraint error: bodyA lock did not succeed!");
+					return;
+				}
+				Body& body = lock.GetBody();
+				body1 = &body;
+				physicsobject.body1_ref = rb.bodyID;
+			}
+
+			const RigidBodyPhysicsComponent* rigidbodyB = scene.rigidbodies.GetComponent(physicscomponent.bodyB);
+			if (rigidbodyB == nullptr || rigidbodyB->physicsobject == nullptr)
+			{
+				body2 = body_interface.CreateBody(BodyCreationSettings(new SphereShape(0.01f), cast(transform.GetPosition()), cast(transform.GetRotation()).Normalized(), EMotionType::Kinematic, Layers::GHOST));
+				physicsobject.body2_self = body2->GetID();
+				body_interface.AddBody(physicsobject.body2_self, EActivation::Activate);
+			}
+			else
+			{
+				const RigidBody& rb = GetRigidBody(*rigidbodyB);
+				BodyLockWrite lock(physics_scene.physics_system.GetBodyLockInterface(), rb.bodyID);
+				if (!lock.Succeeded())
+				{
+					wilog_error("AddConstraint error: bodyB lock did not succeed!");
+					return;
+				}
+				Body& body = lock.GetBody();
+				body2 = &body;
+				physicsobject.body2_ref = rb.bodyID;
+			}
+
+			if (physicscomponent.type == PhysicsConstraintComponent::Type::Fixed)
+			{
+				FixedConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::Point)
+			{
+				PointConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::Distance)
+			{
+				DistanceConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				settings.mMinDistance = physicscomponent.distance_constraint.min_distance;
+				settings.mMinDistance = physicscomponent.distance_constraint.max_distance;
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::Hinge)
+			{
+				HingeConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				settings.mHingeAxis1 = settings.mHingeAxis2 = cast(transform.GetUp()).Normalized();
+				settings.mNormalAxis1 = settings.mNormalAxis2 = cast(transform.GetRight()).Normalized();
+				settings.mLimitsMin = physicscomponent.hinge_constraint.min_angle;
+				settings.mLimitsMax = physicscomponent.hinge_constraint.max_angle;
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::Cone)
+			{
+				ConeConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				settings.mTwistAxis1 = settings.mTwistAxis2 = cast(transform.GetRight()).Normalized();
+				settings.mHalfConeAngle = physicscomponent.cone_constraint.half_cone_angle;
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::SixDOF)
+			{
+				SixDOFConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPosition1 = settings.mPosition2 = cast(transform.GetPosition());
+				settings.mAxisX1 = settings.mAxisX2 = cast(transform.GetRight()).Normalized();
+				settings.mAxisY1 = settings.mAxisY2 = cast(transform.GetUp()).Normalized();
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::TranslationX] = physicscomponent.six_dof.minTranslationAxes.x;
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::TranslationY] = physicscomponent.six_dof.minTranslationAxes.y;
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::TranslationZ] = physicscomponent.six_dof.minTranslationAxes.z;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::TranslationX] = physicscomponent.six_dof.maxTranslationAxes.x;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::TranslationY] = physicscomponent.six_dof.maxTranslationAxes.y;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::TranslationZ] = physicscomponent.six_dof.maxTranslationAxes.z;
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::RotationX] = physicscomponent.six_dof.minRotationAxes.x;
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::RotationY] = physicscomponent.six_dof.minRotationAxes.y;
+				settings.mLimitMin[SixDOFConstraintSettings::EAxis::RotationZ] = physicscomponent.six_dof.minRotationAxes.z;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::RotationX] = physicscomponent.six_dof.maxRotationAxes.x;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::RotationY] = physicscomponent.six_dof.maxRotationAxes.y;
+				settings.mLimitMax[SixDOFConstraintSettings::EAxis::RotationZ] = physicscomponent.six_dof.maxRotationAxes.z;
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::SwingTwist)
+			{
+				SwingTwistConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPosition1 = settings.mPosition2 = cast(transform.GetPosition());
+				settings.mTwistAxis1 = settings.mTwistAxis2 = cast(transform.GetRight()).Normalized();
+				settings.mPlaneAxis1 = settings.mPlaneAxis2 = cast(transform.GetUp()).Normalized();
+				settings.mNormalHalfConeAngle = physicscomponent.swing_twist.normal_half_cone_angle;
+				settings.mPlaneHalfConeAngle = physicscomponent.swing_twist.plane_half_cone_angle;
+				settings.mTwistMinAngle = physicscomponent.swing_twist.min_twist_angle;
+				settings.mTwistMaxAngle = physicscomponent.swing_twist.max_twist_angle;
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else if (physicscomponent.type == PhysicsConstraintComponent::Type::Slider)
+			{
+				SliderConstraintSettings settings;
+				settings.mSpace = EConstraintSpace::WorldSpace;
+				settings.mPoint1 = settings.mPoint2 = cast(transform.GetPosition());
+				settings.mSliderAxis1 = settings.mSliderAxis2 = cast(transform.GetRight()).Normalized();
+				settings.mNormalAxis1 = settings.mNormalAxis2 = cast(transform.GetUp()).Normalized();
+				physicsobject.constraint = settings.Create(*body1, *body2);
+			}
+			else
+			{
+				wilog("Constraint creation failed: constraint type is not valid!");
+				return;
+			}
+
+			if (physicsobject.constraint == nullptr)
+			{
+				wilog("Constraint creation failed: constraint is not valid!");
+				return;
+			}
+
+			if (physicscomponent.IsDisableSelfCollision())
+			{
+				uint32_t groupID = collisionGroupID.fetch_add(1);
+				body1->GetCollisionGroup().SetGroupID(groupID);
+				body1->GetCollisionGroup().SetSubGroupID(0);
+				body2->GetCollisionGroup().SetGroupID(groupID);
+				body2->GetCollisionGroup().SetSubGroupID(1);
+
+				Ref<GroupFilterTable> group_filter = new GroupFilterTable(2);
+				group_filter->DisableCollision(0, 1);
+				body1->GetCollisionGroup().SetGroupFilter(group_filter);
+				body2->GetCollisionGroup().SetGroupFilter(group_filter);
+			}
+			else
+			{
+				body1->GetCollisionGroup().SetGroupFilter(nullptr);
+				body2->GetCollisionGroup().SetGroupFilter(nullptr);
+			}
+
+			physics_scene.physics_system.AddConstraint(physicsobject.constraint);
+			physicscomponent.SetRefreshParametersNeeded(true); // motors will be refreshed
 		}
 
 		struct Ragdoll
@@ -596,6 +1137,9 @@ namespace wi::physics
 				BODYPART_RIGHT_UPPER_ARM,
 				BODYPART_RIGHT_LOWER_ARM,
 
+				BODYPART_LEFT_FOOT,
+				BODYPART_RIGHT_FOOT,
+
 				BODYPART_COUNT
 			};
 
@@ -607,6 +1151,8 @@ namespace wi::physics
 			Ref<JPH::Ragdoll> ragdoll;
 			bool state_active = false;
 			float scale = 1;
+			Vec3 prev_capsule_position[BODYPART_COUNT] = {};
+			Quat prev_capsule_rotation[BODYPART_COUNT] = {};
 
 			Ragdoll(Scene& scene, HumanoidComponent& humanoid, Entity humanoidEntity, float scale)
 			{
@@ -702,10 +1248,20 @@ namespace wi::physics
 						entityA = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightLowerArm];
 						entityB = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightHand];
 						break;
+					case BODYPART_LEFT_FOOT:
+						humanoid_bone = HumanoidComponent::HumanoidBone::LeftFoot;
+						entityA = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::LeftFoot];
+						entityB = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::LeftToes];
+						break;
+					case BODYPART_RIGHT_FOOT:
+						humanoid_bone = HumanoidComponent::HumanoidBone::RightFoot;
+						entityA = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightFoot];
+						entityB = humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightToes];
+						break;
 					}
 					if (entityA == INVALID_ENTITY)
 					{
-						wi::backlog::post("Ragdoll creation aborted because humanoid has a missing required bone.", wi::backlog::LogLevel::Warning);
+						wilog_warning("Ragdoll creation aborted because of a missing body part: %d", c);
 						return;
 					}
 
@@ -762,6 +1318,10 @@ namespace wi::physics
 							capsule_radius = capsule_height * 0.15f * humanoid.ragdoll_fatness;
 							capsule_height -= capsule_radius;
 							break;
+						case BODYPART_LEFT_FOOT:
+						case BODYPART_RIGHT_FOOT:
+							capsule_radius = capsule_height * 0.3f * humanoid.ragdoll_fatness;
+							break;
 						default:
 							capsule_radius = capsule_height * 0.2f * humanoid.ragdoll_fatness;
 							capsule_height -= capsule_radius * 2;
@@ -791,6 +1351,11 @@ namespace wi::physics
 					case BODYPART_RIGHT_LOWER_ARM:
 						physicsobject.capsule = wi::primitive::Capsule(XMFLOAT3(-capsule_height * 0.5f - capsule_radius, 0, 0), XMFLOAT3(capsule_height * 0.5f + capsule_radius, 0, 0), capsule_radius);
 						rtshape_settings.mRotation = Quat::sRotation(Vec3::sAxisZ(), 0.5f * JPH_PI).Normalized();
+						break;
+					case BODYPART_LEFT_FOOT:
+					case BODYPART_RIGHT_FOOT:
+						physicsobject.capsule = wi::primitive::Capsule(XMFLOAT3(0, 0, -capsule_height * 0.5f - capsule_radius), XMFLOAT3(0, 0, capsule_height * 0.5f + capsule_radius), capsule_radius);
+						rtshape_settings.mRotation = Quat::sRotation(Vec3::sAxisX(), 0.5f * JPH_PI).Normalized();
 						break;
 					default:
 						physicsobject.capsule = wi::primitive::Capsule(XMFLOAT3(0, -capsule_height * 0.5f - capsule_radius, 0), XMFLOAT3(0, capsule_height * 0.5f + capsule_radius, 0), capsule_radius);
@@ -826,6 +1391,10 @@ namespace wi::physics
 					case BODYPART_RIGHT_UPPER_ARM:
 					case BODYPART_RIGHT_LOWER_ARM:
 						local_offset = Vec3(offset * facing, 0, 0);
+						break;
+					case BODYPART_LEFT_FOOT:
+					case BODYPART_RIGHT_FOOT:
+						local_offset = Vec3(0, XMVectorGetY(rootB - rootA), capsule_height * 0.5f * facing);
 						break;
 					default:
 						break;
@@ -863,6 +1432,8 @@ namespace wi::physics
 					final_transforms[c] = Mat44::sTranslation(cast(tra)) * Mat44::sRotation(cast(rot));
 					physicsobject.prev_position = final_transforms[c].GetTranslation();
 					physicsobject.prev_rotation = final_transforms[c].GetQuaternion().Normalized();
+					physicsobject.initial_position = physicsobject.prev_position;
+					physicsobject.initial_rotation = physicsobject.prev_rotation;
 					final_transforms[c] = final_transforms[c] * physicsobject.restBasisInverse;
 					final_transforms[c] = final_transforms[c] * physicsobject.additionalTransform;
 				}
@@ -883,6 +1454,8 @@ namespace wi::physics
 				bodyparts[BODYPART_LEFT_LOWER_ARM] = skeleton.AddJoint("LowerArmL", bodyparts[BODYPART_LEFT_UPPER_ARM]);
 				bodyparts[BODYPART_RIGHT_UPPER_ARM] = skeleton.AddJoint("UpperArmR", bodyparts[BODYPART_SPINE]);
 				bodyparts[BODYPART_RIGHT_LOWER_ARM] = skeleton.AddJoint("LowerArmR", bodyparts[BODYPART_RIGHT_UPPER_ARM]);
+				bodyparts[BODYPART_LEFT_FOOT] = skeleton.AddJoint("FootL", bodyparts[BODYPART_LEFT_LOWER_LEG]);
+				bodyparts[BODYPART_RIGHT_FOOT] = skeleton.AddJoint("FootR", bodyparts[BODYPART_RIGHT_LOWER_LEG]);
 
 				// Constraint limits
 				const float twist_angle[] = {
@@ -897,6 +1470,8 @@ namespace wi::physics
 					45.0f,		// Lower Arm L
 					45.0f,		// Upper Arm R
 					45.0f,		// Lower Arm R
+					20.0f,		// Foot L
+					20.0f,		// Foot R
 				};
 
 				const float normal_angle[] = {
@@ -911,6 +1486,8 @@ namespace wi::physics
 					0.0f,		// Lower Arm L
 					90.0f,		// Upper Arm R
 					0.0f,		// Lower Arm R
+					20.0f,		// Foot L
+					20.0f,		// Foot R
 				};
 
 				const float plane_angle[] = {
@@ -925,6 +1502,8 @@ namespace wi::physics
 					90.0f,		// Lower Arm L
 					45.0f,		// Upper Arm R
 					90.0f,		// Lower Arm R
+					20.0f,		// Foot L
+					20.0f,		// Foot R
 				};
 
 				static float constraint_dbg = 0.1f;
@@ -944,86 +1523,93 @@ namespace wi::physics
 					part.mObjectLayer = Layers::MOVING;
 					part.mOverrideMassProperties = EOverrideMassProperties::CalculateInertia;
 					part.mMassPropertiesOverride.mMass = masses[p];
-					
+
 					// First part is the root, doesn't have a parent and doesn't have a constraint
-					if (p > 0)
+					if (p == 0)
+						continue;
+
+					if (p == BODYPART_LEFT_LOWER_LEG || p == BODYPART_RIGHT_LOWER_LEG)
 					{
-						if (p == BODYPART_LEFT_LOWER_LEG || p == BODYPART_RIGHT_LOWER_LEG)
+						Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
+						constraint->mDrawConstraintSize = constraint_dbg;
+						constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
+						constraint->mHingeAxis1 = constraint->mHingeAxis2 = Vec3::sAxisX() * facing;
+						constraint->mNormalAxis1 = constraint->mNormalAxis2 = -Vec3::sAxisY();
+						if (fixpose)
 						{
-							Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
-							constraint->mDrawConstraintSize = constraint_dbg;
-							constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
-							constraint->mHingeAxis1 = constraint->mHingeAxis2 = Vec3::sAxisX() * facing;
-							constraint->mNormalAxis1 = constraint->mNormalAxis2 = -Vec3::sAxisY();
-							if (fixpose)
-							{
-								constraint->mLimitsMin = constraint->mLimitsMax = 0;
-							}
-							else
-							{
-								constraint->mLimitsMin = 0;
-								constraint->mLimitsMax = JPH_PI * 0.8f;
-							}
-							part.mToParent = constraint;
-						}
-						else if (p == BODYPART_LEFT_LOWER_ARM)
-						{
-							Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
-							constraint->mDrawConstraintSize = constraint_dbg;
-							constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
-							constraint->mHingeAxis1 = constraint->mHingeAxis2 = Vec3::sAxisY();
-							constraint->mNormalAxis1 = constraint->mNormalAxis2 = (constraint_positions[p] - constraint_positions[p - 1]).Normalized();
-							if (fixpose)
-							{
-								constraint->mLimitsMin = constraint->mLimitsMax = 0;
-							}
-							else
-							{
-								constraint->mLimitsMin = 0;
-								constraint->mLimitsMax = JPH_PI * 0.6f;
-							}
-							part.mToParent = constraint;
-						}
-						else if (p == BODYPART_RIGHT_LOWER_ARM)
-						{
-							Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
-							constraint->mDrawConstraintSize = constraint_dbg;
-							constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
-							constraint->mHingeAxis1 = constraint->mHingeAxis2 = -Vec3::sAxisY();
-							constraint->mNormalAxis1 = constraint->mNormalAxis2 = (constraint_positions[p] - constraint_positions[p - 1]).Normalized();
-							if (fixpose)
-							{
-								constraint->mLimitsMin = constraint->mLimitsMax = 0;
-							}
-							else
-							{
-								constraint->mLimitsMin = 0;
-								constraint->mLimitsMax = JPH_PI * 0.6f;
-							}
-							part.mToParent = constraint;
+							constraint->mLimitsMin = constraint->mLimitsMax = 0;
 						}
 						else
 						{
-							Ref<SwingTwistConstraintSettings> constraint = new SwingTwistConstraintSettings;
-							constraint->mDrawConstraintSize = constraint_dbg;
-							constraint->mPosition1 = constraint->mPosition2 = constraint_positions[p];
-							constraint->mTwistAxis1 = constraint->mTwistAxis2 = (positions[p] - constraint_positions[p]).Normalized();
-							constraint->mPlaneAxis1 = constraint->mPlaneAxis2 = Vec3::sAxisZ() * facing;
-							if (fixpose)
-							{
-								constraint->mTwistMinAngle = constraint->mTwistMaxAngle = 0;
-								constraint->mNormalHalfConeAngle = 0;
-								constraint->mPlaneHalfConeAngle = 0;
-							}
-							else
-							{
-								constraint->mTwistMinAngle = -DegreesToRadians(twist_angle[p]);
-								constraint->mTwistMaxAngle = DegreesToRadians(twist_angle[p]);
-								constraint->mNormalHalfConeAngle = DegreesToRadians(normal_angle[p]);
-								constraint->mPlaneHalfConeAngle = DegreesToRadians(plane_angle[p]);
-							}
-							part.mToParent = constraint;
+							constraint->mLimitsMin = 0;
+							constraint->mLimitsMax = JPH_PI * 0.8f;
 						}
+						part.mToParent = constraint;
+					}
+					else if (p == BODYPART_LEFT_LOWER_ARM)
+					{
+						Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
+						constraint->mDrawConstraintSize = constraint_dbg;
+						constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
+						constraint->mHingeAxis1 = constraint->mHingeAxis2 = Vec3::sAxisY();
+						constraint->mNormalAxis1 = constraint->mNormalAxis2 = (constraint_positions[p] - constraint_positions[p - 1]).Normalized();
+						if (fixpose)
+						{
+							constraint->mLimitsMin = constraint->mLimitsMax = 0;
+						}
+						else
+						{
+							constraint->mLimitsMin = 0;
+							constraint->mLimitsMax = JPH_PI * 0.6f;
+						}
+						part.mToParent = constraint;
+					}
+					else if (p == BODYPART_RIGHT_LOWER_ARM)
+					{
+						Ref<HingeConstraintSettings> constraint = new HingeConstraintSettings;
+						constraint->mDrawConstraintSize = constraint_dbg;
+						constraint->mPoint1 = constraint->mPoint2 = constraint_positions[p];
+						constraint->mHingeAxis1 = constraint->mHingeAxis2 = -Vec3::sAxisY();
+						constraint->mNormalAxis1 = constraint->mNormalAxis2 = (constraint_positions[p] - constraint_positions[p - 1]).Normalized();
+						if (fixpose)
+						{
+							constraint->mLimitsMin = constraint->mLimitsMax = 0;
+						}
+						else
+						{
+							constraint->mLimitsMin = 0;
+							constraint->mLimitsMax = JPH_PI * 0.6f;
+						}
+						part.mToParent = constraint;
+					}
+					else
+					{
+						Ref<SwingTwistConstraintSettings> constraint = new SwingTwistConstraintSettings;
+						constraint->mDrawConstraintSize = constraint_dbg;
+						constraint->mPosition1 = constraint->mPosition2 = constraint_positions[p];
+						constraint->mTwistAxis1 = constraint->mTwistAxis2 = (positions[p] - constraint_positions[p]).Normalized();
+						if (p == BODYPART_LEFT_FOOT || p == BODYPART_RIGHT_FOOT)
+						{
+							constraint->mPlaneAxis1 = constraint->mPlaneAxis2 = Vec3::sAxisX() * facing;
+						}
+						else
+						{
+							constraint->mPlaneAxis1 = constraint->mPlaneAxis2 = Vec3::sAxisZ() * facing;
+						}
+						if (fixpose)
+						{
+							constraint->mTwistMinAngle = constraint->mTwistMaxAngle = 0;
+							constraint->mNormalHalfConeAngle = 0;
+							constraint->mPlaneHalfConeAngle = 0;
+						}
+						else
+						{
+							constraint->mTwistMinAngle = -DegreesToRadians(twist_angle[p]);
+							constraint->mTwistMaxAngle = DegreesToRadians(twist_angle[p]);
+							constraint->mNormalHalfConeAngle = DegreesToRadians(normal_angle[p]);
+							constraint->mPlaneHalfConeAngle = DegreesToRadians(plane_angle[p]);
+						}
+						part.mToParent = constraint;
 					}
 				}
 
@@ -1031,7 +1617,6 @@ namespace wi::physics
 				settings.DisableParentChildCollisions();
 				settings.CalculateBodyIndexToConstraintIndex();
 
-				static std::atomic<uint32_t> collisionGroupID{}; // generate unique collision group for each ragdoll to enable collision between them
 				ragdoll = settings.CreateRagdoll(collisionGroupID.fetch_add(1), 0, &physics_system);
 				ragdoll->SetPose(Vec3::sZero(), final_transforms);
 				ragdoll->AddToPhysicsSystem(EActivation::Activate);
@@ -1147,9 +1732,157 @@ namespace wi::physics
 
 		RegisterTypes();
 
-		char text[256] = {};
-		snprintf(text, arraysize(text), "wi::physics Initialized [Jolt Physics %d.%d.%d] (%d ms)", JPH_VERSION_MAJOR, JPH_VERSION_MINOR, JPH_VERSION_PATCH, (int)std::round(timer.elapsed()));
-		wi::backlog::post(text);
+		wilog("wi::physics Initialized [Jolt Physics %d.%d.%d] (%d ms)", JPH_VERSION_MAJOR, JPH_VERSION_MINOR, JPH_VERSION_PATCH, (int)std::round(timer.elapsed()));
+	}
+
+	void CreateRigidBodyShape(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& scale_local,
+		const wi::scene::MeshComponent* mesh
+	)
+	{
+		ShapeSettings::ShapeResult shape_result;
+
+		// The default convex radius caused issues when creating small box shape, etc, so I decrease it:
+		const float convexRadius = 0.001f;
+
+		switch (physicscomponent.shape)
+		{
+		case RigidBodyPhysicsComponent::CollisionShape::BOX:
+		{
+			BoxShapeSettings settings(Vec3(physicscomponent.box.halfextents.x * scale_local.x, physicscomponent.box.halfextents.y * scale_local.y, physicscomponent.box.halfextents.z * scale_local.z), convexRadius);
+			settings.SetEmbedded();
+			shape_result = settings.Create();
+		}
+		break;
+		case RigidBodyPhysicsComponent::CollisionShape::SPHERE:
+		{
+			SphereShapeSettings settings(physicscomponent.sphere.radius * scale_local.x);
+			settings.SetEmbedded();
+			shape_result = settings.Create();
+		}
+		break;
+		case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
+		{
+			CapsuleShapeSettings settings(physicscomponent.capsule.height * scale_local.y, physicscomponent.capsule.radius * scale_local.x);
+			settings.SetEmbedded();
+			shape_result = settings.Create();
+		}
+		break;
+		case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
+		{
+			CylinderShapeSettings settings(physicscomponent.capsule.height * scale_local.y, physicscomponent.capsule.radius * scale_local.x, convexRadius);
+			settings.SetEmbedded();
+			shape_result = settings.Create();
+		}
+		break;
+
+		case RigidBodyPhysicsComponent::CollisionShape::CONVEX_HULL:
+			if (mesh != nullptr)
+			{
+				Array<Vec3> points;
+				points.reserve(mesh->vertex_positions.size());
+				for (auto& pos : mesh->vertex_positions)
+				{
+					points.push_back(Vec3(pos.x * scale_local.x, pos.y * scale_local.y, pos.z * scale_local.z));
+				}
+				ConvexHullShapeSettings settings(points, convexRadius);
+				settings.SetEmbedded();
+				shape_result = settings.Create();
+			}
+			else
+			{
+				wi::backlog::post("CreateRigidBodyShape failed: convex hull physics requested, but no MeshComponent provided!", wi::backlog::LogLevel::Error);
+				return;
+			}
+			break;
+
+		case RigidBodyPhysicsComponent::CollisionShape::TRIANGLE_MESH:
+			if (mesh != nullptr)
+			{
+				TriangleList trianglelist;
+
+				uint32_t first_subset = 0;
+				uint32_t last_subset = 0;
+				mesh->GetLODSubsetRange(physicscomponent.mesh_lod, first_subset, last_subset);
+				for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
+				{
+					const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+					const uint32_t* indices = mesh->indices.data() + subset.indexOffset;
+					for (uint32_t i = 0; i < subset.indexCount; i += 3)
+					{
+						Triangle triangle;
+						triangle.mMaterialIndex = 0;
+						triangle.mV[0] = Float3(mesh->vertex_positions[indices[i + 0]].x * scale_local.x, mesh->vertex_positions[indices[i + 0]].y * scale_local.y, mesh->vertex_positions[indices[i + 0]].z * scale_local.z);
+						triangle.mV[2] = Float3(mesh->vertex_positions[indices[i + 1]].x * scale_local.x, mesh->vertex_positions[indices[i + 1]].y * scale_local.y, mesh->vertex_positions[indices[i + 1]].z * scale_local.z);
+						triangle.mV[1] = Float3(mesh->vertex_positions[indices[i + 2]].x * scale_local.x, mesh->vertex_positions[indices[i + 2]].y * scale_local.y, mesh->vertex_positions[indices[i + 2]].z * scale_local.z);
+						trianglelist.push_back(triangle);
+					}
+				}
+
+				MeshShapeSettings settings(trianglelist);
+				settings.SetEmbedded();
+				shape_result = settings.Create();
+			}
+			else
+			{
+				wi::backlog::post("CreateRigidBodyShape failed: triangle mesh physics requested, but no MeshComponent provided!", wi::backlog::LogLevel::Error);
+				return;
+			}
+			break;
+
+		case RigidBodyPhysicsComponent::CollisionShape::HEIGHTFIELD:
+			if (mesh != nullptr)
+			{
+				wi::vector<float> heights;
+				heights.reserve(mesh->vertex_positions.size());
+
+				wi::primitive::AABB aabb;
+
+				for (XMFLOAT3 pos : mesh->vertex_positions)
+				{
+					pos.x *= scale_local.x;
+					pos.y *= scale_local.y;
+					pos.z *= scale_local.z;
+					heights.push_back(pos.y);
+					aabb.AddPoint(pos);
+				}
+
+				XMFLOAT3 min = aabb.getMin();
+				min.y = 0;
+
+				uint32_t dim = (uint32_t)std::sqrt((double)heights.size());
+				wilog_assert(dim >= 2, "Height field shape dimension must be at least 2!");
+
+				Vec3 scale = cast(aabb.getHalfWidth()) * 2 / (float)(dim - 1);
+				scale.SetY(1);
+
+				HeightFieldShapeSettings settings(heights.data(), cast(min), scale, dim);
+				settings.SetEmbedded();
+				shape_result = settings.Create();
+			}
+			else
+			{
+				wi::backlog::post("CreateRigidBodyShape failed: height field physics requested, but no MeshComponent provided!", wi::backlog::LogLevel::Error);
+				return;
+			}
+			break;
+		}
+
+		if (!shape_result.IsValid())
+		{
+			wilog_error("CreateRigidBodyShape failed, shape_result: %s", shape_result.GetError().c_str());
+			return;
+		}
+
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		physicsobject.shape = shape_result.Get();
+
+		if (physicscomponent.IsVehicle())
+		{
+			// Vehicle center of mass will be offset to chassis height to improve handling:
+			physicsobject.shape = OffsetCenterOfMassShapeSettings(Vec3(0, -physicsobject.shape->GetLocalBounds().GetExtent().GetY() + physicscomponent.vehicle.chassis_half_height, 0), physicsobject.shape).Create().Get();
+		}
 	}
 
 	bool IsEnabled() { return ENABLED; }
@@ -1163,6 +1896,9 @@ namespace wi::physics
 
 	bool IsDebugDrawEnabled() { return DEBUGDRAW_ENABLED; }
 	void SetDebugDrawEnabled(bool value) { DEBUGDRAW_ENABLED = value; }
+
+	void SetConstraintDebugSize(float value) { CONSTRAINT_DEBUGSIZE = value; }
+	float GetConstraintDebugSize() { return CONSTRAINT_DEBUGSIZE; }
 
 	int GetAccuracy() { return ACCURACY; }
 	void SetAccuracy(int value) { ACCURACY = value; }
@@ -1181,19 +1917,25 @@ namespace wi::physics
 
 		wi::jobsystem::Wait(ctx);
 
+		// TODO: without this there are bugs in terrain physics generation
+		scene.RunHierarchyUpdateSystem(ctx);
+		wi::jobsystem::Wait(ctx);
+
 		auto range = wi::profiler::BeginRangeCPU("Physics");
 
 		PhysicsScene& physics_scene = GetPhysicsScene(scene);
 		physics_scene.physics_system.SetGravity(cast(scene.weather.gravity));
 
-		// System will register rigidbodies to objects:
-		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), 64, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+		// First, do the creations when needed (AddRigidBody, AddSoftBody, etc):
+		//	These will be locking updates, but doesn't need to be performed frequently
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 
 			RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
 			Entity entity = scene.rigidbodies.GetEntity(args.jobIndex);
 
-			if (physicscomponent.physicsobject == nullptr && scene.transforms.Contains(entity))
+			if ((physicscomponent.physicsobject == nullptr || physicscomponent.IsRefreshParametersNeeded()) && scene.transforms.Contains(entity))
 			{
+				physicscomponent.SetRefreshParametersNeeded(false);
 				TransformComponent* transform = scene.transforms.GetComponent(entity);
 				if (transform == nullptr)
 					return;
@@ -1205,75 +1947,311 @@ namespace wi::physics
 				}
 				AddRigidBody(scene, entity, physicscomponent, *transform, mesh);
 			}
+		});
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.softbodies.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 
+			SoftBodyPhysicsComponent& physicscomponent = scene.softbodies[args.jobIndex];
+			Entity entity = scene.softbodies.GetEntity(args.jobIndex);
+			if (!scene.meshes.Contains(entity))
+				return;
+			MeshComponent* mesh = scene.meshes.GetComponent(entity);
+			if (mesh == nullptr)
+				return;
+			const ArmatureComponent* armature = mesh->IsSkinned() ? scene.armatures.GetComponent(mesh->armatureID) : nullptr;
+			mesh->SetDynamic(true);
+
+			if (physicscomponent._flags & SoftBodyPhysicsComponent::SAFE_TO_REGISTER && physicscomponent.physicsobject == nullptr)
+			{
+				AddSoftBody(scene, entity, physicscomponent, *mesh);
+			}
+		});
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.humanoids.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+			HumanoidComponent& humanoid = scene.humanoids[args.jobIndex];
+			Entity humanoidEntity = scene.humanoids.GetEntity(args.jobIndex);
+			float scale = 1;
+			if (scene.transforms.Contains(humanoidEntity))
+			{
+				scale = scene.transforms.GetComponent(humanoidEntity)->scale_local.x;
+			}
+			if (humanoid.ragdoll != nullptr)
+			{
+				Ragdoll& ragdoll = *(Ragdoll*)humanoid.ragdoll.get();
+				if (!wi::math::float_equal(ragdoll.scale, scale))
+				{
+					humanoid.SetRagdollPhysicsEnabled(false); // while scaling ragdoll, it will be kinematic
+					ragdoll.Deactivate(scene); // recreate attached skeleton hierarchy structure
+					humanoid.ragdoll = {}; // delete ragdoll if scale changed, it will be recreated
+				}
+			}
+			if (humanoid.ragdoll == nullptr)
+			{
+				humanoid.ragdoll = std::make_shared<Ragdoll>(scene, humanoid, humanoidEntity, scale);
+			}
+		});
+
+		wi::jobsystem::Wait(ctx); // wait for rigidbody creations
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.constraints.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+
+			PhysicsConstraintComponent& physicscomponent = scene.constraints[args.jobIndex];
+			if (physicscomponent.bodyA == INVALID_ENTITY && physicscomponent.bodyB == INVALID_ENTITY)
+			{
+				physicscomponent.physicsobject = nullptr;
+				return;
+			}
+			if (!scene.rigidbodies.Contains(physicscomponent.bodyA) && !scene.rigidbodies.Contains(physicscomponent.bodyB))
+			{
+				physicscomponent.physicsobject = nullptr;
+				return;
+			}
 			if (physicscomponent.physicsobject != nullptr)
 			{
-				RigidBody& physicsobject = GetRigidBody(physicscomponent);
-				if (physicsobject.bodyID.IsInvalid())
-					return;
-
-				BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking, these jobs can be adding bodies
-				body_interface.SetFriction(physicsobject.bodyID, physicscomponent.friction);
-				body_interface.SetRestitution(physicsobject.bodyID, physicscomponent.restitution);
-
-				const EMotionType prevMotionType = body_interface.GetMotionType(physicsobject.bodyID);
-				const EMotionType currentMotionType = physicscomponent.mass == 0 ? EMotionType::Static : (physicscomponent.IsKinematic() ? EMotionType::Kinematic : EMotionType::Dynamic);
-
-				if (prevMotionType != currentMotionType)
+				// Detection of deleted rigidbody references:
+				const Constraint& constraint = GetConstraint((const PhysicsConstraintComponent&)physicscomponent);
+				if (!constraint.body1_ref.IsInvalid())
 				{
-					// Changed motion type:
-					body_interface.SetMotionType(physicsobject.bodyID, currentMotionType, EActivation::Activate);
-
-					if (currentMotionType == EMotionType::Dynamic)
+					const RigidBodyPhysicsComponent* rb = scene.rigidbodies.GetComponent(physicscomponent.bodyA);
+					if (rb != nullptr && rb->physicsobject != nullptr)
 					{
-						// We must detach dynamic objects, because their physics object is created in world space
-						//	and attachment would apply double transformation to the transform
-						scene.locker.lock();
-						scene.Component_Detach(entity);
-						scene.locker.unlock();
-					}
-				}
-
-				TransformComponent* transform = scene.transforms.GetComponent(entity);
-				if (transform == nullptr)
-					return;
-
-				if (physics_scene.activate_all_rigid_bodies)
-				{
-					body_interface.ActivateBody(physicsobject.bodyID);
-				}
-
-				const bool is_active = body_interface.IsActive(physicsobject.bodyID);
-
-				if (currentMotionType == EMotionType::Dynamic && is_active)
-				{
-					// Apply effects on dynamics if needed:
-					if (scene.weather.IsOceanEnabled())
-					{
-						const Vec3 com = body_interface.GetCenterOfMassPosition(physicsobject.bodyID);
-						const Vec3 surface_position = cast(scene.GetOceanPosAt(cast(com)));
-
-						if (com.GetY() <= surface_position.GetY())
+						const RigidBody& body = GetRigidBody(*rb);
+						if (body.bodyID != constraint.body1_ref)
 						{
-							const Vec3 p2 = cast(scene.GetOceanPosAt(cast(com + Vec3(0, 0, 0.1f))));
-							const Vec3 p3 = cast(scene.GetOceanPosAt(cast(com + Vec3(0.1f, 0, 0))));
-							const Vec3 surface_normal = Vec3(p2 - surface_position).Cross(Vec3(p3 - surface_position)).Normalized();
-
-							body_interface.ApplyBuoyancyImpulse(
-								physicsobject.bodyID,
-								surface_position,
-								surface_normal,
-								physicscomponent.buoyancy,
-								0.8f,
-								0.6f,
-								Vec3::sZero(),
-								physics_scene.physics_system.GetGravity(),
-								scene.dt
-							);
+							// Rigidbody to constraint object mismatch!
+							physicscomponent.physicsobject = nullptr;
+							return;
 						}
 					}
 				}
+				if (!constraint.body2_ref.IsInvalid())
+				{
+					const RigidBodyPhysicsComponent* rb = scene.rigidbodies.GetComponent(physicscomponent.bodyB);
+					if (rb != nullptr && rb->physicsobject != nullptr)
+					{
+						const RigidBody& body = GetRigidBody(*rb);
+						if (body.bodyID != constraint.body2_ref)
+						{
+							// Rigidbody to constraint object mismatch!
+							physicscomponent.physicsobject = nullptr;
+							return;
+						}
+					}
+				}
+			}
 
+			Entity entity = scene.constraints.GetEntity(args.jobIndex);
+			if (physicscomponent.physicsobject == nullptr && scene.transforms.Contains(entity))
+			{
+				TransformComponent* transform = scene.transforms.GetComponent(entity);
+				if (transform == nullptr)
+					return;
+				AddConstraint(scene, entity, physicscomponent, *transform);
+			}
+
+			if (physicscomponent.physicsobject != nullptr && physicscomponent.IsRefreshParametersNeeded())
+			{
+				physicscomponent.SetRefreshParametersNeeded(false);
+				Constraint& constraint = GetConstraint(physicscomponent);
+				if (physicscomponent.type == PhysicsConstraintComponent::Type::Fixed)
+				{
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::Point)
+				{
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::Distance)
+				{
+					DistanceConstraint* ptr = ((DistanceConstraint*)constraint.constraint.GetPtr());
+					ptr->SetDistance(physicscomponent.distance_constraint.min_distance, physicscomponent.distance_constraint.max_distance);
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::Hinge)
+				{
+					HingeConstraint* ptr = ((HingeConstraint*)constraint.constraint.GetPtr());
+					ptr->SetLimits(physicscomponent.hinge_constraint.min_angle, physicscomponent.hinge_constraint.max_angle);
+
+					if (physicscomponent.hinge_constraint.target_angular_velocity != 0.0f)
+					{
+						BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+						if (!constraint.body1_ref.IsInvalid())
+						{
+							body_interface.ActivateBody(constraint.body1_ref);
+						}
+						if (!constraint.body2_ref.IsInvalid())
+						{
+							body_interface.ActivateBody(constraint.body2_ref);
+						}
+						ptr->SetMotorState(EMotorState::Velocity);
+						ptr->SetTargetAngularVelocity(physicscomponent.hinge_constraint.target_angular_velocity);
+					}
+					else
+					{
+						ptr->SetMotorState(EMotorState::Off);
+					}
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::Cone)
+				{
+					ConeConstraint* ptr = ((ConeConstraint*)constraint.constraint.GetPtr());
+					ptr->SetHalfConeAngle(physicscomponent.cone_constraint.half_cone_angle);
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::SixDOF)
+				{
+					SixDOFConstraint* ptr = ((SixDOFConstraint*)constraint.constraint.GetPtr());
+					ptr->SetTranslationLimits(cast(physicscomponent.six_dof.minTranslationAxes), cast(physicscomponent.six_dof.maxTranslationAxes));
+					ptr->SetRotationLimits(cast(physicscomponent.six_dof.minRotationAxes), cast(physicscomponent.six_dof.maxRotationAxes));
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::SwingTwist)
+				{
+					SwingTwistConstraint* ptr = ((SwingTwistConstraint*)constraint.constraint.GetPtr());
+					ptr->SetNormalHalfConeAngle(physicscomponent.swing_twist.normal_half_cone_angle);
+					ptr->SetPlaneHalfConeAngle(physicscomponent.swing_twist.plane_half_cone_angle);
+					ptr->SetTwistMinAngle(physicscomponent.swing_twist.min_twist_angle);
+					ptr->SetTwistMaxAngle(physicscomponent.swing_twist.max_twist_angle);
+				}
+				else if (physicscomponent.type == PhysicsConstraintComponent::Type::Slider)
+				{
+					SliderConstraint* ptr = ((SliderConstraint*)constraint.constraint.GetPtr());
+					ptr->SetLimits(physicscomponent.slider_constraint.min_limit, physicscomponent.slider_constraint.max_limit);
+
+					if (physicscomponent.slider_constraint.target_velocity != 0.0f)
+					{
+						BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+						if (!constraint.body1_ref.IsInvalid())
+						{
+							body_interface.ActivateBody(constraint.body1_ref);
+						}
+						if (!constraint.body2_ref.IsInvalid())
+						{
+							body_interface.ActivateBody(constraint.body2_ref);
+						}
+						ptr->SetMotorState(EMotorState(EMotorState::Velocity));
+						ptr->SetTargetVelocity(physicscomponent.slider_constraint.target_velocity);
+						auto& settings = ptr->GetMotorSettings();
+						settings.mMaxForceLimit = physicscomponent.slider_constraint.max_force;
+						settings.mMinForceLimit = -physicscomponent.slider_constraint.max_force;
+					}
+					else
+					{
+						ptr->SetMotorState(EMotorState::Off);
+					}
+				}
+			}
+		});
+
+		wi::jobsystem::Wait(ctx); // wait for all creations
+
+		// Now do the property updating
+		//	These will be non-locking updates and perfromed potentially every frame
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+
+			RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
+			Entity entity = scene.rigidbodies.GetEntity(args.jobIndex);
+			if (physicscomponent.physicsobject == nullptr)
+				return;
+			RigidBody& physicsobject = GetRigidBody(physicscomponent);
+			if (physicsobject.bodyID.IsInvalid())
+				return;
+
+			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+
+			if (physicsobject.friction != physicscomponent.friction)
+			{
+				physicsobject.friction = physicscomponent.friction;
+				body_interface.SetFriction(physicsobject.bodyID, physicscomponent.friction);
+			}
+			if (physicsobject.restitution != physicscomponent.restitution)
+			{
+				physicsobject.restitution = physicscomponent.restitution;
+				body_interface.SetRestitution(physicsobject.bodyID, physicscomponent.restitution);
+			}
+
+			const EMotionType prevMotionType = physicsobject.motiontype;
+			const EMotionType currentMotionType = physicscomponent.mass == 0 ? EMotionType::Static : (physicscomponent.IsKinematic() ? EMotionType::Kinematic : EMotionType::Dynamic);
+
+			if (prevMotionType != currentMotionType)
+			{
+				// Changed motion type:
+				physicsobject.motiontype = currentMotionType;
+				body_interface.SetMotionType(physicsobject.bodyID, currentMotionType, EActivation::DontActivate);
+
+				if (currentMotionType == EMotionType::Dynamic)
+				{
+					// Changed to dynamic, remember attachment matrices at this point:
+					scene.locker.lock();
+					XMMATRIX parentMatrix = scene.ComputeParentMatrixRecursive(entity);
+					scene.locker.unlock();
+					XMStoreFloat4x4(&physicsobject.parentMatrix, parentMatrix);
+					XMStoreFloat4x4(&physicsobject.parentMatrixInverse, XMMatrixInverse(nullptr, parentMatrix));
+				}
+
+				if (currentMotionType == EMotionType::Static)
+				{
+					body_interface.SetObjectLayer(physicsobject.bodyID, Layers::NON_MOVING);
+				}
+				else
+				{
+					body_interface.SetObjectLayer(physicsobject.bodyID, Layers::MOVING);
+				}
+			}
+
+			TransformComponent* transform = scene.transforms.GetComponent(entity);
+			if (transform == nullptr)
+				return;
+
+			if (currentMotionType == EMotionType::Dynamic)
+			{
+				// Detaching object manually before the physics simulation:
+				transform->MatrixTransform(physicsobject.parentMatrix);
+			}
+
+			if (physics_scene.activate_all_rigid_bodies)
+			{
+				body_interface.ActivateBody(physicsobject.bodyID);
+			}
+
+			const bool is_active = physicsobject.was_active_prev_frame;
+
+			if (currentMotionType == EMotionType::Dynamic && is_active)
+			{
+				// Apply effects on dynamics if needed:
+				if (scene.weather.IsOceanEnabled())
+				{
+					const Vec3 com = body_interface.GetCenterOfMassPosition(physicsobject.bodyID);
+					const Vec3 surface_position = cast(scene.GetOceanPosAt(cast(com)));
+					const float diff = com.GetY() - surface_position.GetY();
+					if (diff < 0)
+					{
+						const Vec3 p2 = cast(scene.GetOceanPosAt(cast(com + Vec3(0, 0, 0.1f))));
+						const Vec3 p3 = cast(scene.GetOceanPosAt(cast(com + Vec3(0.1f, 0, 0))));
+						const Vec3 surface_normal = Vec3(p2 - surface_position).Cross(Vec3(p3 - surface_position)).Normalized();
+
+						body_interface.ApplyBuoyancyImpulse(
+							physicsobject.bodyID,
+							surface_position,
+							surface_normal,
+							physicscomponent.buoyancy,
+							0.8f,
+							0.6f,
+							Vec3::sZero(),
+							physics_scene.physics_system.GetGravity(),
+							scene.dt
+						);
+
+						if (!physicsobject.was_underwater)
+						{
+							physicsobject.was_underwater = true;
+							scene.PutWaterRipple(cast(surface_position));
+						}
+					}
+					else
+					{
+						physicsobject.was_underwater = false;
+					}
+				}
+			}
+
+			if (physicsobject.teleporting)
+			{
+				physicsobject.teleporting = false;
+			}
+			else
+			{
 				const Vec3 position = cast(transform->GetPosition());
 				const Quat rotation = cast(transform->GetRotation());
 				Mat44 m = Mat44::sTranslation(position) * Mat44::sRotation(rotation);
@@ -1310,7 +2288,7 @@ namespace wi::physics
 						physicsobject.bodyID,
 						m.GetTranslation(),
 						m.GetQuaternion().Normalized(),
-						EActivation::Activate
+						EActivation::DontActivate
 					);
 				}
 			}
@@ -1329,56 +2307,60 @@ namespace wi::physics
 			const ArmatureComponent* armature = mesh->IsSkinned() ? scene.armatures.GetComponent(mesh->armatureID) : nullptr;
 			mesh->SetDynamic(true);
 
-			if (physicscomponent._flags & SoftBodyPhysicsComponent::SAFE_TO_REGISTER && physicscomponent.physicsobject == nullptr)
+			if (physicscomponent.physicsobject == nullptr)
+				return;
+
+			SoftBody& physicsobject = GetSoftBody(physicscomponent);
+			if (physicsobject.bodyID.IsInvalid())
+				return;
+
+			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+
+			if (physicsobject.friction != physicscomponent.friction)
 			{
-				AddSoftBody(scene, entity, physicscomponent, *mesh);
+				physicsobject.friction = physicscomponent.friction;
+				body_interface.SetFriction(physicsobject.bodyID, physicscomponent.friction);
+			}
+			if (physicsobject.restitution != physicscomponent.restitution)
+			{
+				physicsobject.restitution = physicscomponent.restitution;
+				body_interface.SetRestitution(physicsobject.bodyID, physicscomponent.restitution);
 			}
 
-			if (physicscomponent.physicsobject != nullptr)
+			if (IsSimulationEnabled() && physicscomponent.IsWindEnabled())
 			{
-				SoftBody& physicsobject = GetSoftBody(physicscomponent);
-				if (physicsobject.bodyID.IsInvalid())
-					return;
-
-				BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking, these jobs can be adding bodies
-				body_interface.SetFriction(physicsobject.bodyID, physicscomponent.friction);
-				body_interface.SetRestitution(physicsobject.bodyID, physicscomponent.restitution);
-
-				if (IsSimulationEnabled() && physicscomponent.IsWindEnabled())
+				// Add wind:
+				const Vec3 wind = cast(scene.weather.windDirection);
+				if (!wind.IsNearZero())
 				{
-					// Add wind:
-					const Vec3 wind = cast(scene.weather.windDirection);
-					if (!wind.IsNearZero())
-					{
-						body_interface.AddForce(physicsobject.bodyID, wind, EActivation::Activate);
-					}
+					body_interface.AddForce(physicsobject.bodyID, wind, EActivation::Activate);
 				}
+			}
 
-				// This is different from rigid bodies, because soft body is a per mesh component (no TransformComponent). World matrix is propagated down from single mesh instance (ObjectUpdateSystem).
-				XMMATRIX worldMatrix = XMLoadFloat4x4(&physicscomponent.worldMatrix);
+			// This is different from rigid bodies, because soft body is a per mesh component (no TransformComponent). World matrix is propagated down from single mesh instance (ObjectUpdateSystem).
+			XMMATRIX worldMatrix = XMLoadFloat4x4(&physicscomponent.worldMatrix);
 
-				BodyLockRead lock(physics_scene.physics_system.GetBodyLockInterfaceNoLock(), physicsobject.bodyID);
-				if (!lock.Succeeded())
-					return;
-				const Body& body = lock.GetBody();
-				SoftBodyMotionProperties* motion = (SoftBodyMotionProperties*)body.GetMotionProperties();
+			BodyLockRead lock(physics_scene.physics_system.GetBodyLockInterfaceNoLock(), physicsobject.bodyID);
+			if (!lock.Succeeded())
+				return;
+			const Body& body = lock.GetBody();
+			SoftBodyMotionProperties* motion = (SoftBodyMotionProperties*)body.GetMotionProperties();
 
-				// System controls zero weight soft body nodes:
-				for (size_t ind = 0; ind < physicscomponent.physicsToGraphicsVertexMapping.size(); ++ind)
+			// System controls zero weight soft body nodes:
+			for (size_t ind = 0; ind < physicscomponent.physicsToGraphicsVertexMapping.size(); ++ind)
+			{
+				uint32_t graphicsInd = physicscomponent.physicsToGraphicsVertexMapping[ind];
+				float weight = physicscomponent.weights[graphicsInd];
+
+				if (weight == 0)
 				{
-					uint32_t graphicsInd = physicscomponent.physicsToGraphicsVertexMapping[ind];
-					float weight = physicscomponent.weights[graphicsInd];
+					XMFLOAT3 position = mesh->vertex_positions[graphicsInd];
+					XMVECTOR P = armature == nullptr ? XMLoadFloat3(&position) : wi::scene::SkinVertex(*mesh, *armature, graphicsInd);
+					P = XMVector3Transform(P, worldMatrix);
+					XMStoreFloat3(&position, P);
 
-					if (weight == 0)
-					{
-						XMFLOAT3 position = mesh->vertex_positions[graphicsInd];
-						XMVECTOR P = armature == nullptr ? XMLoadFloat3(&position) : wi::scene::SkinVertex(*mesh, *armature, graphicsInd);
-						P = XMVector3Transform(P, worldMatrix);
-						XMStoreFloat3(&position, P);
-
-						SoftBodyMotionProperties::Vertex& node = motion->GetVertex((uint)ind);
-						node.mPosition = cast(position);
-					}
+					SoftBodyMotionProperties::Vertex& node = motion->GetVertex((uint)ind);
+					node.mPosition = cast(position);
 				}
 			}
 		});
@@ -1386,32 +2368,17 @@ namespace wi::physics
 		// Ragdoll management:
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.humanoids.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 			HumanoidComponent& humanoid = scene.humanoids[args.jobIndex];
-			Entity humanoidEntity = scene.humanoids.GetEntity(args.jobIndex);
-			float scale = 1;
-			if (scene.transforms.Contains(humanoidEntity))
-			{
-				scale = scene.transforms.GetComponent(humanoidEntity)->scale_local.x;
-			}
-			if (humanoid.ragdoll != nullptr)
-			{
-				Ragdoll& ragdoll = *(Ragdoll*)humanoid.ragdoll.get();
-				if (!wi::math::float_equal(ragdoll.scale, scale))
-				{
-					humanoid.SetRagdollPhysicsEnabled(false); // while scaling ragdoll, it will be kinematic
-					ragdoll.Deactivate(scene); // recreate attached skeleton hierarchy structure
-					humanoid.ragdoll = {}; // delete ragdoll if scale changed, it will be recreated
-				}
-			}
 			if (humanoid.ragdoll == nullptr)
-			{
-				humanoid.ragdoll = std::make_shared<Ragdoll>(scene, humanoid, humanoidEntity, scale);
-			}
+				return;
+			Entity humanoidEntity = scene.humanoids.GetEntity(args.jobIndex);
 			Ragdoll& ragdoll = *(Ragdoll*)humanoid.ragdoll.get();
 
 			if (humanoid.IsRagdollPhysicsEnabled())
 			{
 				ragdoll.Activate(scene, humanoidEntity);
 			}
+
+			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
 
 			if (IsSimulationEnabled())
 			{
@@ -1420,7 +2387,6 @@ namespace wi::physics
 					// Apply effects on dynamics if needed:
 					if (scene.weather.IsOceanEnabled())
 					{
-						BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking, these jobs can be adding bodies
 						static const Ragdoll::BODYPART floating_bodyparts[] = {
 							Ragdoll::BODYPART_PELVIS,
 							Ragdoll::BODYPART_SPINE,
@@ -1430,8 +2396,8 @@ namespace wi::physics
 							auto& rb = ragdoll.rigidbodies[bodypart];
 							const Vec3 com = body_interface.GetCenterOfMassPosition(rb.bodyID);
 							const Vec3 surface_position = cast(scene.GetOceanPosAt(cast(com)));
-
-							if (com.GetY() <= surface_position.GetY())
+							const float diff = com.GetY() - surface_position.GetY();
+							if (diff < 0)
 							{
 								const Vec3 p2 = cast(scene.GetOceanPosAt(cast(com + Vec3(0, 0, 0.1f))));
 								const Vec3 p3 = cast(scene.GetOceanPosAt(cast(com + Vec3(0.1f, 0, 0))));
@@ -1448,6 +2414,16 @@ namespace wi::physics
 									physics_scene.physics_system.GetGravity(),
 									scene.dt
 								);
+
+								if (!rb.was_underwater)
+								{
+									rb.was_underwater = true;
+									scene.PutWaterRipple(cast(surface_position));
+								}
+							}
+							else
+							{
+								rb.was_underwater = false;
 							}
 						}
 					}
@@ -1456,7 +2432,6 @@ namespace wi::physics
 				{
 					ragdoll.Deactivate(scene);
 
-					BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking, these jobs can be adding bodies
 					for (auto& rb : ragdoll.rigidbodies)
 					{
 						TransformComponent* transform = scene.transforms.GetComponent(rb.entity);
@@ -1482,7 +2457,6 @@ namespace wi::physics
 			else if(!humanoid.IsRagdollPhysicsEnabled())
 			{
 				// Simulation is disabled, update physics state immediately:
-				BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterface(); // locking, these jobs can be adding bodies
 				for (auto& rb : ragdoll.rigidbodies)
 				{
 					TransformComponent* transform = scene.transforms.GetComponent(rb.entity);
@@ -1507,12 +2481,47 @@ namespace wi::physics
 			}
 		});
 
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.constraints.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+
+			PhysicsConstraintComponent& physicscomponent = scene.constraints[args.jobIndex];
+			if (physicscomponent.physicsobject == nullptr)
+				return;
+			Constraint& constraint = GetConstraint(physicscomponent);
+			constraint.constraint->SetDrawConstraintSize(CONSTRAINT_DEBUGSIZE);
+			if (constraint.body1_self.IsInvalid() && constraint.body2_self.IsInvalid())
+				return;
+
+			// Kinematic constraint body:
+			Entity entity = scene.constraints.GetEntity(args.jobIndex);
+			const TransformComponent* transform = scene.transforms.GetComponent(entity);
+			if (transform == nullptr)
+				return;
+
+			if (!constraint.body1_self.IsInvalid())
+			{
+				physics_scene.physics_system.GetBodyInterfaceNoLock().MoveKinematic(
+					constraint.body1_self,
+					cast(transform->GetPosition()),
+					cast(transform->GetRotation()),
+					physics_scene.GetKinematicDT(scene.dt)
+				);
+			}
+			if (!constraint.body2_self.IsInvalid())
+			{
+				physics_scene.physics_system.GetBodyInterfaceNoLock().MoveKinematic(
+					constraint.body2_self,
+					cast(transform->GetPosition()),
+					cast(transform->GetRotation()),
+					physics_scene.GetKinematicDT(scene.dt)
+				);
+			}
+		});
+
 		wi::jobsystem::Wait(ctx);
 
 		physics_scene.activate_all_rigid_bodies = false;
 		
 		// Perform internal simulation step:
-		bool simulation_happened = false;
 		if (IsSimulationEnabled())
 		{
 			//static TempAllocatorImpl temp_allocator(10 * 1024 * 1024);
@@ -1529,7 +2538,7 @@ namespace wi::physics
 					// On the last step, save previous locations, this is only needed for interpolation:
 					//	We don't only save it for dynamic objects that will be interpolated, because on the next frame maybe simulation doesn't run
 					//	but object types can change!
-					wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), 64, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+					wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 						RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
 						if (physicscomponent.physicsobject == nullptr)
 							return;
@@ -1539,6 +2548,40 @@ namespace wi::physics
 						mat = mat * rb.additionalTransformInverse;
 						rb.prev_position = mat.GetTranslation();
 						rb.prev_rotation = mat.GetQuaternion().Normalized();
+
+						if (rb.vehicle_constraint != nullptr)
+						{
+							const Entity car_wheel_entities[] = {
+								physicscomponent.vehicle.wheel_entity_front_left,
+								physicscomponent.vehicle.wheel_entity_front_right,
+								physicscomponent.vehicle.wheel_entity_rear_left,
+								physicscomponent.vehicle.wheel_entity_rear_right,
+							};
+							const Entity motor_wheel_entities[] = {
+								physicscomponent.vehicle.wheel_entity_front_left,
+								physicscomponent.vehicle.wheel_entity_rear_left,
+							};
+							const uint32_t count = physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Car ? arraysize(car_wheel_entities) : arraysize(motor_wheel_entities);
+
+							for (uint32_t i = 0; i < count; ++i)
+							{
+								Entity wheel_entity = physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Car ? car_wheel_entities[i] : motor_wheel_entities[i];
+								if (wheel_entity == INVALID_ENTITY)
+									continue;
+
+								TransformComponent* wheel_transform = scene.transforms.GetComponent(wheel_entity);
+								if (wheel_transform != nullptr)
+								{
+									XMFLOAT4X4 localMatrix;
+									XMStoreFloat4x4(&localMatrix, wheel_transform->GetLocalMatrix());
+									Vec3 right = cast(wi::math::GetRight(localMatrix)).Normalized();
+									Vec3 up = cast(wi::math::GetUp(localMatrix)).Normalized();
+									Mat44 wheelmat = rb.vehicle_constraint->GetWheelWorldTransform(i, right, up);
+									rb.prev_wheel_positions[i] = wheelmat.GetTranslation();
+									rb.prev_wheel_rotations[i] = wheelmat.GetQuaternion();
+								}
+							}
+						}
 					});
 					wi::jobsystem::Dispatch(ctx, (uint32_t)scene.humanoids.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 						HumanoidComponent& humanoid = scene.humanoids[args.jobIndex];
@@ -1546,22 +2589,25 @@ namespace wi::physics
 							return;
 						Ragdoll& ragdoll = *(Ragdoll*)humanoid.ragdoll.get();
 						BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+						int bodypart = 0;
 						for (auto& rb : ragdoll.rigidbodies)
 						{
 							TransformComponent* transform = scene.transforms.GetComponent(rb.entity);
 							if (transform == nullptr)
 								continue;
 							Mat44 mat = body_interface.GetWorldTransform(rb.bodyID);
+							ragdoll.prev_capsule_position[bodypart] = mat.GetTranslation();
+							ragdoll.prev_capsule_rotation[bodypart] = mat.GetQuaternion().Normalized();
 							mat = mat * rb.additionalTransformInverse;
 							mat = mat * rb.restBasis;
 							rb.prev_position = mat.GetTranslation();
 							rb.prev_rotation = mat.GetQuaternion().Normalized();
+							bodypart++;
 						}
 					});
 					wi::jobsystem::Wait(ctx);
 				}
 
-				simulation_happened = true;
 				physics_scene.physics_system.Update(TIMESTEP, 1, &temp_allocator, &job_system);
 				physics_scene.accumulator = next_accumulator;
 			}
@@ -1569,7 +2615,7 @@ namespace wi::physics
 		}
 
 		// Feedback physics objects to system:
-		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), 64, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 
 			RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
 			if (physicscomponent.physicsobject == nullptr)
@@ -1578,6 +2624,7 @@ namespace wi::physics
 			if (physicsobject.bodyID.IsInvalid())
 				return;
 			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+			physicsobject.was_active_prev_frame = body_interface.IsActive(physicsobject.bodyID);
 			if (body_interface.GetMotionType(physicsobject.bodyID) != EMotionType::Dynamic)
 				return;
 
@@ -1599,7 +2646,9 @@ namespace wi::physics
 
 			transform->translation_local = cast(position);
 			transform->rotation_local = cast(rotation);
-			transform->SetDirty();
+
+			// Back to local space of parent:
+			transform->MatrixTransform(physicsobject.parentMatrixInverse);
 		});
 		
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.softbodies.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
@@ -1669,7 +2718,7 @@ namespace wi::physics
 				humanoid.ragdoll_bodyparts.resize(Ragdoll::BODYPART_COUNT);
 			}
 			humanoid.ragdoll_bounds = wi::primitive::AABB();
-			int caps = 0;
+			int bodypart = 0;
 
 			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
 			for (auto& rb : ragdoll.rigidbodies)
@@ -1679,11 +2728,20 @@ namespace wi::physics
 					continue;
 				Mat44 mat = body_interface.GetWorldTransform(rb.bodyID);
 
-				XMFLOAT4X4 capsulemat = cast(mat);
-				XMMATRIX M = XMLoadFloat4x4(&capsulemat);
-				auto& bp = humanoid.ragdoll_bodyparts[caps++];
+				auto& bp = humanoid.ragdoll_bodyparts[bodypart];
 				bp.bone = rb.humanoid_bone;
 				bp.capsule.radius = rb.capsule.radius;
+
+				Vec3 capsule_position = mat.GetTranslation();
+				Quat capsule_rotation = mat.GetQuaternion().Normalized();
+				if (IsInterpolationEnabled() && IsSimulationEnabled())
+				{
+					capsule_position = capsule_position * physics_scene.alpha + ragdoll.prev_capsule_position[bodypart] * (1 - physics_scene.alpha);
+					capsule_rotation = ragdoll.prev_capsule_rotation[bodypart].SLERP(capsule_rotation, physics_scene.alpha);
+				}
+				Mat44 _capsulemat = Mat44::sRotationTranslation(capsule_rotation, capsule_position);
+				XMFLOAT4X4 capsulemat = cast(_capsulemat);
+				XMMATRIX M = XMLoadFloat4x4(&capsulemat);
 				XMStoreFloat3(&bp.capsule.base, XMVector3Transform(XMLoadFloat3(&rb.capsule.base), M));
 				XMStoreFloat3(&bp.capsule.tip, XMVector3Transform(XMLoadFloat3(&rb.capsule.tip), M));
 				humanoid.ragdoll_bounds = wi::primitive::AABB::Merge(humanoid.ragdoll_bounds, bp.capsule.getAABB());
@@ -1711,6 +2769,8 @@ namespace wi::physics
 					transform->rotation_local = cast(rotation);
 					transform->SetDirty();
 				}
+
+				bodypart++;
 			}
 
 #if 0
@@ -1753,12 +2813,14 @@ namespace wi::physics
 			};
 			static JoltDebugRenderer debug_renderer;
 			BodyManager::DrawSettings settings;
-			settings.mDrawCenterOfMassTransform = false;
+			settings.mDrawCenterOfMassTransform = true;
+			settings.mDrawMassAndInertia = false;
 			settings.mDrawShape = true;
 			settings.mDrawSoftBodyVertices = true;
 			settings.mDrawSoftBodyEdgeConstraints = true;
 			settings.mDrawShapeWireframe = true;
 			settings.mDrawShapeColor = BodyManager::EShapeColor::ShapeTypeColor;
+			debug_renderer.SetCameraPos(cast(scene.camera.Eye));
 			physics_scene.physics_system.DrawBodies(settings, &debug_renderer);
 			physics_scene.physics_system.DrawConstraints(&debug_renderer);
 		}
@@ -1767,6 +2829,52 @@ namespace wi::physics
 		wi::jobsystem::Wait(ctx);
 
 		wi::profiler::EndRange(range); // Physics
+	}
+
+
+	void SetPosition(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& position
+	)
+	{
+		if (physicscomponent.physicsobject == nullptr)
+			return;
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		physicsobject.prev_position = cast(position);
+		Mat44 m = Mat44::sTranslation(physicsobject.prev_position) * Mat44::sRotation(physicsobject.prev_rotation);
+		m = m * physicsobject.additionalTransform;
+		body_interface.SetPosition(
+			physicsobject.bodyID,
+			m.GetTranslation(),
+			EActivation::DontActivate
+		);
+		physicsobject.teleporting = true;
+	}
+
+	void SetPositionAndRotation(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		const XMFLOAT3& position,
+		const XMFLOAT4& rotation
+	)
+	{
+		if (physicscomponent.physicsobject == nullptr)
+			return;
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		physicsobject.prev_position = cast(position);
+		physicsobject.prev_rotation = cast(rotation).Normalized();
+		Mat44 m = Mat44::sTranslation(physicsobject.prev_position) * Mat44::sRotation(physicsobject.prev_rotation);
+		m = m * physicsobject.additionalTransform;
+		body_interface.SetPositionAndRotation(
+			physicsobject.bodyID,
+			m.GetTranslation(),
+			m.GetQuaternion().Normalized(),
+			EActivation::DontActivate
+		);
+		physicsobject.teleporting = true;
 	}
 
 	void SetLinearVelocity(
@@ -1794,6 +2902,18 @@ namespace wi::physics
 			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
 			body_interface.SetAngularVelocity(physicsobject.bodyID, cast(velocity));
 		}
+	}
+
+	XMFLOAT3 GetVelocity(wi::scene::RigidBodyPhysicsComponent& physicscomponent)
+	{
+		if (physicscomponent.physicsobject != nullptr)
+		{
+			RigidBody& physicsobject = GetRigidBody(physicscomponent);
+			PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+			BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+			return cast(body_interface.GetLinearVelocity(physicsobject.bodyID));
+		}
+		return XMFLOAT3(0, 0, 0);
 	}
 
 	void ApplyForce(
@@ -1991,6 +3111,117 @@ namespace wi::physics
 		}
 	}
 
+	void DriveVehicle(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		float forward,
+		float right,
+		float brake,
+		float handbrake
+	)
+	{
+		if (physicscomponent.physicsobject == nullptr)
+			return;
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		if (physicsobject.vehicle_constraint == nullptr)
+			return;
+
+		if (physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Car)
+		{
+			WheeledVehicleController* controller = static_cast<WheeledVehicleController*>(physicsobject.vehicle_constraint->GetController());
+			controller->SetDriverInput(forward, -right, brake, handbrake);
+		}
+		else if (physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Motorcycle)
+		{
+			MotorcycleController* controller = static_cast<MotorcycleController*>(physicsobject.vehicle_constraint->GetController());
+			controller->SetDriverInput(forward, -right, brake, handbrake);
+			controller->EnableLeanController(physicscomponent.vehicle.motorcycle.lean_control);
+		}
+
+		PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		body_interface.ActivateBody(physicsobject.bodyID);
+	}
+
+	float GetVehicleForwardVelocity(wi::scene::RigidBodyPhysicsComponent& physicscomponent)
+	{
+		if (physicscomponent.physicsobject == nullptr)
+			return 0;
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		if (physicsobject.vehicle_constraint == nullptr)
+			return 0;
+		PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		float velocity = (body_interface.GetRotation(physicsobject.bodyID).Conjugated() * body_interface.GetLinearVelocity(physicsobject.bodyID)).GetZ();
+		return velocity;
+	}
+
+	void OverrideWehicleWheelTransforms(wi::scene::Scene& scene)
+	{
+		if (scene.physics_scene == nullptr)
+			return;
+		if (!IsSimulationEnabled())
+			return;
+		PhysicsScene& physics_scene = GetPhysicsScene(scene);
+		wi::jobsystem::context ctx;
+		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
+
+			RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
+			if (physicscomponent.physicsobject == nullptr)
+				return;
+			RigidBody& physicsobject = GetRigidBody(physicscomponent);
+			if (physicsobject.vehicle_constraint == nullptr)
+				return;
+
+			const Entity car_wheel_entities[] = {
+				physicscomponent.vehicle.wheel_entity_front_left,
+				physicscomponent.vehicle.wheel_entity_front_right,
+				physicscomponent.vehicle.wheel_entity_rear_left,
+				physicscomponent.vehicle.wheel_entity_rear_right,
+			};
+			const Entity motor_wheel_entities[] = {
+				physicscomponent.vehicle.wheel_entity_front_left,
+				physicscomponent.vehicle.wheel_entity_rear_left,
+			};
+			const uint32_t count = physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Car ? arraysize(car_wheel_entities) : arraysize(motor_wheel_entities);
+
+			for (uint32_t i = 0; i < count; ++i)
+			{
+				Entity wheel_entity = physicscomponent.vehicle.type == RigidBodyPhysicsComponent::Vehicle::Type::Car ? car_wheel_entities[i] : motor_wheel_entities[i];
+				if (wheel_entity == INVALID_ENTITY)
+					continue;
+
+				TransformComponent* wheel_transform = scene.transforms.GetComponent(wheel_entity);
+				if (wheel_transform != nullptr)
+				{
+					XMFLOAT4X4 localMatrix;
+					XMStoreFloat4x4(&localMatrix, wheel_transform->GetLocalMatrix());
+					Vec3 right = cast(wi::math::GetRight(localMatrix)).Normalized();
+					Vec3 up = cast(wi::math::GetUp(localMatrix)).Normalized();
+					Mat44 wheelmat = physicsobject.vehicle_constraint->GetWheelWorldTransform(i, right, up);
+					Vec3 wheelpos = wheelmat.GetTranslation();
+					Quat wheelrot = wheelmat.GetQuaternion();
+					if (IsInterpolationEnabled())
+					{
+						wheelpos = wheelpos * physics_scene.alpha + physicsobject.prev_wheel_positions[i] * (1 - physics_scene.alpha);
+						wheelrot = physicsobject.prev_wheel_rotations[i].SLERP(wheelrot, physics_scene.alpha);
+					}
+					wheelmat = Mat44::sRotationTranslation(wheelrot, wheelpos) * Mat44::sScale(cast(wheel_transform->GetScale()));
+					wheel_transform->world = cast(wheelmat);
+
+					scene.RefreshHierarchyTopdownFromParent(wheel_entity);
+
+#if 0
+					// Debug draw:
+					XMFLOAT4X4 tmp = cast(Mat44::sRotationTranslation(wheelrot, wheelpos));
+					std::scoped_lock lck(scene.locker);
+					wi::renderer::DrawAxis(XMLoadFloat4x4(&tmp), 1);
+#endif
+				}
+			}
+		});
+		wi::jobsystem::Wait(ctx);
+	}
+
 	void SetActivationState(
 		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
 		ActivationState state
@@ -2037,6 +3268,61 @@ namespace wi::physics
 		physics_scene.activate_all_rigid_bodies = true;
 	}
 
+	void ResetPhysicsObjects(Scene& scene)
+	{
+		PhysicsScene& physics_scene = *(PhysicsScene*)scene.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		BodyIDVector bodies;
+		physics_scene.physics_system.GetBodies(bodies);
+		for (BodyID& bodyID : bodies)
+		{
+			uint64_t userdata = body_interface.GetUserData(bodyID);
+			if (userdata == 0)
+				continue;
+
+			if (body_interface.GetBodyType(bodyID) == EBodyType::RigidBody)
+			{
+				RigidBody* physicsobject = (RigidBody*)userdata;
+				body_interface.SetPositionRotationAndVelocity(
+					bodyID,
+					physicsobject->additionalTransform.GetTranslation() + physicsobject->initial_position,
+					physicsobject->initial_rotation,
+					Vec3::sZero(),
+					Vec3::sZero()
+				);
+				physicsobject->prev_position = physicsobject->initial_position;
+				physicsobject->prev_rotation = physicsobject->initial_rotation;
+				if (body_interface.GetMotionType(bodyID) != EMotionType::Static)
+				{
+					body_interface.ResetSleepTimer(bodyID);
+				}
+				if (physicsobject->start_deactivated)
+				{
+					body_interface.DeactivateBody(bodyID);
+				}
+
+				// Feedback dynamic bodies: physics -> system
+				if (body_interface.GetMotionType(bodyID) == EMotionType::Dynamic)
+				{
+					TransformComponent* transform = scene.transforms.GetComponent(physicsobject->entity);
+					if (transform != nullptr)
+					{
+						Mat44 mat = body_interface.GetWorldTransform(bodyID);
+						mat = mat * physicsobject->additionalTransformInverse;
+						Vec3 position = mat.GetTranslation();
+						Quat rotation = mat.GetQuaternion().Normalized();
+
+						transform->translation_local = cast(position);
+						transform->rotation_local = cast(rotation);
+
+						// Back to local space of parent:
+						transform->MatrixTransform(physicsobject->parentMatrixInverse);
+					}
+				}
+			}
+		}
+	}
+
 	XMFLOAT3 GetSoftBodyNodePosition(
 		wi::scene::SoftBodyPhysicsComponent& physicscomponent,
 		uint32_t physicsIndex
@@ -2057,6 +3343,42 @@ namespace wi::physics
 		return cast(soft_vertices[physicsIndex].mPosition);
 	}
 
+	void SetGhostMode(
+		wi::scene::RigidBodyPhysicsComponent& physicscomponent,
+		bool value
+	)
+	{
+		if (physicscomponent.physicsobject == nullptr)
+			return;
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+		PhysicsScene& physics_scene = *(PhysicsScene*)physicsobject.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		EMotionType motionType = body_interface.GetMotionType(physicsobject.bodyID);
+		ObjectLayer layer = value ? Layers::GHOST : (motionType == EMotionType::Static ? Layers::NON_MOVING : Layers::MOVING);
+		body_interface.SetObjectLayer(physicsobject.bodyID, layer);
+	}
+	void SetGhostMode(
+		wi::scene::HumanoidComponent& humanoid,
+		bool value
+	)
+	{
+		if (humanoid.ragdoll == nullptr)
+			return;
+		Ragdoll& ragdoll = *(Ragdoll*)humanoid.ragdoll.get();
+		PhysicsScene& physics_scene = *(PhysicsScene*)ragdoll.physics_scene.get();
+		BodyInterface& body_interface = physics_scene.physics_system.GetBodyInterfaceNoLock();
+		ObjectLayer layer = value ? Layers::GHOST : Layers::MOVING;
+		for (auto& rb : ragdoll.rigidbodies)
+		{
+			if (rb.bodyID.IsInvalid())
+				continue;
+			body_interface.SetObjectLayer(rb.bodyID, layer);
+		}
+	}
+	void SetRagdollGhostMode(wi::scene::HumanoidComponent& humanoid, bool value)
+	{
+		SetGhostMode(humanoid, value);
+	}
 
 	template <class CollectorType>
 	class WickedClosestHitCollector : public JPH::ClosestHitCollisionCollector<CollectorType>
@@ -2073,6 +3395,8 @@ namespace wi::physics
 				return;
 			const Body& body = lock.GetBody();
 			const uint64_t userdata = body.GetUserData();
+			if (userdata == 0)
+				return;
 
 			if (body.IsRigidBody())
 			{
@@ -2113,7 +3437,7 @@ namespace wi::physics
 		inray.mDirection = inray.mDirection * range;
 
 		RayCastSettings settings;
-		settings.mBackFaceMode = EBackFaceMode::IgnoreBackFaces;
+		settings.mBackFaceModeTriangles = EBackFaceMode::IgnoreBackFaces;
 		settings.mTreatConvexAsSolid = false;
 
 		WickedClosestHitCollector<CastRayCollector> collector;
@@ -2133,6 +3457,8 @@ namespace wi::physics
 
 		const Body& body = lock.GetBody();
 		const uint64_t userdata = body.GetUserData();
+		if (userdata == 0)
+			return result;
 
 		const Vec3 position = inray.GetPointOnRay(collector.mHit.mFraction);
 		const Vec3 position_local = body.GetCenterOfMassTransform().Inversed() * position;
@@ -2198,7 +3524,8 @@ namespace wi::physics
 	void PickDrag(
 		const wi::scene::Scene& scene,
 		wi::primitive::Ray ray,
-		PickDragOperation& op
+		PickDragOperation& op,
+		ConstraintType constraint_type
 	)
 	{
 		if (scene.physics_scene == nullptr)
@@ -2243,20 +3570,24 @@ namespace wi::physics
 			{
 				Vec3 pos = cast(result.position);
 
-				internal_state->bodyA = body_interface.CreateBody(BodyCreationSettings(new SphereShape(0.01f), pos, Quat::sIdentity(), EMotionType::Kinematic, Layers::MOVING));
+				internal_state->bodyA = body_interface.CreateBody(BodyCreationSettings(new SphereShape(0.01f), pos, Quat::sIdentity(), EMotionType::Kinematic, Layers::GHOST));
 				body_interface.AddBody(internal_state->bodyA->GetID(), EActivation::Activate);
 
-#if 0
-				DistanceConstraintSettings settings;
-				settings.SetEmbedded();
-				settings.mPoint1 = settings.mPoint2 = pos;
-#else
-				FixedConstraintSettings settings;
-				settings.SetEmbedded();
-				settings.mAutoDetectPoint = true;
-#endif
+				if (constraint_type == ConstraintType::Fixed)
+				{
+					FixedConstraintSettings settings;
+					settings.SetEmbedded();
+					settings.mAutoDetectPoint = true;
+					internal_state->constraint = settings.Create(*internal_state->bodyA, *internal_state->bodyB);
+				}
+				else if (constraint_type == ConstraintType::Point)
+				{
+					PointConstraintSettings settings;
+					settings.SetEmbedded();
+					settings.mPoint1 = settings.mPoint2 = pos;
+					internal_state->constraint = settings.Create(*internal_state->bodyA, *internal_state->bodyB);
+				}
 
-				internal_state->constraint = settings.Create(*internal_state->bodyA, *internal_state->bodyB);
 				physics_scene.physics_system.AddConstraint(internal_state->constraint);
 			}
 			else if (body->IsSoftBody())

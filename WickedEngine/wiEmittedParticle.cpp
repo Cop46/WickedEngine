@@ -104,7 +104,7 @@ namespace wi
 			}
 			const uint64_t alignment = device->GetMinOffsetAlignment(&bd);
 
-			vb_pos.size = sizeof(MeshComponent::Vertex_POS32) * 4 * MAX_PARTICLES;
+			vb_pos.size = sizeof(MeshComponent::Vertex_POS32W) * 4 * MAX_PARTICLES;
 			vb_nor.size = sizeof(MeshComponent::Vertex_NOR) * 4 * MAX_PARTICLES;
 			vb_uvs.size = sizeof(MeshComponent::Vertex_UVS) * 4 * MAX_PARTICLES;
 			vb_col.size = sizeof(MeshComponent::Vertex_COL) * 4 * MAX_PARTICLES;
@@ -123,8 +123,8 @@ namespace wi
 
 			buffer_offset = AlignTo(buffer_offset, alignment);
 			vb_pos.offset = buffer_offset;
-			vb_pos.subresource_srv = device->CreateSubresource(&generalBuffer, SubresourceType::SRV, vb_pos.offset, vb_pos.size, &MeshComponent::Vertex_POS32::FORMAT);
-			vb_pos.subresource_uav = device->CreateSubresource(&generalBuffer, SubresourceType::UAV, vb_pos.offset, vb_pos.size); // UAV can't have RGB32_F format!
+			vb_pos.subresource_srv = device->CreateSubresource(&generalBuffer, SubresourceType::SRV, vb_pos.offset, vb_pos.size, &MeshComponent::Vertex_POS32W::FORMAT);
+			vb_pos.subresource_uav = device->CreateSubresource(&generalBuffer, SubresourceType::UAV, vb_pos.offset, vb_pos.size, &MeshComponent::Vertex_POS32W::FORMAT); // UAV can't have RGB32_F format!
 			vb_pos.descriptor_srv = device->GetDescriptorIndex(&generalBuffer, SubresourceType::SRV, vb_pos.subresource_srv);
 			vb_pos.descriptor_uav = device->GetDescriptorIndex(&generalBuffer, SubresourceType::UAV, vb_pos.subresource_uav);
 			buffer_offset += vb_pos.size;
@@ -245,7 +245,7 @@ namespace wi
 				AlignTo(sizeof(IndirectDispatchArgs), (uint64_t)IndirectDispatchArgsAlignment) +
 				AlignTo(sizeof(IndirectDispatchArgs), (uint64_t)IndirectDispatchArgsAlignment) +
 				AlignTo(sizeof(IndirectDrawArgsInstanced), (uint64_t)IndirectDrawArgsAlignment);
-			device->CreateBuffer(&bd, nullptr, &indirectBuffers);
+			device->CreateBufferZeroed(&bd, &indirectBuffers);
 			device->SetName(&indirectBuffers, "EmittedParticleSystem::indirectBuffers");
 
 			// Constant buffer:
@@ -269,7 +269,6 @@ namespace wi
 				}
 			}
 		}
-
 	}
 
 	void EmittedParticleSystem::CreateRaytracingRenderData()
@@ -291,9 +290,9 @@ namespace wi
 			geometry.triangles.index_format = GetIndexBufferFormat(primitiveBuffer.desc.format);
 			geometry.triangles.index_count = MAX_PARTICLES * 6;
 			geometry.triangles.index_offset = 0;
-			geometry.triangles.vertex_count = (uint32_t)(vb_pos.size / sizeof(MeshComponent::Vertex_POS32));
-			geometry.triangles.vertex_format = MeshComponent::Vertex_POS32::FORMAT;
-			geometry.triangles.vertex_stride = sizeof(MeshComponent::Vertex_POS32);
+			geometry.triangles.vertex_count = (uint32_t)(vb_pos.size / sizeof(MeshComponent::Vertex_POS32W));
+			geometry.triangles.vertex_format = Format::R32G32B32_FLOAT;
+			geometry.triangles.vertex_stride = sizeof(MeshComponent::Vertex_POS32W);
 
 			bool success = device->CreateRaytracingAccelerationStructure(&desc, &BLAS);
 			assert(success);
@@ -322,6 +321,7 @@ namespace wi
 		retVal += generalBuffer.GetDesc().size;
 		retVal += culledIndirectionBuffer.GetDesc().size;
 		retVal += culledIndirectionBuffer2.GetDesc().size;
+		retVal += ComputeTextureMemorySizeInBytes(opacityCurveTex.GetDesc());
 
 		return retVal;
 	}
@@ -366,6 +366,11 @@ namespace wi
 		if (statistics.aliveCount > 0 || statistics.aliveCount_afterSimulation > 0)
 		{
 			active_frames |= 1; // activate current frame
+		}
+
+		if (!opacityCurveTex.IsValid())
+		{
+			SetOpacityCurveControl(opacityCurveControlPeakStart, opacityCurveControlPeakEnd);
 		}
 	}
 	void EmittedParticleSystem::Burst(int num)
@@ -438,7 +443,7 @@ namespace wi
 				EmitLocation& location = emit_locations[i];
 				XMFLOAT4X4 mat = location.transform.GetMatrix();
 				XMMATRIX M = XMMatrixTranspose(XMLoadFloat4x4(&mat));
-				M = M * W;
+				M = W * M;
 				XMStoreFloat4x4(&mat, M);
 				location.transform.Create(mat);
 				std::memcpy((EmitLocation*)alloc.data + i, &location, sizeof(location));
@@ -478,7 +483,7 @@ namespace wi
 			cb.xParticleScaling = scaleX;
 			cb.xParticleSize = size;
 			cb.xParticleMotionBlurAmount = motionBlurAmount;
-			cb.xParticleRotation = rotation * XM_PI * 60;
+			cb.xParticleRotation = rotation * XM_PI;
 			cb.xParticleMass = mass;
 			cb.xEmitterMaxParticleCount = MAX_PARTICLES;
 			cb.xEmitterFixedTimestep = FIXED_TIMESTEP;
@@ -716,6 +721,8 @@ namespace wi
 
 			device->EventBegin("Simulate", cmd);
 
+			device->BindResource(&opacityCurveTex, 0, cmd);
+
 			device->BindUAV(&particleBuffer, 0, cmd);
 			device->BindUAV(&aliveList[0], 1, cmd);
 			device->BindUAV(&aliveList[1], 2, cmd);
@@ -871,6 +878,45 @@ namespace wi
 		device->EventEnd(cmd);
 	}
 
+	void EmittedParticleSystem::SetOpacityCurveControl(float peakStart, float peakEnd)
+	{
+		peakEnd = std::max(peakStart, peakEnd);
+
+		opacityCurveControlPeakStart = peakStart;
+		opacityCurveControlPeakEnd = peakEnd;
+
+		uint16_t data[2048];
+		int startup_length = int(peakStart * float(arraysize(data) - 1));
+		// Ramp up:
+		for (int i = 0; i < startup_length; ++i)
+		{
+			float t = smoothstep(0.0f, 1.0f, float(i) / (startup_length - 1));
+			data[i] = uint16_t(t * 65535);
+		}
+		int keep_length = int((peakEnd - peakStart) * float(arraysize(data) - 1));
+		// Keep value:
+		for (int i = 0; i < keep_length; ++i)
+		{
+			data[i + startup_length] = uint16_t(65535);
+		}
+		// Ramp down:
+		for (int i = 0; i < (arraysize(data) - startup_length - keep_length); ++i)
+		{
+			float t = smoothstep(1.0f, 0.0f, float(i) / (arraysize(data) - startup_length - keep_length - 1));
+			data[i + startup_length + keep_length] = uint16_t(t * 65535);
+		}
+		TextureDesc desc;
+		desc.type = TextureDesc::Type::TEXTURE_1D;
+		desc.width = arraysize(data);
+		desc.format = Format::R16_UNORM;
+		desc.bind_flags = BindFlag::SHADER_RESOURCE;
+		desc.swizzle = SwizzleFromString("rrr1");
+		SubresourceData initdata;
+		initdata.data_ptr = data;
+		initdata.row_pitch = sizeof(data);
+		GetDevice()->CreateTexture(&desc, &initdata, &opacityCurveTex);
+		GetDevice()->SetName(&opacityCurveTex, "EmittedParticleSystem::opacityCurveTex");
+	}
 
 	namespace EmittedParticleSystem_Internal
 	{
@@ -1040,7 +1086,7 @@ namespace wi
 		static wi::eventhandler::Handle handle = wi::eventhandler::Subscribe(wi::eventhandler::EVENT_RELOAD_SHADERS, [](uint64_t userdata) { EmittedParticleSystem_Internal::LoadShaders(); });
 		EmittedParticleSystem_Internal::LoadShaders();
 
-		wi::backlog::post("wi::EmittedParticleSystem Initialized (" + std::to_string((int)std::round(timer.elapsed())) + " ms)");
+		wilog("wi::EmittedParticleSystem Initialized (%d ms)", (int)std::round(timer.elapsed()));
 	}
 
 
@@ -1105,6 +1151,24 @@ namespace wi
 				archive >> restitution;
 			}
 
+			if (seri.GetVersion() >= 1)
+			{
+				archive >> opacityCurveControlPeakStart;
+			}
+			else
+			{
+				opacityCurveControlPeakStart = 0;
+			}
+
+			if (seri.GetVersion() >= 2)
+			{
+				archive >> opacityCurveControlPeakEnd;
+			}
+			else
+			{
+				opacityCurveControlPeakEnd = opacityCurveControlPeakStart;
+			}
+
 		}
 		else
 		{
@@ -1149,6 +1213,16 @@ namespace wi
 			if (archive.GetVersion() >= 74)
 			{
 				archive << restitution;
+			}
+
+			if (seri.GetVersion() >= 1)
+			{
+				archive << opacityCurveControlPeakStart;
+			}
+
+			if (seri.GetVersion() >= 2)
+			{
+				archive << opacityCurveControlPeakEnd;
 			}
 		}
 	}

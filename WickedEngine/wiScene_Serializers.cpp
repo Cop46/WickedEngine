@@ -256,6 +256,16 @@ namespace wi::scene
 			{
 				archive >> saturation;
 			}
+			if (seri.GetVersion() >= 9)
+			{
+				archive >> interiorMappingScale;
+				archive >> interiorMappingOffset;
+				archive >> interiorMappingRotation;
+			}
+			if (seri.GetVersion() >= 10)
+			{
+				SerializeEntity(archive, cameraSource, seri);
+			}
 
 			for (auto& x : textures)
 			{
@@ -420,6 +430,16 @@ namespace wi::scene
 			if (seri.GetVersion() >= 8)
 			{
 				archive << saturation;
+			}
+			if (seri.GetVersion() >= 9)
+			{
+				archive << interiorMappingScale;
+				archive << interiorMappingOffset;
+				archive << interiorMappingRotation;
+			}
+			if (seri.GetVersion() >= 10)
+			{
+				SerializeEntity(archive, cameraSource, seri);
 			}
 		}
 	}
@@ -655,7 +675,7 @@ namespace wi::scene
 			}
 			if (archive.GetVersion() >= 76)
 			{
-				archive >> lod_distance_multiplier;
+				archive >> lod_bias;
 			}
 			if (archive.GetVersion() >= 80)
 			{
@@ -706,7 +726,7 @@ namespace wi::scene
 			}
 			if (archive.GetVersion() >= 76)
 			{
-				archive << lod_distance_multiplier;
+				archive << lod_bias;
 			}
 			if (archive.GetVersion() >= 80)
 			{
@@ -776,6 +796,44 @@ namespace wi::scene
 			{
 				archive >> buoyancy;
 			}
+
+			if (seri.GetVersion() >= 5)
+			{
+				archive >> (uint32_t&)vehicle.type;
+				archive >> (uint32_t&)vehicle.collision_mode;
+
+				archive >> vehicle.chassis_half_width;
+				archive >> vehicle.chassis_half_height;
+				archive >> vehicle.chassis_half_length;
+				archive >> vehicle.front_wheel_offset;
+				archive >> vehicle.rear_wheel_offset;
+				archive >> vehicle.wheel_radius;
+				archive >> vehicle.wheel_width;
+				archive >> vehicle.car.four_wheel_drive;
+				archive >> vehicle.max_engine_torque;
+				archive >> vehicle.clutch_strength;
+				archive >> vehicle.max_roll_angle;
+				archive >> vehicle.max_steering_angle;
+
+				archive >> vehicle.front_suspension.min_length;
+				archive >> vehicle.front_suspension.max_length;
+				archive >> vehicle.front_suspension.frequency;
+				archive >> vehicle.front_suspension.damping;
+
+				archive >> vehicle.rear_suspension.min_length;
+				archive >> vehicle.rear_suspension.max_length;
+				archive >> vehicle.rear_suspension.frequency;
+				archive >> vehicle.rear_suspension.damping;
+
+				archive >> vehicle.motorcycle.front_suspension_angle;
+				archive >> vehicle.motorcycle.front_brake_torque;
+				archive >> vehicle.motorcycle.rear_brake_torque;
+
+				SerializeEntity(archive, vehicle.wheel_entity_front_left, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_front_right, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_rear_left, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_rear_right, seri);
+			}
 		}
 		else
 		{
@@ -810,6 +868,127 @@ namespace wi::scene
 			if (seri.GetVersion() >= 4)
 			{
 				archive << buoyancy;
+			}
+
+			if (seri.GetVersion() >= 5)
+			{
+				archive << (uint32_t&)vehicle.type;
+				archive << (uint32_t&)vehicle.collision_mode;
+
+				archive << vehicle.chassis_half_width;
+				archive << vehicle.chassis_half_height;
+				archive << vehicle.chassis_half_length;
+				archive << vehicle.front_wheel_offset;
+				archive << vehicle.rear_wheel_offset;
+				archive << vehicle.wheel_radius;
+				archive << vehicle.wheel_width;
+				archive << vehicle.car.four_wheel_drive;
+				archive << vehicle.max_engine_torque;
+				archive << vehicle.clutch_strength;
+				archive << vehicle.max_roll_angle;
+				archive << vehicle.max_steering_angle;
+
+				archive << vehicle.front_suspension.min_length;
+				archive << vehicle.front_suspension.max_length;
+				archive << vehicle.front_suspension.frequency;
+				archive << vehicle.front_suspension.damping;
+
+				archive << vehicle.rear_suspension.min_length;
+				archive << vehicle.rear_suspension.max_length;
+				archive << vehicle.rear_suspension.frequency;
+				archive << vehicle.rear_suspension.damping;
+
+				archive << vehicle.motorcycle.front_suspension_angle;
+				archive << vehicle.motorcycle.front_brake_torque;
+				archive << vehicle.motorcycle.rear_brake_torque;
+
+				SerializeEntity(archive, vehicle.wheel_entity_front_left, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_front_right, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_rear_left, seri);
+				SerializeEntity(archive, vehicle.wheel_entity_rear_right, seri);
+			}
+		}
+	}
+	void PhysicsConstraintComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		if (archive.IsReadMode())
+		{
+			archive >> _flags;
+			archive >> (uint32_t&)type;
+			SerializeEntity(archive, bodyA, seri);
+			SerializeEntity(archive, bodyB, seri);
+			archive >> distance_constraint.min_distance;
+			archive >> distance_constraint.max_distance;
+			archive >> hinge_constraint.min_angle;
+			archive >> hinge_constraint.max_angle;
+			archive >> cone_constraint.half_cone_angle;
+			if (seri.GetVersion() >= 1)
+			{
+				archive >> six_dof.minTranslationAxes;
+				archive >> six_dof.maxTranslationAxes;
+				archive >> six_dof.minRotationAxes;
+				archive >> six_dof.maxRotationAxes;
+			}
+			if (seri.GetVersion() >= 2)
+			{
+				archive >> swing_twist.normal_half_cone_angle;
+				archive >> swing_twist.plane_half_cone_angle;
+				archive >> swing_twist.min_twist_angle;
+				archive >> swing_twist.max_twist_angle;
+			}
+			if (seri.GetVersion() >= 3)
+			{
+				archive >> hinge_constraint.target_angular_velocity;
+			}
+			if (seri.GetVersion() >= 4)
+			{
+				archive >> slider_constraint.min_limit;
+				archive >> slider_constraint.max_limit;
+			}
+			if (seri.GetVersion() >= 5)
+			{
+				archive >> slider_constraint.target_velocity;
+				archive >> slider_constraint.max_force;
+			}
+		}
+		else
+		{
+			archive << _flags;
+			archive << (uint32_t&)type;
+			SerializeEntity(archive, bodyA, seri);
+			SerializeEntity(archive, bodyB, seri);
+			archive << distance_constraint.min_distance;
+			archive << distance_constraint.max_distance;
+			archive << hinge_constraint.min_angle;
+			archive << hinge_constraint.max_angle;
+			archive << cone_constraint.half_cone_angle;
+			if (seri.GetVersion() >= 1)
+			{
+				archive << six_dof.minTranslationAxes;
+				archive << six_dof.maxTranslationAxes;
+				archive << six_dof.minRotationAxes;
+				archive << six_dof.maxRotationAxes;
+			}
+			if (seri.GetVersion() >= 2)
+			{
+				archive << swing_twist.normal_half_cone_angle;
+				archive << swing_twist.plane_half_cone_angle;
+				archive << swing_twist.min_twist_angle;
+				archive << swing_twist.max_twist_angle;
+			}
+			if (seri.GetVersion() >= 3)
+			{
+				archive << hinge_constraint.target_angular_velocity;
+			}
+			if (seri.GetVersion() >= 4)
+			{
+				archive << slider_constraint.min_limit;
+				archive << slider_constraint.max_limit;
+			}
+			if (seri.GetVersion() >= 5)
+			{
+				archive << slider_constraint.target_velocity;
+				archive << slider_constraint.max_force;
 			}
 		}
 	}
@@ -1113,6 +1292,12 @@ namespace wi::scene
 				archive >> ortho_vertical_size;
 			}
 
+			if (seri.GetVersion() >= 2)
+			{
+				archive >> render_to_texture.resolution;
+				archive >> render_to_texture.sample_count;
+			}
+
 			SetDirty();
 		}
 		else
@@ -1134,6 +1319,12 @@ namespace wi::scene
 			if (seri.GetVersion() >= 1)
 			{
 				archive << ortho_vertical_size;
+			}
+
+			if (seri.GetVersion() >= 2)
+			{
+				archive << render_to_texture.resolution;
+				archive << render_to_texture.sample_count;
 			}
 		}
 	}
@@ -2160,6 +2351,11 @@ namespace wi::scene
 				archive >> ragdoll_fatness;
 				archive >> ragdoll_headsize;
 			}
+
+			if (seri.GetVersion() >= 2)
+			{
+				SerializeEntity(archive, lookAtEntity, seri);
+			}
 		}
 		else
 		{
@@ -2179,6 +2375,11 @@ namespace wi::scene
 			{
 				archive << ragdoll_fatness;
 				archive << ragdoll_headsize;
+			}
+
+			if (seri.GetVersion() >= 2)
+			{
+				SerializeEntity(archive, lookAtEntity, seri);
 			}
 		}
 	}
@@ -2292,6 +2493,49 @@ namespace wi::scene
 			archive << width;
 			archive << height;
 			archive << scale;
+		}
+	}
+	void SplineComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
+	{
+		if (archive.IsReadMode())
+		{
+			archive >> _flags;
+			archive >> width;
+			archive >> rotation;
+			archive >> mesh_generation_vertical_subdivision;
+			archive >> mesh_generation_subdivision;
+
+			size_t node_count = 0;
+			archive >> node_count;
+			spline_node_entities.resize(node_count);
+			for (size_t i = 0; i < node_count; ++i)
+			{
+				SerializeEntity(archive, spline_node_entities[i], seri);
+			}
+
+			if (seri.GetVersion() >= 1)
+			{
+				archive >> terrain_modifier_amount;
+			}
+		}
+		else
+		{
+			archive << _flags;
+			archive << width;
+			archive << rotation;
+			archive << mesh_generation_vertical_subdivision;
+			archive << mesh_generation_subdivision;
+
+			archive << spline_node_entities.size();
+			for (size_t i = 0; i < spline_node_entities.size(); ++i)
+			{
+				SerializeEntity(archive, spline_node_entities[i], seri);
+			}
+
+			if (seri.GetVersion() >= 1)
+			{
+				archive << terrain_modifier_amount;
+			}
 		}
 	}
 
@@ -2430,6 +2674,10 @@ namespace wi::scene
 			ddgi.Serialize(archive);
 		}
 
+#ifdef _DEBUG
+		FixupNans();
+#endif // _DEBUG
+
 		wi::jobsystem::Wait(seri.ctx); // This is needed before emitter material fixup that is below, because material CreateRenderDatas might be pending!
 
 		// Fixup old emittedparticle distortion basecolor slot -> normalmap slot
@@ -2463,9 +2711,7 @@ namespace wi::scene
 			}
 		}
 
-		char text[64] = {};
-		snprintf(text, arraysize(text), "Scene::Serialize took %.2f seconds", timer.elapsed_seconds());
-		wi::backlog::post(text);
+		wilog("Scene::Serialize took %.2f seconds", timer.elapsed_seconds());
 	}
 
 	void Scene::DDGI::Serialize(wi::Archive& archive)
@@ -2489,30 +2735,18 @@ namespace wi::scene
 
 			// color texture:
 			archive >> data;
-			if(!data.empty())
+			if (!data.empty() && archive.GetVersion() >= 93)
 			{
-				TextureDesc desc;
-				desc.bind_flags = BindFlag::SHADER_RESOURCE;
-				desc.width = DDGI_COLOR_TEXELS * grid_dimensions.x * grid_dimensions.y;
-				desc.height = DDGI_COLOR_TEXELS * grid_dimensions.z;
-				desc.width = std::max(256u, desc.width);	// apply same padding as the sparse texture version
-				desc.height = std::max(256u, desc.height);	// apply same padding as the sparse texture version
-				desc.format = Format::BC6H_UF16;
-				const uint32_t num_blocks_x = desc.width / GetFormatBlockSize(desc.format);
-				const size_t required_size = ComputeTextureMemorySizeInBytes(desc);
-				if (data.size() == required_size)
-				{
-					SubresourceData initdata;
-					initdata.data_ptr = data.data();
-					initdata.row_pitch = num_blocks_x * GetFormatStride(desc.format);
+				const uint32_t probe_count = grid_dimensions.x * grid_dimensions.y * grid_dimensions.z;
 
-					device->CreateTexture(&desc, &initdata, &color_texture);
-					device->SetName(&color_texture, "ddgi.color_texture[serialized]");
-				}
-				else
-				{
-					wi::backlog::post("The serialized DDGI irradiance data structure is different from current version, discarding irradiance data.", wi::backlog::LogLevel::Warning);
-				}
+				GPUBufferDesc buf;
+				buf.stride = sizeof(DDGIProbe);
+				buf.size = buf.stride * probe_count;
+				buf.bind_flags = BindFlag::SHADER_RESOURCE;
+				buf.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
+				buf.format = Format::UNKNOWN;
+				device->CreateBuffer(&buf, data.data(), &probe_buffer);
+				device->SetName(&probe_buffer, "ddgi.probe_buffer[serialized]");
 			}
 
 			// depth texture:
@@ -2533,32 +2767,16 @@ namespace wi::scene
 				device->SetName(&depth_texture, "ddgi.depth_texture[serialized]");
 			}
 
-			// offset texture:
-			archive >> data;
-			if(!data.empty())
+			if (archive.GetVersion() < 93)
 			{
-				TextureDesc desc;
-				desc.type = TextureDesc::Type::TEXTURE_3D;
-				desc.width = grid_dimensions.x;
-				desc.height = grid_dimensions.z;
-				desc.depth = grid_dimensions.y;
-				desc.format = Format::R10G10B10A2_UNORM;
-				desc.bind_flags = BindFlag::SHADER_RESOURCE;
+				// offset texture:
+				archive >> data;
 
-				const size_t required_size = ComputeTextureMemorySizeInBytes(desc);
-				if (data.size() == required_size)
+				if (!data.empty())
 				{
-					SubresourceData initdata;
-					initdata.data_ptr = data.data();
-					initdata.row_pitch = desc.width * GetFormatStride(desc.format);
-					initdata.slice_pitch = initdata.row_pitch * desc.height;
-
-					device->CreateTexture(&desc, &initdata, &offset_texture);
-					device->SetName(&offset_texture, "ddgi.offset_texture[serialized]");
-				}
-				else
-				{
-					wi::backlog::post("The serialized DDGI probe offset structure is different from current version, discarding probe offset data.", wi::backlog::LogLevel::Warning);
+					wi::backlog::post("Found older DDGI data in the scene which is now incompatible. Please recompute the DDGI if you need it.", wi::backlog::LogLevel::Warning);
+					depth_texture = {};
+					probe_buffer = {};
 				}
 			}
 		}
@@ -2575,10 +2793,11 @@ namespace wi::scene
 			}
 
 			wi::vector<uint8_t> data;
-			if (color_texture.IsValid())
+
+			// Save probe buffer:
+			if (probe_buffer.IsValid())
 			{
-				bool success = wi::helper::saveTextureToMemory(color_texture, data);
-				assert(success);
+				wi::helper::saveBufferToMemory(probe_buffer, data);
 			}
 			archive << data;
 
@@ -2586,14 +2805,6 @@ namespace wi::scene
 			if (depth_texture.IsValid())
 			{
 				bool success = wi::helper::saveTextureToMemory(depth_texture, data);
-				assert(success);
-			}
-			archive << data;
-
-			data.clear();
-			if (offset_texture.IsValid())
-			{
-				bool success = wi::helper::saveTextureToMemory(offset_texture, data);
 				assert(success);
 			}
 			archive << data;

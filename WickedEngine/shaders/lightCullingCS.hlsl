@@ -127,6 +127,8 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 	float fMinDepth = asfloat(uMaxDepth);
 	float fMaxDepth = asfloat(uMinDepth);
 
+	fMaxDepth = max(0.000001, fMaxDepth); // fix for AMD!!!!!!!!!
+
 	Frustum GroupFrustum;
 	AABB GroupAABB;			// frustum AABB around min-max depth in View Space
 	AABB GroupAABB_WS;		// frustum AABB in world space
@@ -218,7 +220,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 		{
 		case ENTITY_TYPE_POINTLIGHT:
 		{
-			if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+			if (entity.IsStaticLight())
 				break; // static lights will be skipped here (they are used at lightmap baking)
 			if (!any(entity.GetColor().rgb))
 				break;
@@ -242,7 +244,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 		break;
 		case ENTITY_TYPE_SPOTLIGHT:
 		{
-			if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+			if (entity.IsStaticLight())
 				break; // static lights will be skipped here (they are used at lightmap baking)
 			if (!any(entity.GetColor().rgb))
 				break;
@@ -270,7 +272,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 		break;
 		case ENTITY_TYPE_DIRECTIONALLIGHT:
 		{
-			if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+			if (entity.IsStaticLight())
 				break; // static lights will be skipped here (they are used at lightmap baking)
 			if (!any(entity.GetColor().rgb))
 				break;
@@ -319,7 +321,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 	{
 		ShaderEntity entity = load_entity(i);
 		
-		if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+		if (entity.IsStaticLight())
 			continue; // static lights will be skipped here (they are used at lightmap baking)
 		float3 positionVS = mul(GetCamera().view, float4(entity.position, 1)).xyz;
 		Sphere sphere = { positionVS.xyz, entity.GetRange() + entity.GetLength() };
@@ -344,7 +346,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 	{
 		ShaderEntity entity = load_entity(i);
 		
-		if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+		if (entity.IsStaticLight())
 			continue; // static lights will be skipped here (they are used at lightmap baking)
 		float3 positionVS = mul(GetCamera().view, float4(entity.position, 1)).xyz;
 		float3 directionVS = mul((float3x3)GetCamera().view, entity.GetDirection());
@@ -373,7 +375,7 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 	{
 		ShaderEntity entity = load_entity(i);
 		
-		if (entity.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+		if (entity.IsStaticLight())
 			continue; // static lights will be skipped here (they are used at lightmap baking)
 		AppendEntity_Transparent(i);
 		AppendEntity_Opaque(i);
@@ -430,6 +432,39 @@ void main(uint3 Gid : SV_GroupID, uint3 DTid : SV_DispatchThreadID, uint3 GTid :
 			AABBtransform(b, load_entitymatrix(entity.GetMatrixIndex()));
 
 			if (IntersectAABB(a, b))
+			{
+#ifdef ADVANCED_CULLING
+				if (depth_mask & ConstructEntityMask(minDepthVS, __depthRangeRecip, sphere))
+#endif
+				{
+					AppendEntity_Opaque(i);
+				}
+			}
+		}
+	}
+	
+	// Capsule shadows:
+	for (uint i = forces().first_item() + groupIndex; i < forces().end_item(); i += TILED_CULLING_THREADSIZE * TILED_CULLING_THREADSIZE)
+	{
+		ShaderEntity entity = load_entity(i);
+		if ((entity.GetFlags() & ENTITY_FLAG_CAPSULE_SHADOW_COLLIDER) == 0)
+			continue;
+			
+		float3 A = entity.position;
+		float3 B = entity.GetColliderTip();
+		half radius = entity.GetRange() * CAPSULE_SHADOW_BOLDEN;
+
+		// culling based on capsule-sphere:
+		float3 center = lerp(A, B, 0.5);
+		half range = distance(center, A) + radius + CAPSULE_SHADOW_AFFECTION_RANGE;
+		
+		float3 positionVS = mul(GetCamera().view, float4(center, 1)).xyz;
+		Sphere sphere = { positionVS.xyz, range };
+		if (SphereInsideFrustum(sphere, GroupFrustum, nearClipVS, maxDepthVS))
+		{
+			AppendEntity_Transparent(i);
+
+			if (SphereIntersectsAABB(sphere, GroupAABB)) // tighter fit than sphere-frustum culling
 			{
 #ifdef ADVANCED_CULLING
 				if (depth_mask & ConstructEntityMask(minDepthVS, __depthRangeRecip, sphere))

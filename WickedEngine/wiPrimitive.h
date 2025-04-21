@@ -15,7 +15,7 @@ namespace wi::primitive
 	struct Capsule;
 	struct Plane;
 
-	struct AABB
+	struct alignas(16) AABB
 	{
 		enum INTERSECTION_TYPE
 		{
@@ -45,11 +45,17 @@ namespace wi::primitive
 		INTERSECTION_TYPE intersects2D(const AABB& b) const;
 		INTERSECTION_TYPE intersects(const AABB& b) const;
 		bool intersects(const XMFLOAT3& p) const;
+		bool intersects(const XMVECTOR& P) const;
 		bool intersects(const Ray& ray) const;
 		bool intersects(const Sphere& sphere) const;
 		bool intersects(const BoundingFrustum& frustum) const;
 		AABB operator* (float a);
 		static AABB Merge(const AABB& a, const AABB& b);
+		void AddPoint(const XMFLOAT3& pos);
+		void AddPoint(const XMVECTOR& P);
+
+		// projects the AABB to the screen, returns a 2D rectangle in UV-space as Vector(topleftX, topleftY, bottomrightX, bottomrightY), each value is in range [0, 1]
+		XMFLOAT4 ProjectToScreen(const XMMATRIX& ViewProjection) const;
 
 		constexpr XMFLOAT3 getMin() const { return _min; }
 		constexpr XMFLOAT3 getMax() const { return _max; }
@@ -128,6 +134,15 @@ namespace wi::primitive
 			radius(sphere.radius)
 		{
 			assert(radius >= 0);
+		}
+		inline Sphere getSphere() const
+		{
+			XMVECTOR B = XMLoadFloat3(&base);
+			XMVECTOR T = XMLoadFloat3(&tip);
+			Sphere ret;
+			XMStoreFloat3(&ret.center, XMVectorLerp(B, T, 0.5f));
+			XMStoreFloat(&ret.radius, XMVector3Length(B - T) * 0.5f);
+			return ret;
 		}
 		inline AABB getAABB() const
 		{

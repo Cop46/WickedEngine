@@ -213,7 +213,11 @@ void ContentBrowserWindow::RefreshContent()
 		{
 			folder.pop_back();
 		}
-		folder = folder.substr(folder.find_last_of("/\\"));
+		
+		auto last_slash = folder.find_last_of("/\\");
+		if (last_slash != folder.npos) {
+			folder = folder.substr(last_slash);
+		}
 		button.Create(folder);
 		button.SetTooltip(editor->recentFolders[editor->recentFolders.size() - 1 - i]); // full folder name!
 		button.SetLocalizationEnabled(false);
@@ -366,7 +370,6 @@ void ContentBrowserWindow::AddItem(const std::string& filename, const std::strin
 	button.SetSize(siz);
 	button.SetLocalizationEnabled(false);
 	button.SetDescription(itemname);
-	button.SetTooltip(filename);
 	button.OnClick([this, filename](wi::gui::EventArgs args) {
 		wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 			editor->Open(filename);
@@ -376,9 +379,11 @@ void ContentBrowserWindow::AddItem(const std::string& filename, const std::strin
 	button.font_description.params.h_align = wi::font::WIFALIGN_CENTER;
 	button.font_description.params.v_align = wi::font::WIFALIGN_TOP;
 	button.font.params.size = 42;
+	button.SetTooltip(filename + "\nSize: " + wi::helper::GetMemorySizeText(wi::helper::FileSize(filename)));
 	if (ext.compare("WISCENE") == 0)
 	{
-		wi::graphics::Texture archiveThumbnail = wi::Archive::PeekThumbnail(filename);
+		wi::Archive::Header archive_header;
+		wi::graphics::Texture archiveThumbnail = wi::Archive::PeekThumbnail(filename, &archive_header);
 		if (archiveThumbnail.IsValid())
 		{
 			for (int i = 0; i < arraysize(sprites); ++i)
@@ -387,6 +392,7 @@ void ContentBrowserWindow::AddItem(const std::string& filename, const std::strin
 			}
 			button.SetText("");
 		}
+		button.SetTooltip(button.GetTooltip() + "\nVersion: " + std::to_string(archive_header.version) + (archive_header.properties.bits.compressed ? "\nCompressed : true" : "\nCompressed : false"));
 	}
 	else
 	{

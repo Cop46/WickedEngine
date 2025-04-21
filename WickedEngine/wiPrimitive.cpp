@@ -80,7 +80,7 @@ namespace wi::primitive
 	float AABB::getRadius() const
 	{
 		XMFLOAT3 abc = getHalfWidth();
-		return std::sqrt(std::pow(std::sqrt(std::pow(abc.x, 2.0f) + std::pow(abc.y, 2.0f)), 2.0f) + std::pow(abc.z, 2.0f));
+		return std::sqrt(sqr(std::sqrt(sqr(abc.x) + sqr(abc.y))) + sqr(abc.z));
 	}
 	AABB::INTERSECTION_TYPE AABB::intersects(const AABB& b) const
 	{
@@ -138,6 +138,12 @@ namespace wi::primitive
 		if (p.z > _max.z) return false;
 		if (p.z < _min.z) return false;
 		return true;
+	}
+	bool AABB::intersects(const XMVECTOR& P) const
+	{
+		XMFLOAT3 p;
+		XMStoreFloat3(&p, P);
+		return intersects(p);
 	}
 	bool AABB::intersects(const Ray& ray) const
 	{
@@ -205,6 +211,17 @@ namespace wi::primitive
 	{
 		return AABB(wi::math::Min(a.getMin(), b.getMin()), wi::math::Max(a.getMax(), b.getMax()));
 	}
+	void AABB::AddPoint(const XMFLOAT3& pos)
+	{
+		_min = wi::math::Min(_min, pos);
+		_max = wi::math::Max(_max, pos);
+	}
+	void AABB::AddPoint(const XMVECTOR& P)
+	{
+		XMFLOAT3 p;
+		XMStoreFloat3(&p, P);
+		AddPoint(p);
+	}
 	void AABB::Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri)
 	{
 		if (archive.IsReadMode())
@@ -230,7 +247,30 @@ namespace wi::primitive
 			}
 		}
 	}
+	XMFLOAT4 AABB::ProjectToScreen(const XMMATRIX& ViewProjection) const
+	{
+		XMVECTOR SCREEN_MIN = XMVectorSet(1000000, 1000000, 1000000, 1000000);
+		XMVECTOR SCREEN_MAX = XMVectorSet(-1000000, -1000000, -1000000, -1000000);
+		XMVECTOR MUL = XMVectorSet(0.5f, -0.5f, 1, 1);
+		XMVECTOR ADD = XMVectorSet(0.5f, 0.5f, 0, 0);
+		for (int i = 0; i < 8; ++i)
+		{
+			XMFLOAT3 c = corner(i);
+			XMVECTOR C = XMLoadFloat3(&c);
+			C = XMVector3TransformCoord(C, ViewProjection);	// world -> clip
+			C = XMVectorMultiplyAdd(C, MUL, ADD);			// clip -> uv
+			SCREEN_MIN = XMVectorMin(SCREEN_MIN, C);
+			SCREEN_MAX = XMVectorMax(SCREEN_MAX, C);
+		}
 
+		XMFLOAT4 ret;
+		ret.x = XMVectorGetX(SCREEN_MIN);
+		ret.y = XMVectorGetY(SCREEN_MIN);
+		ret.z = XMVectorGetX(SCREEN_MAX);
+		ret.w = XMVectorGetY(SCREEN_MAX);
+
+		return ret;
+	}
 
 
 
@@ -372,11 +412,15 @@ namespace wi::primitive
 	}
 	XMFLOAT4X4 Sphere::GetPlacementOrientation(const XMFLOAT3& position, const XMFLOAT3& normal) const
 	{
-		XMVECTOR N = XMLoadFloat3(&normal);
+		XMVECTOR N = XMVector3Normalize(XMLoadFloat3(&normal));
 		XMVECTOR P = XMLoadFloat3(&position);
 		XMVECTOR E = XMLoadFloat3(&center) - P;
 		XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, P - E));
 		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		N = XMVectorSetW(N, 0);
+		T = XMVectorSetW(T, 0);
+		B = XMVectorSetW(B, 0);
+		P = XMVectorSetW(P, 1);
 		XMMATRIX M = { T, N, B, P };
 		XMFLOAT4X4 orientation;
 		XMStoreFloat4x4(&orientation, M);
@@ -534,12 +578,16 @@ namespace wi::primitive
 		const XMVECTOR Base = XMLoadFloat3(&base);
 		const XMVECTOR Tip = XMLoadFloat3(&tip);
 		const XMVECTOR Axis = XMVector3Normalize(Tip - Base);
-		XMVECTOR N = XMLoadFloat3(&normal);
+		XMVECTOR N = XMVector3Normalize(XMLoadFloat3(&normal));
 		XMVECTOR P = XMLoadFloat3(&position);
 		XMVECTOR E = Axis;
 		XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, P - E));
-		XMVECTOR Binorm = XMVector3Normalize(XMVector3Cross(T, N));
-		XMMATRIX M = { T, N, Binorm, P };
+		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		N = XMVectorSetW(N, 0);
+		T = XMVectorSetW(T, 0);
+		B = XMVectorSetW(B, 0);
+		P = XMVectorSetW(P, 1);
+		XMMATRIX M = { T, N, B, P };
 		XMFLOAT4X4 orientation;
 		XMStoreFloat4x4(&orientation, M);
 		return orientation;
@@ -760,11 +808,15 @@ namespace wi::primitive
 	}
 	XMFLOAT4X4 Ray::GetPlacementOrientation(const XMFLOAT3& position, const XMFLOAT3& normal) const
 	{
-		XMVECTOR N = XMLoadFloat3(&normal);
+		XMVECTOR N = XMVector3Normalize(XMLoadFloat3(&normal));
 		XMVECTOR P = XMLoadFloat3(&position);
 		XMVECTOR E = XMLoadFloat3(&origin);
 		XMVECTOR T = XMVector3Normalize(XMVector3Cross(N, P - E));
 		XMVECTOR B = XMVector3Normalize(XMVector3Cross(T, N));
+		N = XMVectorSetW(N, 0);
+		T = XMVectorSetW(T, 0);
+		B = XMVectorSetW(B, 0);
+		P = XMVectorSetW(P, 1);
 		XMMATRIX M = { T, N, B, P };
 		XMFLOAT4X4 orientation;
 		XMStoreFloat4x4(&orientation, M);

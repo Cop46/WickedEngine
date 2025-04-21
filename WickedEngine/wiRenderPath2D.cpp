@@ -15,8 +15,8 @@ namespace wi
 
 		rtFinal = {};
 		rtFinal_MSAA = {};
-		rtStenciled = {};
-		rtStenciled_resolved = {};
+		rtStencilExtracted = {};
+		stencilScaled = {};
 	}
 
 	void RenderPath2D::ResizeBuffers()
@@ -26,26 +26,32 @@ namespace wi
 
 		GraphicsDevice* device = wi::graphics::GetDevice();
 
+		const uint32_t sampleCount = std::max(getMSAASampleCount(), getMSAASampleCount2D());
+
 		const Texture* dsv = GetDepthStencil();
-		if (dsv != nullptr && (resolutionScale != 1.0f || dsv->GetDesc().sample_count != msaaSampleCount))
+		if (dsv != nullptr && (resolutionScale != 1.0f || dsv->GetDesc().sample_count != sampleCount))
 		{
 			TextureDesc desc = GetDepthStencil()->GetDesc();
 			desc.layout = ResourceState::SHADER_RESOURCE;
 			desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
-			desc.format = Format::R8G8B8A8_UNORM;
-			device->CreateTexture(&desc, nullptr, &rtStenciled);
-			device->SetName(&rtStenciled, "rtStenciled");
+			desc.format = Format::R8_UINT;
+			desc.layout = ResourceState::SHADER_RESOURCE;
+			device->CreateTexture(&desc, nullptr, &rtStencilExtracted);
+			device->SetName(&rtStencilExtracted, "rtStencilExtracted");
 
-			if (desc.sample_count > 1)
-			{
-				desc.sample_count = 1;
-				device->CreateTexture(&desc, nullptr, &rtStenciled_resolved);
-				device->SetName(&rtStenciled_resolved, "rtStenciled_resolved");
-			}
+			desc.width = GetPhysicalWidth();
+			desc.height = GetPhysicalHeight();
+			desc.sample_count = sampleCount;
+			desc.bind_flags = BindFlag::DEPTH_STENCIL;
+			desc.format = Format::D24_UNORM_S8_UINT;
+			desc.layout = ResourceState::DEPTHSTENCIL;
+			device->CreateTexture(&desc, nullptr, &stencilScaled);
+			device->SetName(&stencilScaled, "stencilScaled");
 		}
 		else
 		{
-			rtStenciled = {}; // this will be deleted here
+			rtStencilExtracted = {};
+			stencilScaled = {};
 		}
 
 		{
@@ -57,9 +63,9 @@ namespace wi
 			device->CreateTexture(&desc, nullptr, &rtFinal);
 			device->SetName(&rtFinal, "rtFinal");
 
-			if (getMSAASampleCount() > 1)
+			if (sampleCount > 1)
 			{
-				desc.sample_count = getMSAASampleCount();
+				desc.sample_count = sampleCount;
 				desc.bind_flags = BindFlag::RENDER_TARGET;
 				desc.misc_flags = ResourceMiscFlag::TRANSIENT_ATTACHMENT;
 				desc.layout = ResourceState::RENDERTARGET;
@@ -76,7 +82,6 @@ namespace wi
 	void RenderPath2D::Update(float dt)
 	{
 		XMUINT2 internalResolution = GetInternalResolution();
-
 		if (current_buffersize.x != internalResolution.x || current_buffersize.y != internalResolution.y)
 		{
 			ResizeBuffers();
@@ -140,10 +145,30 @@ namespace wi
 
 		RenderPath::FixedUpdate();
 	}
+	void RenderPath2D::PreRender()
+	{
+		XMUINT2 internalResolution = GetInternalResolution();
+		if (current_buffersize.x != internalResolution.x || current_buffersize.y != internalResolution.y)
+		{
+			ResizeBuffers();
+		}
+
+		RenderPath::PreRender();
+	}
 	void RenderPath2D::Render() const
 	{
+		if (!rtFinal.IsValid())
+		{
+			// Since 0.71.694: PreRender must be called before Render() because it sets up rendering resources!
+			//	The proper fix is to call PreRender() yourself for a manually managed RenderPath3D
+			//	But if you don't do that, as a last resort it will be called here using const_cast
+			assert(0);
+			const_cast<RenderPath2D*>(this)->PreRender();
+		}
+
 		GraphicsDevice* device = wi::graphics::GetDevice();
 		CommandList cmd = device->BeginCommandList();
+		device->EventBegin("RenderPath2D::Render", cmd);
 		wi::image::SetCanvas(*this);
 		wi::font::SetCanvas(*this);
 
@@ -156,164 +181,57 @@ namespace wi
 
 		const Texture* dsv = GetDepthStencil();
 
-		// Special care for internal resolution, because stencil buffer is of internal resolution, 
-		//	so we might need to render stencil sprites to separate render target that matches internal resolution!
-		if (rtStenciled.IsValid())
+		if (rtStencilExtracted.IsValid())
 		{
-			if (rtStenciled.GetDesc().sample_count > 1)
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(&rtStenciled, RenderPassImage::LoadOp::CLEAR),
-					RenderPassImage::DepthStencil(
-						dsv,
-						RenderPassImage::LoadOp::LOAD,
-						RenderPassImage::StoreOp::STORE
-					),
-					RenderPassImage::Resolve(&rtStenciled_resolved)
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
-			else
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(&rtStenciled, RenderPassImage::LoadOp::CLEAR),
-					RenderPassImage::DepthStencil(
-						dsv,
-						RenderPassImage::LoadOp::LOAD,
-						RenderPassImage::StoreOp::STORE
-					),
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
-			dsv = nullptr;
-
-			Viewport vp;
-			vp.width = (float)rtStenciled.GetDesc().width;
-			vp.height = (float)rtStenciled.GetDesc().height;
-			device->BindViewports(1, &vp, cmd);
-
-			device->EventBegin("STENCIL Sprite Layers", cmd);
-			for (auto& x : layers)
-			{
-				for (auto& y : x.items)
-				{
-					if (y.type == RenderItem2D::TYPE::SPRITE &&
-						y.sprite != nullptr &&
-						y.sprite->params.stencilComp != wi::image::STENCILMODE_DISABLED)
-					{
-						y.sprite->Draw(cmd);
-					}
-				}
-			}
-			device->EventEnd(cmd);
-
-			device->RenderPassEnd(cmd);
+			wi::renderer::ExtractStencil(*dsv, rtStencilExtracted, cmd);
 		}
 
-		if (dsv != nullptr && !rtStenciled.IsValid())
+		RenderPassImage rp[4];
+		uint32_t rp_count = 0;
+		if (rtFinal_MSAA.IsValid())
 		{
-			if (rtFinal_MSAA.IsValid())
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(
-						&rtFinal_MSAA,
-						RenderPassImage::LoadOp::CLEAR,
-						RenderPassImage::StoreOp::DONTCARE,
-						ResourceState::RENDERTARGET,
-						ResourceState::RENDERTARGET
-					),
-					RenderPassImage::DepthStencil(
-						dsv,
-						RenderPassImage::LoadOp::LOAD,
-						RenderPassImage::StoreOp::STORE
-					),
-					RenderPassImage::Resolve(&rtFinal),
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
-			else
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(&rtFinal, RenderPassImage::LoadOp::CLEAR),
-					RenderPassImage::DepthStencil(
-						dsv,
-						RenderPassImage::LoadOp::LOAD,
-						RenderPassImage::StoreOp::STORE
-					),
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
+			// MSAA:
+			rp[rp_count++] = RenderPassImage::RenderTarget(
+				&rtFinal_MSAA,
+				RenderPassImage::LoadOp::CLEAR,
+				RenderPassImage::StoreOp::DONTCARE,
+				ResourceState::RENDERTARGET,
+				ResourceState::RENDERTARGET
+			);
+			rp[rp_count++] = RenderPassImage::Resolve(&rtFinal);
 		}
 		else
 		{
-			if (rtFinal_MSAA.IsValid())
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(
-						&rtFinal_MSAA,
-						RenderPassImage::LoadOp::CLEAR,
-						RenderPassImage::StoreOp::DONTCARE,
-						ResourceState::RENDERTARGET,
-						ResourceState::RENDERTARGET
-					),
-					RenderPassImage::Resolve(&rtFinal),
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
-			else
-			{
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(
-						&rtFinal,
-						RenderPassImage::LoadOp::CLEAR
-					),
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
-			}
+			// Single sample:
+			rp[rp_count++] = RenderPassImage::RenderTarget(&rtFinal, RenderPassImage::LoadOp::CLEAR);
 		}
+		if (stencilScaled.IsValid())
+		{
+			// Scaled stencil:
+			rp[rp_count++] = RenderPassImage::DepthStencil(&stencilScaled, RenderPassImage::LoadOp::CLEAR, RenderPassImage::StoreOp::DONTCARE);
+		}
+		else if (dsv != nullptr)
+		{
+			// Native stencil:
+			rp[rp_count++] = RenderPassImage::DepthStencil(dsv, RenderPassImage::LoadOp::LOAD, RenderPassImage::StoreOp::STORE);
+		}
+		device->RenderPassBegin(rp, rp_count, cmd);
 
 		Viewport vp;
 		vp.width = (float)rtFinal.GetDesc().width;
 		vp.height = (float)rtFinal.GetDesc().height;
 		device->BindViewports(1, &vp, cmd);
 
-		if (GetDepthStencil() != nullptr)
-		{
-			if (rtStenciled.IsValid())
-			{
-				device->EventBegin("Copy STENCIL Sprite Layers", cmd);
-				wi::image::Params fx;
-				fx.enableFullScreen();
-				if (rtStenciled.GetDesc().sample_count > 1)
-				{
-					wi::image::Draw(&rtStenciled_resolved, fx, cmd);
-				}
-				else
-				{
-					wi::image::Draw(&rtStenciled, fx, cmd);
-				}
-				device->EventEnd(cmd);
-			}
-			else
-			{
-				device->EventBegin("STENCIL Sprite Layers", cmd);
-				for (auto& x : layers)
-				{
-					for (auto& y : x.items)
-					{
-						if (y.type == RenderItem2D::TYPE::SPRITE &&
-							y.sprite != nullptr &&
-							y.sprite->params.stencilComp != wi::image::STENCILMODE_DISABLED)
-						{
-							y.sprite->Draw(cmd);
-						}
-					}
-				}
-				device->EventEnd(cmd);
-			}
-		}
+		Rect rect;
+		rect.left = 0;
+		rect.right = (int32_t)rtFinal.GetDesc().width;
+		rect.top = 0;
+		rect.bottom = (int32_t)rtFinal.GetDesc().height;
+		device->BindScissorRects(1, &rect, cmd);
 
-		device->EventBegin("Sprite Layers", cmd);
+		bool stencil_scaled = false;
+
+		device->EventBegin("Layers", cmd);
 		for (auto& x : layers)
 		{
 			for (auto& y : x.items)
@@ -322,8 +240,14 @@ namespace wi
 				{
 				default:
 				case RenderItem2D::TYPE::SPRITE:
-					if (y.sprite != nullptr && y.sprite->params.stencilComp == wi::image::STENCILMODE_DISABLED)
+					if (y.sprite != nullptr)
 					{
+						if (!stencil_scaled && y.sprite->params.stencilComp != wi::image::STENCILMODE_DISABLED && stencilScaled.IsValid())
+						{
+							// Only need a scaled stencil mask if there are any stenciled sprites, and only once is enough before the first one
+							stencil_scaled = true;
+							wi::renderer::ScaleStencilMask(vp, rtStencilExtracted, cmd);
+						}
 						y.sprite->Draw(cmd);
 					}
 					break;
@@ -342,10 +266,15 @@ namespace wi
 
 		device->RenderPassEnd(cmd);
 
+		device->EventEnd(cmd);
+
 		RenderPath::Render();
 	}
 	void RenderPath2D::Compose(CommandList cmd) const
 	{
+		GraphicsDevice* device = wi::graphics::GetDevice();
+		device->EventBegin("RenderPath2D::Compose", cmd);
+
 		wi::image::Params fx;
 		fx.enableFullScreen();
 		fx.blendFlag = wi::enums::BLENDMODE_PREMULTIPLIED;
@@ -355,6 +284,8 @@ namespace wi
 			fx.enableLinearOutputMapping(hdr_scaling);
 		}
 		wi::image::Draw(&GetRenderResult(), fx, cmd);
+
+		device->EventEnd(cmd);
 
 		RenderPath::Compose(cmd);
 	}

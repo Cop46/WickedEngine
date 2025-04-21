@@ -703,7 +703,14 @@ namespace wi
 							break;
 						}
 
-						if (desc.format == Format::BC5_UNORM)
+						if (desc.format == Format::BC4_UNORM || desc.format == Format::BC4_SNORM)
+						{
+							desc.swizzle.r = ComponentSwizzle::R;
+							desc.swizzle.g = ComponentSwizzle::R;
+							desc.swizzle.b = ComponentSwizzle::R;
+							desc.swizzle.a = ComponentSwizzle::ONE;
+						}
+						if (desc.format == Format::BC5_UNORM || desc.format == Format::BC5_SNORM)
 						{
 							desc.swizzle.r = ComponentSwizzle::R;
 							desc.swizzle.g = ComponentSwizzle::G;
@@ -1333,11 +1340,13 @@ namespace wi
 
 		void SetStreamingMemoryThreshold(float value)
 		{
+			std::scoped_lock lck(locker);
 			streaming_threshold = value;
 		}
 
 		float GetStreamingMemoryThreshold()
 		{
+			std::scoped_lock lck(locker);
 			return streaming_threshold;
 		}
 
@@ -1437,13 +1446,14 @@ namespace wi
 					uint32_t requested_resolution = resource->streaming_resolution.fetch_and(0); // set to zero while returning prev value
 					if (requested_resolution > 0)
 					{
-						requested_resolution = 1ul << (31ul - firstbithigh((unsigned long)requested_resolution)); // largest power of two
+						requested_resolution = 1u << (31u - firstbithigh(requested_resolution)); // largest power of two
 					}
 					GraphicsDevice* device = GetDevice();
 					const GraphicsDevice::MemoryUsage memory_usage = device->GetMemoryUsage();
 					const float memory_percent = float(double(memory_usage.usage) / double(memory_usage.budget));
 					const bool memory_shortage = memory_percent > streaming_threshold;
 					const bool stream_in = requested_resolution >= std::min(desc.width, desc.height);
+					const uint32_t target_unload_delay = memory_shortage ? 4 : 255;
 
 					int mip_offset = int(resource->streaming_texture.mip_count - desc.mip_levels);
 					if (stream_in)
@@ -1462,15 +1472,18 @@ namespace wi
 					else
 					{
 						resource->streaming_unload_delay++; // one more frame that this wants to unload
-						if (!memory_shortage && resource->streaming_unload_delay < 255)
+						if (resource->streaming_unload_delay < target_unload_delay)
 							continue; // only unload mips if it's been wanting to unload for a couple frames, or there is memory shortage
 						if (ComputeTextureMemorySizeInBytes(desc) <= streaming_texture_min_size)
-							continue; // Don't reduce the texture below, because of 4KB alignment, this would not reduce memory usage further
-						// Mip level streaming OUT:
-						desc.width >>= 1;
-						desc.height >>= 1;
-						desc.mip_levels--;
-						mip_offset++;
+							continue; // Don't reduce the texture below, because of min resource alignment, this would not reduce memory usage further
+						// Mip level streaming OUT, fast decay:
+						while (ComputeTextureMemorySizeInBytes(desc) > streaming_texture_min_size && desc.width > requested_resolution && desc.height > requested_resolution)
+						{
+							desc.width >>= 1;
+							desc.height >>= 1;
+							desc.mip_levels--;
+							mip_offset++;
+						}
 					}
 					if (desc.mip_levels <= resource->streaming_texture.mip_count)
 					{
@@ -1599,6 +1612,8 @@ namespace wi
 		void Serialize_READ(wi::Archive& archive, ResourceSerializer& seri)
 		{
 			assert(archive.IsReadMode());
+			wi::jobsystem::Wait(streaming_ctx); // stop streaming at this point
+
 			size_t serializable_count = 0;
 			archive >> serializable_count;
 
@@ -1630,7 +1645,7 @@ namespace wi
 				archive.MapVector(resource.filedata, resource.filesize);
 
 				size_t file_offset = archive.GetPos() - resource.filesize;
-
+				
 				resource.name = archive.GetSourceDirectory() + resource.name;
 
 				if (Contains(resource.name))
@@ -1639,9 +1654,15 @@ namespace wi
 				// "Loading" the resource can happen asynchronously to serialization of file data, to improve performance
 				wi::jobsystem::Execute(ctx, [i, &temp_resources, &seri, &archive, file_offset](wi::jobsystem::JobArgs args) {
 					auto& tmp_resource = temp_resources[i];
+					Flags flags = Flags::IMPORT_DELAY;
+					if (archive.IsCompressionEnabled())
+					{
+						// If compressed archive, cannot stream from it, retain file data in memory:
+						flags |= Flags::IMPORT_RETAIN_FILEDATA;
+					}
 					auto res = Load(
 						tmp_resource.name,
-						Flags::IMPORT_DELAY,
+						flags,
 						tmp_resource.filedata,
 						tmp_resource.filesize,
 						archive.GetSourceFileName(),
@@ -1658,6 +1679,8 @@ namespace wi
 		void Serialize_WRITE(wi::Archive& archive, const wi::unordered_set<std::string>& resource_names)
 		{
 			assert(!archive.IsReadMode());
+
+			wi::jobsystem::Wait(streaming_ctx); // stop streaming at this point
 
 			locker.lock();
 			size_t serializable_count = 0;
@@ -1699,6 +1722,7 @@ namespace wi
 
 						if (resource->filedata.empty())
 						{
+							// Directly re-read the file part that is needed:
 							wi::helper::FileRead(
 								resource->container_filename,
 								resource->filedata,
@@ -1718,6 +1742,11 @@ namespace wi
 							resource->container_filename = archive.GetSourceFileName();
 							resource->container_fileoffset = archive.GetPos() - resource->filedata.size();
 							resource->container_filesize = resource->filedata.size();
+							if (archive.IsCompressionEnabled())
+							{
+								// Compressed archive: retain file data to keep resource streamable
+								resource->flags |= Flags::IMPORT_RETAIN_FILEDATA;
+							}
 							if (!has_flag(resource->flags, Flags::IMPORT_RETAIN_FILEDATA))
 							{
 								resource->filedata.clear();

@@ -2,6 +2,7 @@
 #include "CommonInclude.h"
 #include "wiGraphicsDevice.h"
 #include "wiVector.h"
+#include "wiPlatform.h"
 
 #include <string>
 #include <functional>
@@ -62,6 +63,9 @@ namespace wi::helper
 	// Save raw texture data to file format
 	bool saveTextureToFile(const wi::vector<uint8_t>& texturedata, const wi::graphics::TextureDesc& desc, const std::string& fileName);
 
+	// Download buffer from GPU into CPU memory
+	bool saveBufferToMemory(const wi::graphics::GPUBuffer& buffer, wi::vector<uint8_t>& data);
+
 	std::string getCurrentDateTimeAsString();
 
 	void SplitPath(const std::string& fullPath, std::string& dir, std::string& fileName);
@@ -86,6 +90,9 @@ namespace wi::helper
 	void MakePathAbsolute(std::string& path);
 
 	void DirectoryCreate(const std::string& path);
+
+	// Returns the file size if the file exists, otherwise 0
+	size_t FileSize(const std::string& fileName);
 
 	bool FileRead(const std::string& fileName, wi::vector<uint8_t>& data, size_t max_read = ~0ull, size_t offset = 0);
 
@@ -125,6 +132,11 @@ namespace wi::helper
 	// Converts a file into a C++ header file that contains the file contents as byte array.
 	//	dataName : the byte array's name
 	bool Bin2H(const uint8_t* data, size_t size, const std::string& dst_filename, const char* dataName);
+
+	// Converts a file into a C++ source file that contains the file contents as byte array and using extern.
+	//	dataName : the byte array's name
+	//	Note: size is exported as name_size where name is the dataName that you give to it
+	bool Bin2CPP(const uint8_t* data, size_t size, const std::string& dst_filename, const char* dataName);
 
 	void StringConvert(const std::string& from, std::wstring& to);
 
@@ -177,4 +189,16 @@ namespace wi::helper
 
 	// Returns a good looking timer duration text as either milliseconds, seconds, minutes or hours
 	std::string GetTimerDurationText(float timerSeconds);
+
+	// Get error message from platform-specific error code, for example HRESULT on windows
+	std::string GetPlatformErrorString(wi::platform::error_type code);
+
+	// Lossless compression of byte array; level = 0 means "default compression level", currently 3
+	bool Compress(const uint8_t* src_data, size_t src_size, wi::vector<uint8_t>& dst_data, int level = 0);
+
+	// Lossless decompression of byte array that was compressed with wi::helper::Compress()
+	bool Decompress(const uint8_t* src_data, size_t src_size, wi::vector<uint8_t>& dst_data);
+
+	// Hash the contents of a file:
+	size_t HashByteData(const uint8_t* data, size_t size);
 };

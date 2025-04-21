@@ -13,7 +13,7 @@ Texture2D<float> cloud_additional_history : register(t4);
 RWTexture2D<float4> output : register(u0);
 RWTexture2D<float2> output_depth : register(u1);
 RWTexture2D<float> output_additional : register(u2);
-RWTexture2D<unorm float4> output_cloudMask : register(u3);
+RWTexture2D<unorm float> output_cloudMask : register(u3);
 
 static const float2 temporalResponseMinMax = float2(0.5, 0.9);
 
@@ -51,7 +51,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	float2 screenPosition = uv_to_clipspace(uv);
 
 	float currentCloudLinearDepth = cloud_depth_current.SampleLevel(sampler_point_clamp, uv, 0).x;
-	float currentCloudDepth = compute_inverse_lineardepth(currentCloudLinearDepth, GetCamera().z_near, GetCamera().z_far);
+	float currentCloudDepth = compute_inverse_lineardepth(currentCloudLinearDepth);
 	
 	float4 thisClip = float4(screenPosition, currentCloudDepth, 1.0);
 	
@@ -71,7 +71,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	
 	bool validHistory = is_saturated(prevUV) && volumetricclouds_frame > 0;
 
-	int subPixelIndex = GetFrame().frame_count % 4;
+	int subPixelIndex = uint(volumetricclouds_frame) % 4;
 	int localIndex = (DTid.x & 1) + (DTid.y & 1) * 2;
 	int currentIndex = ComputeCheckerBoardIndex(renderCoord, subPixelIndex);
 	
@@ -175,7 +175,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 					for (int x = -1; x <= 1; x++)
 					{
 						// If it's middle then skip. We only evaluate neighbor samples
-						if ((abs(x) + abs(y)) == 0)
+						if (x == 0 && y == 0)
 							continue;
 
 						int2 offset = int2(x, y);

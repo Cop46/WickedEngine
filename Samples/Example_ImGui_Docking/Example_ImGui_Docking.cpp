@@ -347,6 +347,17 @@ void Example_ImGui::Compose(wi::graphics::CommandList cmd)
 		vertexOffset += drawList->VtxBuffer.size();
 	}
 
+	// Restore Scissor
+	{
+		Rect scissor;
+		scissor.left = 0;
+		scissor.top = 0;
+		scissor.right = (int32_t)viewport.width;
+		scissor.bottom = (int32_t)viewport.height;
+		device->BindScissorRects(1, &scissor, cmd);
+
+	}
+
 	//// Update and Render additional Platform Windows
 	//if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
 	//{
@@ -639,7 +650,7 @@ void Example_ImGuiRenderer::Update(float dt)
 			CONTENT_DIR "models/emitter_skinned.wiscene",
 			CONTENT_DIR "models/physics_test.wiscene",
 			CONTENT_DIR "models/shadows_test.wiscene",
-			CONTENT_DIR "models/sponza/sponza.wiscene",
+			CONTENT_DIR "models/Sponza/Sponza.wiscene",
 			CONTENT_DIR "models/emitter_fire.wiscene"
 		};
 
@@ -1515,15 +1526,15 @@ void Example_ImGuiRenderer::Update(float dt)
 
 		if ((ImGui::IsKeyDown(ImGuiKey_D) || ImGui::IsKeyDown(ImGuiKey_RightArrow))) //D Right
 		{
-			camera_pos[0] += -movespeed * dir_right.x;
-			camera_pos[1] += -movespeed * dir_right.y;
-			camera_pos[2] += -movespeed * dir_right.z;
-		}
-		if ((ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow))) //A Left
-		{
 			camera_pos[0] += movespeed * dir_right.x;
 			camera_pos[1] += movespeed * dir_right.y;
 			camera_pos[2] += movespeed * dir_right.z;
+		}
+		if ((ImGui::IsKeyDown(ImGuiKey_A) || ImGui::IsKeyDown(ImGuiKey_LeftArrow))) //A Left
+		{
+			camera_pos[0] -= movespeed * dir_right.x;
+			camera_pos[1] -= movespeed * dir_right.y;
+			camera_pos[2] -= movespeed * dir_right.z;
 		}
 	}
 

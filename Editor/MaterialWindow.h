@@ -24,9 +24,11 @@ public:
 	wi::gui::CheckBox preferUncompressedCheckBox;
 	wi::gui::CheckBox disableStreamingCheckBox;
 	wi::gui::CheckBox coplanarCheckBox;
+	wi::gui::CheckBox capsuleShadowCheckBox;
 	wi::gui::ComboBox shaderTypeComboBox;
 	wi::gui::ComboBox blendModeComboBox;
 	wi::gui::ComboBox shadingRateComboBox;
+	wi::gui::ComboBox cameraComboBox;
 	wi::gui::Slider normalMapSlider;
 	wi::gui::Slider roughnessSlider;
 	wi::gui::Slider reflectanceSlider;
@@ -52,6 +54,13 @@ public:
 	wi::gui::Slider clearcoatSlider;
 	wi::gui::Slider clearcoatRoughnessSlider;
 	wi::gui::Slider blendTerrainSlider;
+	wi::gui::Slider interiorScaleXSlider;
+	wi::gui::Slider interiorScaleYSlider;
+	wi::gui::Slider interiorScaleZSlider;
+	wi::gui::Slider interiorOffsetXSlider;
+	wi::gui::Slider interiorOffsetYSlider;
+	wi::gui::Slider interiorOffsetZSlider;
+	wi::gui::Slider interiorRotationSlider;
 
 	wi::gui::ComboBox colorComboBox;
 	wi::gui::ColorPicker colorPicker;

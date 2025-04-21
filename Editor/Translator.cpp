@@ -408,22 +408,22 @@ void Translator::Update(const CameraComponent& camera, const XMFLOAT4& currentMo
 				if (state == TRANSLATOR_X)
 				{
 					XMVECTOR A = pos, B = pos + XMVectorSet(1, 0, 0, 0);
-					XMVECTOR P = wi::math::GetClosestPointToLine(A, B, intersection);
-					XMVECTOR PPrev = wi::math::GetClosestPointToLine(A, B, intersectionPrev);
+					XMVECTOR P = wi::math::ClosestPointOnLine(A, B, intersection);
+					XMVECTOR PPrev = wi::math::ClosestPointOnLine(A, B, intersectionPrev);
 					deltaV = P - PPrev;
 				}
 				else if (state == TRANSLATOR_Y)
 				{
 					XMVECTOR A = pos, B = pos + XMVectorSet(0, 1, 0, 0);
-					XMVECTOR P = wi::math::GetClosestPointToLine(A, B, intersection);
-					XMVECTOR PPrev = wi::math::GetClosestPointToLine(A, B, intersectionPrev);
+					XMVECTOR P = wi::math::ClosestPointOnLine(A, B, intersection);
+					XMVECTOR PPrev = wi::math::ClosestPointOnLine(A, B, intersectionPrev);
 					deltaV = P - PPrev;
 				}
 				else if (state == TRANSLATOR_Z)
 				{
 					XMVECTOR A = pos, B = pos + XMVectorSet(0, 0, 1, 0);
-					XMVECTOR P = wi::math::GetClosestPointToLine(A, B, intersection);
-					XMVECTOR PPrev = wi::math::GetClosestPointToLine(A, B, intersectionPrev);
+					XMVECTOR P = wi::math::ClosestPointOnLine(A, B, intersection);
+					XMVECTOR PPrev = wi::math::ClosestPointOnLine(A, B, intersectionPrev);
 					deltaV = P - PPrev;
 				}
 				else
@@ -472,23 +472,47 @@ void Translator::Update(const CameraComponent& camera, const XMFLOAT4& currentMo
 				if (wi::input::Down(wi::input::BUTTON::KEYBOARD_BUTTON_LSHIFT) || wi::input::Down(wi::input::BUTTON::KEYBOARD_BUTTON_RSHIFT))
 				{
 					// Snap to surface mode:
-					temp_filters.reserve(selected.size());
-					for (auto& x : selected)
+
+					// 1.) Collect all objects which could be in the hierarchy of any of the selected ones
+					//	This is important because we could select a top parent that doesn't have object
+					//	but I still want to disable children's filters
+					selectedWithHierarchy.clear();
+					for (size_t i = 0; i < scene.objects.GetCount(); ++i)
 					{
-						ObjectComponent* object = scene.objects.GetComponent(x.entity);
+						Entity entity = scene.objects.GetEntity(i);
+						for (auto& potential_parent : selectedEntitiesNonRecursive)
+						{
+							if (entity == potential_parent || scene.Entity_IsDescendant(entity, potential_parent))
+							{
+								selectedWithHierarchy.push_back(entity);
+								break;
+							}
+						}
+					}
+
+					// 2.) Disable all object filters which are part of selection hierarchy for the next picking
+					//	This is to filter them out from picking, we only want to pick what's underneath
+					temp_filters.reserve(selectedWithHierarchy.size());
+					for (auto& entity : selectedWithHierarchy)
+					{
+						ObjectComponent* object = scene.objects.GetComponent(entity);
 						if (object == nullptr)
 							continue;
 						temp_filters.push_back(uint64_t(object->filterMask) | (uint64_t(object->filterMaskDynamic) << 32ull));
 						object->filterMask = 0;
 						object->filterMaskDynamic = 0;
 					}
+
+					// 3.) Pick into scene to determine placement position
 					Ray ray = wi::renderer::GetPickRay((long)currentMouse.x, (long)currentMouse.y, canvas, camera);
 					wi::scene::Scene::RayIntersectionResult result = scene.Intersects(ray, wi::enums::FILTER_OBJECT_ALL);
 					transform.translation_local = result.position;
+
+					// 4.) Restore all filters to original values
 					size_t ind = 0;
-					for (auto& x : selected)
+					for (auto& entity : selectedWithHierarchy)
 					{
-						ObjectComponent* object = scene.objects.GetComponent(x.entity);
+						ObjectComponent* object = scene.objects.GetComponent(entity);
 						if (object == nullptr)
 							continue;
 						uint64_t tmp = temp_filters[ind++];
@@ -683,23 +707,28 @@ void Translator::Draw(const CameraComponent& camera, const XMFLOAT4& currentMous
 		};
 		device->BindVertexBuffers(vbs, 0, arraysize(vbs), strides, offsets, cmd);
 
+		float darken = 1;
+
 		// x
 		XMStoreFloat4x4(&sb.g_xTransform, matX * GetMirrorMatrix(TRANSLATOR_X, camera) * mat);
-		sb.g_xColor = state == TRANSLATOR_X ? highlight_color : XMFLOAT4(1, channel_min, channel_min, 1);
+		darken = camera.Eye.x < transform.translation_local.x ? darken_negative_axes : 1;
+		sb.g_xColor = state == TRANSLATOR_X ? highlight_color : XMFLOAT4(darken, channel_min * darken, channel_min * darken, 1);
 		sb.g_xColor.w *= opacity;
 		device->BindDynamicConstantBuffer(sb, CBSLOT_RENDERER_MISC, cmd);
 		device->Draw(vertexCount, 0, cmd);
 
 		// y
 		XMStoreFloat4x4(&sb.g_xTransform, matY * GetMirrorMatrix(TRANSLATOR_Y, camera)* mat);
-		sb.g_xColor = state == TRANSLATOR_Y ? highlight_color : XMFLOAT4(channel_min, 1, channel_min, 1);
+		darken = camera.Eye.y < transform.translation_local.y ? darken_negative_axes : 1;
+		sb.g_xColor = state == TRANSLATOR_Y ? highlight_color : XMFLOAT4(channel_min * darken, darken, channel_min * darken, 1);
 		sb.g_xColor.w *= opacity;
 		device->BindDynamicConstantBuffer(sb, CBSLOT_RENDERER_MISC, cmd);
 		device->Draw(vertexCount, 0, cmd);
 
 		// z
 		XMStoreFloat4x4(&sb.g_xTransform, matZ * GetMirrorMatrix(TRANSLATOR_Z, camera)* mat);
-		sb.g_xColor = state == TRANSLATOR_Z ? highlight_color : XMFLOAT4(channel_min, channel_min, 1, 1);
+		darken = camera.Eye.z < transform.translation_local.z ? darken_negative_axes : 1;
+		sb.g_xColor = state == TRANSLATOR_Z ? highlight_color : XMFLOAT4(channel_min * darken, channel_min * darken, darken, 1);
 		sb.g_xColor.w *= opacity;
 		device->BindDynamicConstantBuffer(sb, CBSLOT_RENDERER_MISC, cmd);
 		device->Draw(vertexCount, 0, cmd);
@@ -902,19 +931,23 @@ void Translator::Draw(const CameraComponent& camera, const XMFLOAT4& currentMous
 		params.shadow_softness = 0.8f;
 		XMVECTOR pos = transform.GetPositionV();
 
-		params.color = wi::Color::fromFloat4(XMFLOAT4(1, channel_min, channel_min, opacity));
+		float darken = 1;
+		darken = camera.Eye.x < transform.translation_local.x ? darken_negative_axes : 1;
+		params.color = wi::Color::fromFloat4(XMFLOAT4(darken, channel_min * darken, channel_min * darken, opacity));
 		XMStoreFloat3(&params.position, pos + XMVector3Transform(XMVectorSet(axis_length + 0.5f, 0, 0, 0) * dist, GetMirrorMatrix(TRANSLATOR_X, camera)));
 		std::memset(TEXT, 0, sizeof(TEXT));
 		WriteAxisText(TRANSLATOR_X, camera, TEXT);
 		wi::font::Draw(TEXT, strlen(TEXT), params, cmd);
 
-		params.color = wi::Color::fromFloat4(XMFLOAT4(channel_min, 1, channel_min, opacity));
+		darken = camera.Eye.y < transform.translation_local.y ? darken_negative_axes : 1;
+		params.color = wi::Color::fromFloat4(XMFLOAT4(channel_min * darken, darken, channel_min * darken, opacity));
 		XMStoreFloat3(&params.position, pos + XMVector3Transform(XMVectorSet(0, axis_length + 0.5f, 0, 0) * dist, GetMirrorMatrix(TRANSLATOR_Y, camera)));
 		std::memset(TEXT, 0, sizeof(TEXT));
 		WriteAxisText(TRANSLATOR_Y, camera, TEXT);
 		wi::font::Draw(TEXT, strlen(TEXT), params, cmd);
 
-		params.color = wi::Color::fromFloat4(XMFLOAT4(channel_min, channel_min, 1, opacity));
+		darken = camera.Eye.z < transform.translation_local.z ? darken_negative_axes : 1;
+		params.color = wi::Color::fromFloat4(XMFLOAT4(channel_min * darken, channel_min * darken, darken, opacity));
 		XMStoreFloat3(&params.position, pos + XMVector3Transform(XMVectorSet(0, 0, axis_length + 0.5f, 0) * dist, GetMirrorMatrix(TRANSLATOR_Z, camera)));
 		std::memset(TEXT, 0, sizeof(TEXT));
 		WriteAxisText(TRANSLATOR_Z, camera, TEXT);

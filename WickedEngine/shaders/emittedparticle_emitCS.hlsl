@@ -50,7 +50,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	[branch]
 	if(geometry.ib >= 0)
 	{
-		Buffer<uint> buf = bindless_buffers_uint[geometry.ib];
+		Buffer<uint> buf = bindless_buffers_uint[descriptor_index(geometry.ib)];
 		i0 = buf[geometry.indexOffset + tri * 3 + 0];
 		i1 = buf[geometry.indexOffset + tri * 3 + 1];
 		i2 = buf[geometry.indexOffset + tri * 3 + 2];
@@ -175,7 +175,7 @@ void main(uint3 DTid : SV_DispatchThreadID)
 	particle.force = 0;
 	particle.mass = xParticleMass;
 	particle.velocity = velocity + (nor + (float3(rng.next_float(), rng.next_float(), rng.next_float()) - 0.5f) * xParticleRandomFactor) * xParticleNormalFactor;
-	particle.rotationalVelocity = xParticleRotation + (rng.next_float() - 0.5f) * xParticleRandomFactor;
+	particle.rotation_rotationVelocity = pack_half2(float2((rng.next_float() - 0.5f) * xParticleRandomFactor * PI * 2, xParticleRotation * (rng.next_float() - 0.5f) * (1 + xParticleRandomFactor)));
 	particle.maxLife = xParticleLifeSpan + xParticleLifeSpan * (rng.next_float() - 0.5f) * xParticleLifeSpanRandomness;
 	particle.life = particle.maxLife;
 	particle.sizeBeginEnd = float2(particleStartingSize, particleStartingSize * xParticleScaling);

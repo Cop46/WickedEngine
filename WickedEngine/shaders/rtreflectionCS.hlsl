@@ -48,7 +48,7 @@ void main(uint2 DTid : SV_DispatchThreadID)
 
 	const float3 N = decode_oct(texture_normal[jitterPixel]);
 	const float3 P = reconstruct_position(jitterUV, depth);
-	const float3 V = normalize(GetCamera().position - P);
+	const float3 V = normalize(GetCamera().frustum_corners.screen_to_nearplane(uv) - P); // ortho support
 
 	const float4 GGX = ReflectionDir_GGX(V, N, roughness, blue_noise(DTid.xy).xy);
 	const float3 R = GGX.xyz;
@@ -80,6 +80,7 @@ void main(uint2 DTid : SV_DispatchThreadID)
 	while (q.Proceed())
 	{
 		PrimitiveID prim;
+		prim.init();
 		prim.primitiveIndex = q.CandidatePrimitiveIndex();
 		prim.instanceIndex = q.CandidateInstanceID();
 		prim.subsetIndex = q.CandidateGeometryIndex();
@@ -129,6 +130,7 @@ void main(uint2 DTid : SV_DispatchThreadID)
 	{
 		// closest hit:
 		PrimitiveID prim;
+		prim.init();
 		prim.primitiveIndex = q.CommittedPrimitiveIndex();
 		prim.instanceIndex = q.CommittedInstanceID();
 		prim.subsetIndex = q.CommittedGeometryIndex();
@@ -172,7 +174,7 @@ void main(uint2 DTid : SV_DispatchThreadID)
 				if ((light.layerMask & surface.material.layerMask) == 0)
 					continue;
 
-				if (light.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+				if (light.IsStaticLight())
 				{
 					continue; // static lights will be skipped (they are used in lightmap baking)
 				}
@@ -201,9 +203,9 @@ void main(uint2 DTid : SV_DispatchThreadID)
 			lighting.indirect.specular += surface.emissiveColor;
 
 			[branch]
-			if (GetScene().ddgi.color_texture >= 0)
+			if (GetScene().ddgi.probe_buffer >= 0)
 			{
-				lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N);
+				lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N, surface.dominant_lightdir, surface.dominant_lightcolor);
 			}
 
 			float4 color = 0;

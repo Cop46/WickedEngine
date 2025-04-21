@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.19)
 
 include(GNUInstallDirs)
 if (PLATFORM MATCHES "SDL2")
@@ -55,5 +55,5 @@ add_library(Utility STATIC
 
 set_target_properties("Utility" PROPERTIES
 	FOLDER "ThirdParty"
-	POSITION_INDEPENDENT_CODE ${WICKED_DYNAMIC_LIBRARY}
+	POSITION_INDEPENDENT_CODE ${WICKED_PIC}
 )

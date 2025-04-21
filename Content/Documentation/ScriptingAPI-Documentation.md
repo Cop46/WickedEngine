@@ -2,6 +2,8 @@
 
 # Wicked Engine Scripting API Documentation
 This is a reference and explanation of Lua scripting features in Wicked Engine.
+- [Editor Manual](WickedEditor-Manual.pdf)<br/>
+- [C++ Documentation](WickedEngine-Documentation.md)<br/>
 
 ## Contents
 1. [Introduction and usage](#introduction-and-usage)
@@ -110,6 +112,11 @@ This section describes the common tools for scripting which are not necessarily 
 - dobinaryfile(string filename) -- executes a binary LUA file
 - compilebinaryfile(string filename_src, dilename_dst) -- compiles a text LUA file (filename_src) into a binary LUA file (filename_dst)
 
+These are some helpers to aid in debugging:
+- IsThisEditor() : bool	-- returns true if current application is the editor, false otherwise
+- ReturnToEditor()	-- returns control to the editor and kills running scripts
+- IsThisDebugBuild() : bool	-- returns true if this is a debug build, false otherwise
+
 ## Engine Bindings
 The scripting API provides functions for the developer to manipulate engine behaviour or query it for information.
 
@@ -133,9 +140,9 @@ parent-child relationships between the scene hierarchy, updating the world, anim
 You can use the Renderer with the following functions, all of which are in the global scope:
 - GetGameSpeed() : float result
 - SetGameSpeed(float speed)
+- IsRaytracingSupported() : bool	-- check whether graphics device supports hardware accelerated ray tracing features
 - GetScreenWidth() : float result  -- (deprecated, use application.GetCanvas().GetLogicalWidth() instead)
 - GetScreenHeight() : float result  -- (deprecated, use application.GetCanvas().GetLogicalHeight() instead)
-- HairParticleSettings(opt int lod0, opt int lod1, opt int lod2)
 - SetShadowProps2D(int resolution)
 - SetShadowPropsCube(int resolution)
 - SetDebugPartitionTreeEnabled(bool enabled)
@@ -147,9 +154,16 @@ You can use the Renderer with the following functions, all of which are in the g
 - SetDebugCollidersEnabled(bool value)
 - SetGridHelperEnabled(bool value)
 - SetDDGIDebugEnabled(bool value)
+- SetDDGIEnabled(bool value)
 - SetDebugCamerasEnabled(bool value)
 - SetVSyncEnabled(opt bool enabled)
 - SetOcclusionCullingEnabled(bool enabled)
+- SetCapsuleShadowEnabled(bool enabled)
+- SetCapsuleShadowFade(float value)
+- SetCapsuleShadowAngle(float value)
+- SetShadowLODOverrideEnabled(bool value)
+- SetTemporalAAEnabled(bool value)
+- SetRaytracedShadowsEnabled(bool value)
 - SetMeshShaderAllowed(bool enabled)
 - SetMeshletOcclusionCullingEnabled(bool value)
 - DrawLine(Vector origin,end, opt Vector color, opt bool depth = false)
@@ -394,6 +408,7 @@ Gives you the ability to render text with a custom font.
 - SetStyle(string fontstyle, opt int size = 16)
 - SetText(opt string text)
 - SetSize(int size)
+- SetScale(float scale)
 - SetPos(Vector pos)
 - SetSpacing(Vector spacing)
 - SetAlign(WIFALIGN Halign, opt WIFALIGN Valign)
@@ -418,6 +433,7 @@ Gives you the ability to render text with a custom font.
 - SetFlippedVertically(bool value) -- enable flipping the letters vertically
 - GetText() : string result
 - GetSize() : int result
+- GetScale() : float result
 - GetPos() : Vector result
 - GetSpacing() : Vector result
 - GetAlign() : WIFALIGN halign,valign
@@ -434,7 +450,7 @@ Gives you the ability to render text with a custom font.
 - IsFlippedVertically() : bool
 - TextSize() : Vector result -- returns text width and height in a Vector's X and Y components
 - SetTypewriterTime(float value) -- time to fully type the text in seconds (0: disable)
-- SetTypewriterLooped(bool value)) -- if true, typing starts over when finished
+- SetTypewriterLooped(bool value) -- if true, typing starts over when finished
 - SetTypewriterCharacterStart(int value) -- starting character for the animation
 - SetTypewriterSound(Sound sound, SoundInstance soundinstance) -- sound effect when new letter appears
 - ResetTypewriter() -- resets typewriter to first character
@@ -655,7 +671,10 @@ A four component floating point vector. Provides efficient calculations with SIM
 - QuaternionToRollPitchYaw(Vector quaternion) : Vector resultQuaternion
 - QuaternionSlerp(Vector quaternion1,quaternion2, float t) : Vector resultQuaternion
 - Slerp(Vector quaternion1,quaternion2, float t) : Vector resultQuaternion -- same as QuaternionSlerp
-- GetAngle(Vector a,b,axis, opt float max_angle = math.pi * 2) : float result	-- computes the signed angle between two 3D vectors around specified axis
+- PlaneFromPointNormal(Vector point, normal) : constructs a plane from a point and a normal
+- PlaneFromPoints(Vector a,b,c) : constructs a plane from three points
+- GetAngle(Vector a,b,axis, opt float max_angle = math.pi * 2) : float result	-- computes the angle between two 3D vectors around specified axis in range: [0, max_angle]
+- GetAngleSigned(Vector a,b,axis) : float result	-- computes the signed angle between two 3D vectors around specified axis
 
 ### Matrix
 A four by four matrix, efficient calculations with SIMD support.
@@ -882,6 +901,8 @@ The scene holds components. Entity handles can be used to retrieve associated co
 
 - VoxelizeObject(int objectIndex, VoxelGrid voxelgrid, opt bool subtract = false, opt int lod = 0) -- voxelizes a single object into the voxel grid. Subtract parameter controls whether the voxels are added (true) or removed (false). Lod argument selects object's level of detail
 - VoxelizeScene(VoxelGrid voxelgrid, opt bool subtract = false, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) -- voxelizes all entities in the scene which intersect the voxel grid volume and match the filterMask and layerMask. Subtract parameter controls whether the voxels are added (true) or removed (false). Lod argument selects object's level of detail
+
+- FixupNans()	-- maintenance utility to help fix Nan issues in TransformComponents. Transforms containing nans will be cleared and renamed with _nanfix postfix
 
 #### NameComponent
 Holds a string that can more easily identify an entity to humans than an entity ID. 
@@ -1274,6 +1295,9 @@ Describes a Rigid Body Physics object.
 
 </br>
 
+- IsVehicle() : bool	-- returns true if this is a vehicle, false otherwise
+- IsCar() : bool	-- returns true if this is a car vehicle, false otherwise
+- IsMotorcycle() : bool	-- returns true if this is a motorcycle vehicle, false otherwise
 - IsDisableDeactivation() : bool return -- Check if the rigidbody is able to deactivate after inactivity
 - IsKinematic() : bool return -- Check if the rigidbody is movable or just static
 - IsStartDeactivated() : bool return -- Checks whether rigid body is set to be deactivated when added to simulation
@@ -1344,6 +1368,19 @@ Describes a Weather
 - SetVolumetricClouds(bool value) -- Sets if weather is rendering volumetric clouds or not
 - SetHeightFog(bool value) -- Sets if weather is rendering height fog visual effect or not
 
+##### OceanParameters
+- dmap_dim : int
+- patch_length : float
+- time_scale : float
+- wave_amplitude : float
+- wind_dir : Vector
+- wind_speed : float
+- wind dependency : float
+- choppy_scale : float
+- waterColor : Vector
+- waterHeight : float
+- surfaceDisplacementTolerance : float
+
 #### SoundComponent
 Describes a Sound object.
 - Filename : string
@@ -1396,7 +1433,7 @@ Describes a Collider object.
 - SetOverrideBlink(int id, ExpressionOverride override)
 - SetOverrideLook(int id, ExpressionOverride override)
 
-
+```lua
 [outer] ExpressionPreset = {
 	Happy = 0,
 	Angry = 1,
@@ -1423,6 +1460,7 @@ Describes a Collider object.
 	Block = 1,
 	Blend = 2,
 }
+```
 
 
 #### HumanoidComponent
@@ -1438,6 +1476,7 @@ Describes a Collider object.
 - GetRagdollFatness() : float
 - GetRagdollHeadSize() : float
 
+```lua
 [outer] HumanoidBone = {
 	Hips = 0,	-- included in ragdoll
 	Spine = 1,	-- included in ragdoll
@@ -1497,6 +1536,7 @@ Describes a Collider object.
 
 	Count = 55
 }
+```
 
 
 #### DecalComponent
@@ -1534,6 +1574,7 @@ The metadata component can store and retrieve an arbitrary amount of named user 
 	Enemy = 3,
 	NPC = 4,
 	Pickup = 5,
+	Vehicle = 6,
 }
 
 #### CharacterComponent
@@ -1559,6 +1600,7 @@ Implementation of basic character controller features such as movement in the sc
 - SetWaterFriction(float value)		-- velocity multiplier when swimming in water, default: 0.9
 - SetSlopeThreshold(float value)	-- Slope detection threshold, default: 0.2
 - SetLeaningLimit(float value)		-- Leaning min/max clamping, default: 0.12
+- SetTurningSpeed(float value)		-- Turning smoothing speed when using Turn(), default: 10.0
 - SetFixedUpdateFPS(float value)	-- Frame rate of simulation, default: 120
 - SetGravity(float value)			-- Gravity value, default: -30
 - SetWaterVerticalOffset(float value)	-- vertical offset to keep from water. Useful if character is too submerged in the swimming state
@@ -1593,6 +1635,7 @@ Implementation of basic character controller features such as movement in the sc
 - GetRelativeOffset() : Vector	-- returns the relative offset (relative to facing direction)
 - GetLeaning() : float	-- returns immediate leaning amount
 - GetLeaningSmoothed() : float -- returns smoothed leaning amount
+- GetFootOffset() : float -- returns vertical offset that accounts for character's position after foot placements
 
 - SetPathGoal(Vector goal, VoxelGrid voxelgrid)	-- Set the goal for path finding, it will be processed the next time the scene is updated. You can get the results by accessing the pathquery object of the character with GetPathQuery().
 - GetPathQuery() : PathQuery	-- returns the PathQuery object of this character
@@ -1621,8 +1664,9 @@ This is the main entry point and manages the lifetime of the application.
 - [void-constructor]Application()
 - GetContent() : Resource? result
 - GetActivePath() : RenderPath? result
-- SetActivePath(RenderPath path, opt float fadeSeconds, opt int fadeColorR = 0, fadeColorG = 0, fadeColorB = 0)
+- SetActivePath(RenderPath path, opt float fadeSeconds = 0, opt int fadeColorR = 0, fadeColorG = 0, fadeColorB = 0, FadeType fadetype = FadeType.FadeToColor)
 - SetFrameSkip(bool enabled)	-- enable/disable frame skipping in fixed update 
+- SetFullScreen(bool value)		-- switch to fullscreen/windowed
 - SetTargetFrameRate(float fps)	-- set target frame rate for fixed update and variable rate update when frame rate is locked
 - SetFrameRateLock(bool enabled)	-- if enabled, variable rate update will use a fixed delta time
 - SetInfoDisplay(bool active)	-- if enabled, information display will be visible in the top left corner of the application
@@ -1634,12 +1678,22 @@ This is the main entry point and manages the lifetime of the application.
 - SetPipelineCountDisplay(bool active)	-- toggle display of active graphics pipeline count if info display is enabled
 - SetHeapAllocationCountDisplay(bool active)	-- toggle display of heap allocation statistics if info display is enabled
 - SetVRAMUsageDisplay(bool active)	-- toggle display of video memory usage if info display is enabled
+- SetColorGradingHelper(bool value)	-- toggale color grading helper display in the top left corner
+- IsHDRSupported() : bool	-- returns whther HDR display output is supported on the current monitor
+- SetHDR(bool)	-- sets HDR display mode (if monitor supports it)
 - GetCanvas() : Canvas canvas  -- returns a copy of the application's current canvas
 - SetCanvas(Canvas canvas)  -- applies the specified canvas to the application
 - Exit() -- Closes the program
 - IsFaded() -- returns true when fadeout is full (fadeout can be set when switching paths with SetActivePath())
+- Fade(float fadeSeconds = 1, opt int fadeColorR = 0, fadeColorG = 0, fadeColorB = 0, FadeType fadetype = FadeType.FadeToColor)
+- CrossFade(float fadeSeconds = 1)
 - [outer]SetProfilerEnabled(bool enabled) -- enable/disable the on-screen profiler
 - [outer]prof() -- toggle the on-screen profiler (this function is made for convenience to write faster)
+
+FadeType = {
+	FadeToColor,
+	CrossFade,
+}
 
 ### RenderPath
 A RenderPath is a high level system that represents a part of the whole application. It is responsible to handle high level rendering and logic flow. A render path can be for example a loading screen, a menu screen, or primary game screen, etc.
@@ -1675,6 +1729,7 @@ It inherits functions from RenderPath2D, so it can render a 2D overlay.
 	- AO_HBAO : int  -- enable horizon based screen space ambient occlusion (use in SetAO() function)
 	- AO_MSAO : int  -- enable multi scale screen space ambient occlusion (use in SetAO() function)
 - SetAOPower(float value)  -- applies AO power value if any AO is enabled
+- SetAORange(float value)	-- sets max range for ray traced AO
 - SetSSREnabled(bool value)
 - SetSSGIEnabled(bool value)
 - SetRaytracedDiffuseEnabled(bool value)
@@ -1685,7 +1740,6 @@ It inherits functions from RenderPath2D, so it can render a 2D overlay.
 - SetBloomEnabled(bool value)
 - SetBloomThreshold(bool value)
 - SetColorGradingEnabled(bool value)
-- SetColorGradingTexture(Texture value)
 - SetVolumeLightsEnabled(bool value)
 - SetLightShaftsEnabled(bool value)
 - SetLensFlareEnabled(bool value)
@@ -1699,7 +1753,9 @@ It inherits functions from RenderPath2D, so it can render a 2D overlay.
 - SetMSAASampleCount(int count)
 - SetSharpenFilterEnabled(bool value)
 - SetSharpenFilterAmount(float value)
+- SetEyeAdaptionEnabled(bool value)
 - SetExposure(float value)
+- SetHDRCalibration(float value)
 - SetOutlineEnabled(bool value)
 - SetOutlineThreshold(float value)
 - SetOutlineThickness(float value)
@@ -1738,7 +1794,7 @@ It inherits functions from RenderPath2D.
 - [constructor]LoadingScreen()
 - AddLoadModelTask(string fileName, opt Matrix matrix) : Entity -- Adds a scene loading task into the global scene and returns the root entity handle immediately. The loading task will be started asynchronously when the LoadingScreen is activated by the Application.
 - AddLoadModelTask(Scene scene, string fileName, opt Matrix matrix) : Entity -- Adds a scene loading task into the specified scene and returns the root entity handle immediately. The loading task will be started asynchronously when the LoadingScreen is activated by the Application.
-- AddRenderPathActivationTask(RenderPath path, opt float fadeSeconds = 0, opt int fadeR = 0,fadeG = 0,fadeB = 0) -- loads resources of a RenderPath and activates it after all loading tasks have finished
+- AddRenderPathActivationTask(RenderPath path, opt float fadeSeconds = 0, opt int fadeR = 0,fadeG = 0,fadeB = 0, opt FadeType fadetype = FadeType.FadeToColor) -- loads resources of a RenderPath and activates it after all loading tasks have finished
 - IsFinished() : bool -- returns true when all loading tasks have finished
 - GetProgress() : int -- returns percentage of loading complete (0% - 100%)
 - SetBackgroundTexture(Texture tex) -- set a full screen background texture that wil be displayed when loading screen is active
@@ -1767,6 +1823,7 @@ A ray is defined by an origin Vector and a normalized direction Vector. It can b
 - Intersects(AABB aabb) : bool result
 - Intersects(Sphere sphere) : bool result
 - Intersects(Capsule capsule) : bool result
+- Intersects(Vector plane) : Vector result : intersects with a plane and returns intersection position or nans. Use `vector.PlaneFromPointNormal(Vector point, normal)` or `vector.PlaneFromPoints(Vector a,b,c)` to construct a plane.
 - GetOrigin() : Vector result
 - GetDirection() : Vector result
 - SetOrigin(Vector vector)
@@ -1795,6 +1852,7 @@ Axis Aligned Bounding Box. Can be intersected with other primitives.
 - GetHalfExtents() : Vector result
 - Transform(Matrix matrix) : AABB result  -- transforms the AABB with a matrix and returns the resulting conservative AABB
 - GetAsBoxMatrix() : Matrix result	-- get a matrix that represents the AABB as OBB (oriented bounding box)
+- ProjectToScreen(Matrix ViewProjection) : Vector result	-- projects the AABB to the screen, returns a 2D rectangle in UV-space as Vector(topleftX, topleftY, bottomrightX, bottomrightY), each value is in range [0, 1]
 
 #### Sphere
 Sphere defined by center Vector and radius. Can be intersected with other primitives.
@@ -1838,7 +1896,7 @@ It's like two spheres connected by a cylinder. Base and Tip are the two endpoint
 
 ### Input
 Query input devices
-- [outer]input : Input
+- [outer]input : Input -- use this global object to access input functions
 - [void-constructor]Input()
 - Down(int code, opt int playerindex = 0) : bool result  -- Check whether a button is currently being held down
 - Press(int code, opt int playerindex = 0) : bool result  -- Check whether a button has just been pushed that wasn't before
@@ -1851,6 +1909,13 @@ Query input devices
 - GetAnalog(int type, opt int playerindex = 0) : Vector result  -- read analog data from gamepad. type parameter must be from GAMEPAD_ANALOG values
 - GetTouches() : Touch result[]
 - SetControllerFeedback(ControllerFeedback feedback, opt int playerindex = 0) -- sets controller feedback such as vibration or LED color
+- WhatIsPressed(opt int playerindex = 0) : int	-- returns 0 (`BUTTON_NONE`) if nothing is pressed, or the first appropriate button code otherwise
+- IsGamepadButton(int button) : bool 	-- returns whether that button code is a gamepad button or not
+- StringToButton(string str) : int	-- returns button code for a given string name
+- ButtonToString(int button, opt int preference = CONTROLLER_PREFERENCE_GENERIC) : string	-- returns string name for the given button code. You can set a preference for controller type which can modify the string returned
+- SetCursor(int cursor)	-- sets the current cursor type. Values can be of the cursor values, see below
+- SetCursorFromFile(int cursor, string filename)	-- sets the specified cursor type to an image from a cursor file
+- ResetCursor(int cursor)	-- resets the specified cursor to the default one
 
 #### ControllerFeedback
 Describes controller feedback such as touch and LED color which can be replayed on a controller
@@ -1916,12 +1981,21 @@ Describes a touch contact point
 - [outer]KEYBOARD_BUTTON_SUBTRACT		 : int
 - [outer]KEYBOARD_BUTTON_DECIMAL		 : int
 - [outer]KEYBOARD_BUTTON_DIVIDE			 : int
+- [outer]KEYBOARD_BUTTON_TAB			 : int
+- [outer]KEYBOARD_BUTTON_TILDE			 : int
+- [outer]KEYBOARD_BUTTON_INSERT			 : int
+- [outer]KEYBOARD_BUTTON_ALT			 : int
+- [outer]KEYBOARD_BUTTON_ALTGR			 : int
 - You can also generate a key code by calling string.byte(char uppercaseLetter) where the parameter represents the desired key of the keyboard
 
 #### Mouse Key Codes
 - [outer]MOUSE_BUTTON_LEFT	 : int
 - [outer]MOUSE_BUTTON_RIGHT	 : int
 - [outer]MOUSE_BUTTON_MIDDLE : int
+
+Helpers to check mouse wheel scrolling like buttons:
+- [outer]MOUSE_SCROLL_AS_BUTTON_UP 		: int
+- [outer]MOUSE_SCROLL_AS_BUTTON_DOWN 	: int
 
 #### Gamepad Key Codes
 - [outer]GAMEPAD_BUTTON_UP : int
@@ -1937,13 +2011,27 @@ Generic button codes:
 ...
 - [outer]GAMEPAD_BUTTON_14 : int
 
+Helpers to check analog sticks and triggers like buttons:
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_L_AS_BUTTON_UP : int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_L_AS_BUTTON_LEFT	: int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_L_AS_BUTTON_DOWN	: int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_L_AS_BUTTON_RIGHT : int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_R_AS_BUTTON_UP : int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_R_AS_BUTTON_LEFT : int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_R_AS_BUTTON_DOWN : int
+- [outer]GAMEPAD_ANALOG_THUMBSTICK_R_AS_BUTTON_RIGHT : int
+- [outer]GAMEPAD_ANALOG_TRIGGER_L_AS_BUTTON : int
+- [outer]GAMEPAD_ANALOG_TRIGGER_R_AS_BUTTON : int
+
 Xbox button codes:
 - [outer]GAMEPAD_BUTTON_XBOX_X  : GAMEPAD_BUTTON_1
 - [outer]GAMEPAD_BUTTON_XBOX_A  : GAMEPAD_BUTTON_2
 - [outer]GAMEPAD_BUTTON_XBOX_B  : GAMEPAD_BUTTON_3
 - [outer]GAMEPAD_BUTTON_XBOX_Y  : GAMEPAD_BUTTON_4
 - [outer]GAMEPAD_BUTTON_XBOX_L1 : GAMEPAD_BUTTON_5
+- [outer]GAMEPAD_BUTTON_XBOX_LT : GAMEPAD_ANALOG_TRIGGER_L_AS_BUTTON
 - [outer]GAMEPAD_BUTTON_XBOX_R1 : GAMEPAD_BUTTON_6
+- [outer]GAMEPAD_BUTTON_XBOX_RT : GAMEPAD_ANALOG_TRIGGER_R_AS_BUTTON
 - [outer]GAMEPAD_BUTTON_XBOX_L3 : GAMEPAD_BUTTON_7
 - [outer]GAMEPAD_BUTTON_XBOX_R3 : GAMEPAD_BUTTON_8
 - [outer]GAMEPAD_BUTTON_XBOX_BACK : GAMEPAD_BUTTON_9
@@ -1955,7 +2043,9 @@ Playstation button codes:
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_CIRCLE : GAMEPAD_BUTTON_3
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_TRIANGLE : GAMEPAD_BUTTON_4
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_L1 : GAMEPAD_BUTTON_5
+- [outer]GAMEPAD_BUTTON_PLAYSTATION_L2 : GAMEPAD_ANALOG_TRIGGER_L_AS_BUTTON
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_R1 : GAMEPAD_BUTTON_6
+- [outer]GAMEPAD_BUTTON_PLAYSTATION_R2 : GAMEPAD_ANALOG_TRIGGER_R_AS_BUTTON
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_L3 : GAMEPAD_BUTTON_7
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_R3 : GAMEPAD_BUTTON_8
 - [outer]GAMEPAD_BUTTON_PLAYSTATION_SHARE : GAMEPAD_BUTTON_9
@@ -1966,6 +2056,23 @@ Playstation button codes:
 - [outer]GAMEPAD_ANALOG_THUMBSTICK_R : int
 - [outer]GAMEPAD_ANALOG_TRIGGER_L : int
 - [outer]GAMEPAD_ANALOG_TRIGGER_R : int
+
+#### Controller preference
+- [outer]CONTROLLER_PREFERENCE_GENERIC : int
+- [outer]CONTROLLER_PREFERENCE_PLAYSTATION : int
+- [outer]CONTROLLER_PREFERENCE_XBOX : int
+
+#### Cursor codes:
+- [outer]CURSOR_DEFAULT : int
+- [outer]CURSOR_TEXTINPUT : int
+- [outer]CURSOR_RESIZEALL : int
+- [outer]CURSOR_RESIZE_NS : int
+- [outer]CURSOR_RESIZE_EW : int
+- [outer]CURSOR_RESIZE_NESW : int
+- [outer]CURSOR_RESIZE_NWSE : int
+- [outer]CURSOR_HAND : int
+- [outer]CURSOR_NOTALLOWED : int
+- [outer]CURSOR_CROSS : int
 
 
 ### Physics
@@ -1982,6 +2089,11 @@ Playstation button codes:
 - GetAccuracy() : int
 - SetFrameRate(float value)	-- Set the frames per second resolution of physics simulation (default = 120 FPS)
 - GetFrameRate() : float
+- GetVelocity() : Vector-- returns linear velocity of a body
+- SetGhostMode(RigidBodyPhysicsComponent|HumanoidComponent component, bool value)	-- enable/disable ghost mode for rigid body or ragdoll (all collision disabled)
+- SetRagdollGhostMode(HumanoidComponent humanoid, bool value)	-- enable/disable ghost mode for a ragdoll. In ghost mode, the ragdoll will not collide with anything. Enable this if the humanoid sits inside a vehicle for example.
+- SetPosition(RigidBodyPhysicsComponent component, Vector position)	-- teleport a dynamic body
+- SetPositionAndRotation(RigidBodyPhysicsComponent component, Vector position, Vector rotationQuaternion)	-- teleport a dynamic body
 - SetLinearVelocity(RigidBodyPhysicsComponent component, Vector velocity)	-- Set the linear velocity manually
 - SetAngularVelocity(RigidBodyPhysicsComponent component, Vector velocity)	-- Set the angular velocity manually
 - ApplyForce(RigidBodyPhysicsComponent component, Vector force)	-- Apply force at body center
@@ -1992,12 +2104,16 @@ Playstation button codes:
 - ApplyImpulseAt(HumanoidComponent humanoid, HumanoidBone bone, Vector impulse, Vector at, bool at_local = true)	-- Apply impulse at body local position of ragdoll bone (at_local controls whether the at is in body's local space or not)
 - ApplyTorque(RigidBodyPhysicsComponent component, Vector torque)	-- Apply torque at body center
 - ActivateAllRigidBodies(Scene scene)	-- Activate all rigid bodies in the scene
+- ResetPhysicsObjects(Scene scene)	-- Reset all rigid bodies to their initial orientations
 - SetActivationState(RigidBodyPhysicsComponent component, int state)	-- Force set activation state to rigid body. Use a value ACTIVATION_STATE_ACTIVE or ACTIVATION_STATE_INACTIVE
 - SetActivationState(SoftBodyPhysicsComponent component, int state)	-- Force set activation state to soft body. Use a value ACTIVATION_STATE_ACTIVE or ACTIVATION_STATE_INACTIVE
 - [outer]ACTIVATION_STATE_ACTIVE : int
 - [outer]ACTIVATION_STATE_INACTIVE : int
 
 - Intersects(Scene scene, Ray ray) : Entity entity, Vector position,normal, Entity humanoid_ragdoll_entity, HumanoidBone humanoid_bone, Vector position_local	-- Performns physics scene intersection for closest hit with a ray
+
+- DriveVehicle(RigidBodyPhysicsComponent rigidbody, opt float forward = 0, opt float right = 0, opt float brake = 0, opt float handbrake = 0)	-- set input from driver: forward and right values are values between -1 and 1 to indicate reverse/forward or left/right. brake and handbrake (handbrake = back brake for motorcycles) are values between 0 and 1.
+- GetVehicleForwardVelocity(RigidBodyPhysicsComponent rigidbody) : float	-- Signed velocity amount in forward direction
 
 - PickDrag(Scene scene, Ray, ray, PickDragOperation op) -- pick and drag physics objects such as ragdolls and rigid bodies.
 
@@ -2059,8 +2175,9 @@ Path finding operations can be made by using a voxel grid and path queries. The 
 
 ### TrailRenderer
 - [constructor] TrailRenderer()
-- AddPoint(Vector pos, opt float width = 1, opt Vector color = Vector(1,1,1,1)) -- adds a new point to the trail
-- Cut() -- cuts the trail at last point and starts a new trail
+- AddPoint(Vector pos, opt float width = 1, opt Vector color = Vector(1,1,1,1), opt Vector rotationQuaternion = Vector()) -- adds a new point to the trail. Note: if rotation is not specified, then point will be camera facing, otherwise UP direction will be rotated
+- Cut(opt bool loop = false) -- cuts the trail at last point and starts a new trail. You can specify that this cut will create a loop of the previously added points.
+- Fade(float amount)	-- Applies fade for the whole trail continuously, and removes segments that can be removed due to faded
 - Clear() -- removes all points and cuts from the trail
 - GetPointCount() : int -- returns the number of points in the trail
 - GetPoint() : Vector pos, float width -- returns the point of the trail on the specified index
@@ -2081,3 +2198,4 @@ Path finding operations can be made by using a voxel grid and path queries. The 
 - GetTexMulAdd() : Texture
 - SetTexMulAdd2(Texture tex) -- set the texture2 UV tiling multiply-add value of the whole trail
 - GetTexMulAdd2() : Texture
+- SetDepthSoften(float value)	-- sets the depth soften amount (default = 10)

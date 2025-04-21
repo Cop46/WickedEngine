@@ -22,6 +22,7 @@ namespace wi::lua
 
 		int AddPoint(lua_State* L);
 		int Cut(lua_State* L);
+		int Fade(lua_State* L);
 		int Clear(lua_State* L);
 		int GetPointCount(lua_State* L);
 		int GetPoint(lua_State* L);
@@ -42,6 +43,7 @@ namespace wi::lua
 		int GetTexMulAdd(lua_State* L);
 		int SetTexMulAdd2(lua_State* L);
 		int GetTexMulAdd2(lua_State* L);
+		int SetDepthSoften(lua_State* L);
 
 		static void Bind();
 	};

@@ -93,6 +93,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 		while (q.Proceed())
 		{
 			PrimitiveID prim;
+			prim.init();
 			prim.primitiveIndex = q.CandidatePrimitiveIndex();
 			prim.instanceIndex = q.CandidateInstanceID();
 			prim.subsetIndex = q.CandidateGeometryIndex();
@@ -156,6 +157,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 		ray.Origin = q.WorldRayOrigin() + q.WorldRayDirection() * q.CommittedRayT();
 
 		PrimitiveID prim;
+		prim.init();
 		prim.primitiveIndex = q.CommittedPrimitiveIndex();
 		prim.instanceIndex = q.CommittedInstanceID();
 		prim.subsetIndex = q.CommittedGeometryIndex();
@@ -318,7 +320,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 					newRay.Origin = surface.P;
 					newRay.TMin = 0.001;
 					newRay.TMax = dist;
-					newRay.Direction = L + max3(surface.sss);
+					newRay.Direction = normalize(L + max3(surface.sss));
 
 #ifdef RTAPI
 
@@ -337,6 +339,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 					while (q.Proceed())
 					{
 						PrimitiveID prim;
+						prim.init();
 						prim.primitiveIndex = q.CandidatePrimitiveIndex();
 						prim.instanceIndex = q.CandidateInstanceID();
 						prim.subsetIndex = q.CandidateGeometryIndex();

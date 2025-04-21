@@ -53,7 +53,7 @@ void RTReflection_Raygen()
 
 	const float3 N = decode_oct(texture_normal[jitterPixel]);
 	const float3 P = reconstruct_position(jitterUV, depth);
-	const float3 V = normalize(GetCamera().position - P);
+	const float3 V = normalize(GetCamera().frustum_corners.screen_to_nearplane(uv) - P); // ortho support
 
 	const float4 GGX = ReflectionDir_GGX(V, N, roughness, blue_noise(DTid.xy).xy);
 	const float3 R = GGX.xyz;
@@ -90,6 +90,7 @@ void RTReflection_Raygen()
 void RTReflection_ClosestHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
 	PrimitiveID prim;
+	prim.init();
 	prim.primitiveIndex = PrimitiveIndex();
 	prim.instanceIndex = InstanceID();
 	prim.subsetIndex = GeometryIndex();
@@ -124,7 +125,7 @@ void RTReflection_ClosestHit(inout RayPayload payload, in BuiltInTriangleInterse
 			if ((light.layerMask & surface.material.layerMask) == 0)
 				continue;
 
-			if (light.GetFlags() & ENTITY_FLAG_LIGHT_STATIC)
+			if (light.IsStaticLight())
 			{
 				continue; // static lights will be skipped (they are used in lightmap baking)
 			}
@@ -153,9 +154,9 @@ void RTReflection_ClosestHit(inout RayPayload payload, in BuiltInTriangleInterse
 		lighting.indirect.specular += surface.emissiveColor;
 
 		[branch]
-		if (GetScene().ddgi.color_texture >= 0)
+		if (GetScene().ddgi.probe_buffer >= 0)
 		{
-			lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N);
+			lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N, surface.dominant_lightdir, surface.dominant_lightcolor);
 		}
 
 		ApplyLighting(surface, lighting, payload.data);
@@ -167,6 +168,7 @@ void RTReflection_ClosestHit(inout RayPayload payload, in BuiltInTriangleInterse
 void RTReflection_AnyHit(inout RayPayload payload, in BuiltInTriangleIntersectionAttributes attr)
 {
 	PrimitiveID prim;
+	prim.init();
 	prim.primitiveIndex = PrimitiveIndex();
 	prim.instanceIndex = InstanceID();
 	prim.subsetIndex = GeometryIndex();

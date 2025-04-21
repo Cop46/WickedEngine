@@ -7,7 +7,7 @@ using namespace wi::scene;
 void VoxelGridWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
-	wi::gui::Window::Create(ICON_VOXELGRID " VoxelGrid", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_VOXELGRID " VoxelGrid", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(520, 480));
 
 	closeButton.SetTooltip("Delete VoxelGrid");
@@ -127,9 +127,7 @@ void VoxelGridWindow::Create(EditorComponent* _editor)
 			return;
 		wi::Timer tim;
 		voxelgrid->flood_fill();
-		char text[256] = {};
-		snprintf(text, arraysize(text), "Flood filling took %.2f seconds.", tim.elapsed_seconds());
-		wi::backlog::post(text);
+		wilog(text, arraysize(text), "Flood filling took %.2f seconds.", tim.elapsed_seconds());
 		});
 	AddWidget(&floodfillButton);
 
@@ -194,6 +192,37 @@ void VoxelGridWindow::Create(EditorComponent* _editor)
 		scene.Entity_CreateMeshFromData("voxelgrid_to_mesh", indices.size(), indices.data(), vertices.size(), vertices.data());
 	});
 	AddWidget(&generateSimplifiedMeshButton);
+
+	generateNavMeshButton.Create("Generate Navigation Mesh " ICON_NAVIGATION);
+	generateNavMeshButton.SetTooltip("Generate a simplified navigation mesh from the voxels.");
+	generateNavMeshButton.SetSize(XMFLOAT2(100, hei));
+	generateNavMeshButton.OnClick([=](wi::gui::EventArgs args) {
+		Scene& scene = editor->GetCurrentScene();
+		wi::VoxelGrid* voxelgrid = scene.voxel_grids.GetComponent(entity);
+		if (voxelgrid == nullptr)
+			return;
+		wi::vector<uint32_t> indices;
+		wi::vector<XMFLOAT3> vertices;
+		voxelgrid->create_mesh(indices, vertices, true, &scene);
+		if (vertices.empty())
+		{
+			wi::backlog::post("VoxelGrid.create_mesh() : no voxels were found, so mesh creation is aborted.", wi::backlog::LogLevel::Warning);
+			return;
+		}
+		Entity entity = scene.Entity_CreateMeshFromData("voxelgrid_to_navmesh", indices.size(), indices.data(), vertices.size(), vertices.data());
+		ObjectComponent* object = scene.objects.GetComponent(entity);
+		if (object != nullptr)
+		{
+			object->filterMask |= wi::enums::FILTER_NAVIGATION_MESH;
+
+			MeshComponent* mesh = scene.meshes.GetComponent(object->meshID);
+			if (mesh != nullptr)
+			{
+				mesh->SetBVHEnabled(true);
+			}
+		}
+	});
+	AddWidget(&generateNavMeshButton);
 
 	subtractCheckBox.Create("Subtraction mode: ");
 	subtractCheckBox.SetTooltip("If enabled, voxelization will be subtractive, so it will remove voxels instead of add.");
@@ -293,6 +322,7 @@ void VoxelGridWindow::ResizeLayout()
 	add_fullwidth(fitToSceneButton);
 	add_fullwidth(generateMeshButton);
 	add_fullwidth(generateSimplifiedMeshButton);
+	add_fullwidth(generateNavMeshButton);
 	add_right(subtractCheckBox);
 	add_right(debugAllCheckBox);
 }

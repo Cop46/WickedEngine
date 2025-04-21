@@ -90,12 +90,7 @@ namespace tinygltf
 		if (image->uri.empty())
 		{
 			// Force some image resource name:
-			std::string ss;
-			do {
-				ss.clear();
-				ss += "gltfimport_" + std::to_string(wi::random::GetRandom(std::numeric_limits<uint32_t>::max())) + ".png";
-			} while (wi::resourcemanager::Contains(ss)); // this is to avoid overwriting an existing imported image
-			image->uri = ss;
+			image->uri = "gltfimport_" + std::to_string(wi::helper::HashByteData(bytes, size)) + ".png";
 		}
 
 		auto resource = wi::resourcemanager::Load(
@@ -144,6 +139,7 @@ void Import_Extension_VRM(LoaderState& state);
 void Import_Extension_VRMC(LoaderState& state);
 void VRM_ToonMaterialCustomize(const std::string& name, MaterialComponent& material);
 void Import_Mixamo_Bone(LoaderState& state, Entity boneEntity, const tinygltf::Node& node);
+void Import_Makehuman_Bone(LoaderState& state, Entity boneEntity, const tinygltf::Node& node);
 
 // Recursively loads nodes and resolves hierarchy:
 void LoadNode(int nodeIndex, Entity parent, LoaderState& state)
@@ -1042,7 +1038,7 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				const tinygltf::Buffer& buffer = state.gltfModel.buffers[bufferView.buffer];
 
 				int stride = accessor.ByteStride(bufferView);
-				size_t indexCount = accessor.count;
+				size_t indexCount = AlignTo(accessor.count, size_t(3)); // there was a model with invalid index count, this is a safety fix for it
 				size_t indexOffset = mesh.indices.size();
 				mesh.indices.resize(indexOffset + indexCount);
 				mesh.subsets.back().indexOffset = (uint32_t)indexOffset;
@@ -1660,6 +1656,20 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 			armature.boneCollection[i] = boneEntity;
 
 			Import_Mixamo_Bone(state, boneEntity, state.gltfModel.nodes[jointIndex]);
+			Import_Makehuman_Bone(state, boneEntity, state.gltfModel.nodes[jointIndex]);
+		}
+	}
+
+	// Invalid humanoids will be removed, this is to not have humanoid if naming convention matched by mistake when trying to import humanoid bone:
+	for (size_t i = 0; i < scene.humanoids.GetCount();)
+	{
+		if (!scene.humanoids[i].IsValid())
+		{
+			scene.humanoids.Remove(scene.humanoids.GetEntity(i));
+		}
+		else
+		{
+			i++;
 		}
 	}
 
@@ -2018,6 +2028,9 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 	// Update the scene, to have up to date values immediately after loading:
 	//	For example, snap to camera functionality relies on this
 	scene.Update(0);
+
+	// after scene update, clean up duplicate colliders that could have been loaded by some extension
+	scene.DeleteDuplicateColliders();
 }
 
 void Import_Extension_VRM(LoaderState& state)
@@ -3449,6 +3462,227 @@ void Import_Mixamo_Bone(LoaderState& state, Entity boneEntity, const tinygltf::N
 		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftToes)] = boneEntity;
 	}
 	else if (!node.name.compare("mixamorig:RightToeBase"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightToes)] = boneEntity;
+	}
+}
+
+void Import_Makehuman_Bone(LoaderState& state, Entity boneEntity, const tinygltf::Node& node)
+{
+	auto get_humanoid = [&]() -> HumanoidComponent& {
+		HumanoidComponent* component = state.scene->humanoids.GetComponent(state.rootEntity);
+		if (component == nullptr)
+		{
+			component = &state.scene->humanoids.Create(state.rootEntity);
+		}
+		return *component;
+	};
+
+	if (!node.name.compare("pelvis"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Hips)] = boneEntity;
+	}
+	else if (!node.name.compare("spine_01"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Spine)] = boneEntity;
+	}
+	else if (!node.name.compare("spine_02"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Chest)] = boneEntity;
+	}
+	else if (!node.name.compare("spine_03"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::UpperChest)] = boneEntity;
+	}
+	else if (!node.name.compare("neck_01"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Neck)] = boneEntity;
+	}
+	else if (!node.name.compare("head"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Head)] = boneEntity;
+	}
+	else if (!node.name.compare("clavicle_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftShoulder)] = boneEntity;
+	}
+	else if (!node.name.compare("clavicle_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightShoulder)] = boneEntity;
+	}
+	else if (!node.name.compare("upperarm_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperArm)] = boneEntity;
+	}
+	else if (!node.name.compare("upperarm_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightUpperArm)] = boneEntity;
+	}
+	else if (!node.name.compare("lowerarm_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerArm)] = boneEntity;
+	}
+	else if (!node.name.compare("lowerarm_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLowerArm)] = boneEntity;
+	}
+	else if (!node.name.compare("hand_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftHand)] = boneEntity;
+	}
+	else if (!node.name.compare("hand_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightHand)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_01_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbMetacarpal)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_01_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbMetacarpal)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_02_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_02_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_03_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("thumb_03_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("index_01_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("index_01_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("index_02_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("index_02_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("index_03_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("index_03_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_01_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_01_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_02_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_02_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_03_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("middle_03_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_01_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_01_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_02_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_02_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_03_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("ring_03_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_01_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_01_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleProximal)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_02_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_02_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleIntermediate)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_03_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("pinky_03_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleDistal)] = boneEntity;
+	}
+	else if (!node.name.compare("thigh_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperLeg)] = boneEntity;
+	}
+	else if (!node.name.compare("thigh_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightUpperLeg)] = boneEntity;
+	}
+	else if (!node.name.compare("calf_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerLeg)] = boneEntity;
+	}
+	else if (!node.name.compare("calf_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLowerLeg)] = boneEntity;
+	}
+	else if (!node.name.compare("foot_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftFoot)] = boneEntity;
+	}
+	else if (!node.name.compare("foot_r"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightFoot)] = boneEntity;
+	}
+	else if (!node.name.compare("ball_l"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftToes)] = boneEntity;
+	}
+	else if (!node.name.compare("ball_r"))
 	{
 		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightToes)] = boneEntity;
 	}

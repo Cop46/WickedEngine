@@ -6,17 +6,18 @@
 #include "brdf.hlsli"
 #include "ShaderInterop_SurfelGI.h"
 #include "ShaderInterop_DDGI.h"
+#include "capsuleShadowHF.hlsli"
 
 inline void LightMapping(in int lightmap, in float2 ATLAS, inout Lighting lighting, inout Surface surface)
 {
 	[branch]
 	if (lightmap >= 0)
 	{
-		Texture2D<float4> texture_lightmap = bindless_textures[NonUniformResourceIndex(lightmap)];
+		Texture2D<half4> texture_lightmap = bindless_textures_half4[NonUniformResourceIndex(descriptor_index(lightmap))];
 #ifdef LIGHTMAP_QUALITY_BICUBIC
-		lighting.indirect.diffuse = (half3)SampleTextureCatmullRom(texture_lightmap, sampler_linear_clamp, ATLAS).rgb;
+		lighting.indirect.diffuse = SampleTextureCatmullRom(texture_lightmap, sampler_linear_clamp, ATLAS).rgb;
 #else
-		lighting.indirect.diffuse = (half3)texture_lightmap.SampleLevel(sampler_linear_clamp, ATLAS, 0).rgb;
+		lighting.indirect.diffuse = texture_lightmap.SampleLevel(sampler_linear_clamp, ATLAS, 0).rgb;
 #endif // LIGHTMAP_QUALITY_BICUBIC
 
 		surface.SetGIApplied(true);
@@ -31,7 +32,7 @@ inline half3 PlanarReflection(in Surface surface, in half2 bumpColor)
 		float4 reflectionUV = mul(GetCamera().reflection_view_projection, float4(surface.P, 1));
 		reflectionUV.xy /= reflectionUV.w;
 		reflectionUV.xy = clipspace_to_uv(reflectionUV.xy);
-		return (half3)bindless_textures[GetCamera().texture_reflection_index].SampleLevel(sampler_linear_clamp, reflectionUV.xy + bumpColor, 0).rgb;
+		return bindless_textures_half4[descriptor_index(GetCamera().texture_reflection_index)].SampleLevel(sampler_linear_clamp, reflectionUV.xy + bumpColor, 0).rgb;
 	}
 	return 0;
 }
@@ -62,14 +63,14 @@ inline void ForwardLighting(inout Surface surface, inout Lighting lighting)
 			float4x4 probeProjection = load_entitymatrix(probe.GetMatrixIndex());
 			const int probeTexture = asint(probeProjection[3][0]);
 			probeProjection[3] = float4(0, 0, 0, 1);
-			TextureCube cubemap = bindless_cubemaps[probeTexture];
+			TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(probeTexture)];
 			
-			const float3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
-			const float3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+			const half3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
+			const half3 uvw = clipspace_to_uv(clipSpacePos.xyz);
 			[branch]
 			if (is_saturated(uvw))
 			{
-				const half4 envmapColor = (half4)EnvironmentReflection_Local(cubemap, surface, probe, probeProjection, clipSpacePos);
+				const half4 envmapColor = EnvironmentReflection_Local(cubemap, surface, probe, probeProjection, clipSpacePos);
 				// perform manual blending of probes:
 				//  NOTE: they are sorted top-to-bottom, but blending is performed bottom-to-top
 				envmapAccumulation.rgb = mad(1 - envmapAccumulation.a, envmapColor.a * envmapColor.rgb, envmapAccumulation.rgb);
@@ -101,9 +102,9 @@ inline void ForwardLighting(inout Surface surface, inout Lighting lighting)
 #endif //DISABLE_VOXELGI
 
 	[branch]
-	if (!surface.IsGIApplied() && GetScene().ddgi.color_texture >= 0)
+	if (!surface.IsGIApplied() && GetScene().ddgi.probe_buffer >= 0)
 	{
-		lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N);
+		lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N, surface.dominant_lightdir, surface.dominant_lightcolor);
 		surface.SetGIApplied(true);
 	}
 
@@ -130,6 +131,11 @@ inline void ForwardLighting(inout Surface surface, inout Lighting lighting)
 
 				ShaderEntity light = load_entity(lights().first_item() + entity_index);
 				
+#ifndef INCLUDE_STATIC_LIGHTS
+				if (light.IsStaticLight())
+					continue; // static lights will be skipped here (they are used at lightmap baking)
+#endif // INCLUDE_STATIC_LIGHTS
+					
 				switch (light.GetType())
 				{
 				case ENTITY_TYPE_DIRECTIONALLIGHT:
@@ -218,7 +224,7 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 					surface.V,
 					tbn,
 					decal.GetLength(),
-					bindless_textures[decalDisplacementmap],
+					bindless_textures_half4[descriptor_index(decalDisplacementmap)],
 					uvw.xy,
 					decalDX,
 					decalDY,
@@ -229,7 +235,7 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 			[branch]
 			if (decalTexture >= 0)
 			{
-				decalColor *= (half4)bindless_textures[decalTexture].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+				decalColor *= bindless_textures_half4[descriptor_index(decalTexture)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 				if ((decal.GetFlags() & ENTITY_FLAG_DECAL_BASECOLOR_ONLY_ALPHA) == 0)
 				{
 					// perform manual blending of decals:
@@ -241,7 +247,7 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 			[branch]
 			if (decalNormal >= 0)
 			{
-				half3 decalBumpColor = half3(bindless_textures[decalNormal].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
+				half3 decalBumpColor = half3(bindless_textures_half4[descriptor_index(decalNormal)].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
 				decalBumpColor = decalBumpColor * 2 - 1;
 				decalBumpColor.rg *= decal.GetAngleScale();
 				decalBumpAccumulation.rgb = mad(1 - decalBumpAccumulation.a, decalColor.a * decalBumpColor.rgb, decalBumpAccumulation.rgb);
@@ -250,7 +256,7 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 			[branch]
 			if (decalSurfacemap >= 0)
 			{
-				half4 decalSurfaceColor = (half4)bindless_textures[decalSurfacemap].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+				half4 decalSurfaceColor = (half4)bindless_textures_half4[descriptor_index(decalSurfacemap)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 				decalSurfaceAccumulation = mad(1 - decalSurfaceAccumulationAlpha, decalColor.a * decalSurfaceColor, decalSurfaceAccumulation);
 				decalSurfaceAccumulationAlpha = mad(1 - decalColor.a, decalSurfaceAccumulationAlpha, decalColor.a);
 			}
@@ -263,9 +269,9 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 #endif // DISABLE_DECALS
 }
 
-inline uint GetFlatTileIndex(uint2 pixel)
+inline uint GetFlatTileIndex(min16uint2 pixel)
 {
-	const uint2 tileIndex = uint2(floor(pixel / TILED_CULLING_BLOCKSIZE));
+	const min16uint2 tileIndex = min16uint2(floor(pixel / TILED_CULLING_BLOCKSIZE));
 	return flatten2D(tileIndex, GetCamera().entity_culling_tilecount.xy) * SHADER_ENTITY_TILE_BUCKET_COUNT;
 }
 
@@ -304,14 +310,14 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 				float4x4 probeProjection = load_entitymatrix(probe.GetMatrixIndex());
 				const int probeTexture = asint(probeProjection[3][0]);
 				probeProjection[3] = float4(0, 0, 0, 1);
-				TextureCube cubemap = bindless_cubemaps[probeTexture];
+				TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(probeTexture)];
 					
-				const float3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
-				const float3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+				const half3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
+				const half3 uvw = clipspace_to_uv(clipSpacePos.xyz);
 				[branch]
 				if (is_saturated(uvw))
 				{
-					const half4 envmapColor = (half4)EnvironmentReflection_Local(cubemap, surface, probe, probeProjection, clipSpacePos);
+					const half4 envmapColor = EnvironmentReflection_Local(cubemap, surface, probe, probeProjection, clipSpacePos);
 					// perform manual blending of probes:
 					//  NOTE: they are sorted top-to-bottom, but blending is performed bottom-to-top
 					envmapAccumulation.rgb = mad(1 - envmapAccumulation.a, envmapColor.a * envmapColor.rgb, envmapAccumulation.rgb);
@@ -342,36 +348,45 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 	[branch]
 	if (!surface.IsGIApplied() && GetCamera().texture_rtdiffuse_index >= 0)
 	{
-		lighting.indirect.diffuse = (half3)bindless_textures[GetCamera().texture_rtdiffuse_index][surface.pixel].rgb;
+		lighting.indirect.diffuse = bindless_textures_half4[descriptor_index(GetCamera().texture_rtdiffuse_index)][surface.pixel].rgb;
 		surface.SetGIApplied(true);
 	}
 
 	[branch]
 	if (!surface.IsGIApplied() && GetFrame().options & OPTION_BIT_SURFELGI_ENABLED && GetCamera().texture_surfelgi_index >= 0 && surfel_cellvalid(surfel_cell(surface.P)))
 	{
-		lighting.indirect.diffuse = (half3)bindless_textures[GetCamera().texture_surfelgi_index][surface.pixel].rgb;
+		lighting.indirect.diffuse = bindless_textures_half4[descriptor_index(GetCamera().texture_surfelgi_index)][surface.pixel].rgb;
 		surface.SetGIApplied(true);
 	}
 
 	[branch]
 	if (!surface.IsGIApplied() && GetCamera().texture_vxgi_diffuse_index >= 0)
 	{
-		lighting.indirect.diffuse = (half3)bindless_textures[GetCamera().texture_vxgi_diffuse_index][surface.pixel].rgb;
+		lighting.indirect.diffuse = bindless_textures_half4[descriptor_index(GetCamera().texture_vxgi_diffuse_index)][surface.pixel].rgb;
 		surface.SetGIApplied(true);
 	}
 	[branch]
 	if (GetCamera().texture_vxgi_specular_index >= 0)
 	{
-		half4 vxgi_specular = (half4)bindless_textures[GetCamera().texture_vxgi_specular_index][surface.pixel];
+		half4 vxgi_specular = bindless_textures_half4[descriptor_index(GetCamera().texture_vxgi_specular_index)][surface.pixel];
 		lighting.indirect.specular = vxgi_specular.rgb * surface.F + lighting.indirect.specular * (1 - vxgi_specular.a);
 	}
 #endif // TRANSPARENT
 
 	[branch]
-	if (!surface.IsGIApplied() && GetScene().ddgi.color_texture >= 0)
+	if (GetScene().ddgi.probe_buffer >= 0)
 	{
-		lighting.indirect.diffuse = ddgi_sample_irradiance(surface.P, surface.N);
-		surface.SetGIApplied(true);
+		// Note: even if GI is already applied, the dominant light dir is still computed by this!
+		half3 irradiance = ddgi_sample_irradiance(surface.P, surface.N, surface.dominant_lightdir, surface.dominant_lightcolor);
+		if (!surface.IsGIApplied())
+		{
+			lighting.indirect.diffuse = irradiance;
+			surface.SetGIApplied(true);
+		}
+		
+		SurfaceToLight surface_to_light;
+		surface_to_light.create(surface, surface.dominant_lightdir);
+		lighting.indirect.specular += max(0, BRDF_GetSpecular(surface, surface_to_light) * surface.dominant_lightcolor);
 	}
 	
 	[branch]
@@ -383,15 +398,20 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 		{
 			ShaderEntity light = load_entity(entity_index);
 
+#ifndef INCLUDE_STATIC_LIGHTS
+			if (light.IsStaticLight())
+				continue; // static lights will be skipped here (they are used at lightmap baking)
+#endif // INCLUDE_STATIC_LIGHTS
+
 			half shadow_mask = 1;
 #if defined(SHADOW_MASK_ENABLED) && !defined(TRANSPARENT)
 			[branch]
-			if (light.IsCastingShadow() && (GetFrame().options & OPTION_BIT_SHADOW_MASK) && (GetCamera().options & SHADERCAMERA_OPTION_USE_SHADOW_MASK) && GetCamera().texture_rtshadow_index >= 0)
+			if (surface.IsReceiveShadow() && light.IsCastingShadow() && (GetFrame().options & OPTION_BIT_SHADOW_MASK) && (GetCamera().options & SHADERCAMERA_OPTION_USE_SHADOW_MASK) && GetCamera().texture_rtshadow_index >= 0)
 			{
 				uint shadow_index = entity_index - lights().first_item();
 				if (shadow_index < 16)
 				{
-					shadow_mask = (half)bindless_textures2DArray[GetCamera().texture_rtshadow_index][uint3(surface.pixel, shadow_index)].r;
+					shadow_mask = bindless_textures2DArray_half4[descriptor_index(GetCamera().texture_rtshadow_index)][uint3(surface.pixel, shadow_index)].r;
 				}
 			}
 #endif // SHADOW_MASK_ENABLED && !TRANSPARENT
@@ -433,7 +453,7 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 					uint shadow_index = entity_index - lights().first_item();
 					if (shadow_index < 16)
 					{
-						shadow_mask = (half)bindless_textures2DArray[GetCamera().texture_rtshadow_index][uint3(surface.pixel, shadow_index)].r;
+						shadow_mask = bindless_textures2DArray_half4[descriptor_index(GetCamera().texture_rtshadow_index)][uint3(surface.pixel, shadow_index)].r;
 					}
 				}
 #endif // SHADOW_MASK_ENABLED && !TRANSPARENT
@@ -477,7 +497,7 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 					uint shadow_index = entity_index - lights().first_item();
 					if (shadow_index < 16)
 					{
-						shadow_mask = (half)bindless_textures2DArray[GetCamera().texture_rtshadow_index][uint3(surface.pixel, shadow_index)].r;
+						shadow_mask = bindless_textures2DArray_half4[descriptor_index(GetCamera().texture_rtshadow_index)][uint3(surface.pixel, shadow_index)].r;
 					}
 				}
 #endif // SHADOW_MASK_ENABLED && !TRANSPARENT
@@ -486,6 +506,57 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 
 			}
 		}
+	}
+
+	// Capsule shadows:
+	[branch]
+	if ((GetFrame().options & OPTION_BIT_CAPSULE_SHADOW_ENABLED) && !surface.IsCapsuleShadowDisabled() && !forces().empty()) // capsule shadows are contained in forces array for now...
+	{
+		half4 cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
+		half capsuleshadow = 1;
+		
+		// Loop through light buckets in the tile:
+		ShaderEntityIterator iterator = forces();
+		for (uint bucket = iterator.first_bucket(); (bucket <= iterator.last_bucket()) && (capsuleshadow > 0); ++bucket)
+		{
+			uint bucket_bits = load_entitytile(flatTileIndex + bucket);
+			bucket_bits = iterator.mask_entity(bucket, bucket_bits);
+
+#ifndef ENTITY_TILE_UNIFORM
+			// Bucket scalarizer - Siggraph 2017 - Improved Culling [Michal Drobot]:
+			bucket_bits = WaveReadLaneFirst(WaveActiveBitOr(bucket_bits));
+#endif // ENTITY_TILE_UNIFORM
+
+			[loop]
+			while ((bucket_bits != 0) && (capsuleshadow > 0))
+			{
+				// Retrieve global entity index from local bucket, then remove bit from local bucket:
+				const uint bucket_bit_index = firstbitlow(bucket_bits);
+				const uint entity_index = bucket * 32 + bucket_bit_index;
+				bucket_bits ^= 1u << bucket_bit_index;
+				
+				ShaderEntity entity = load_entity(entity_index);
+				if ((entity.GetFlags() & ENTITY_FLAG_CAPSULE_SHADOW_COLLIDER) == 0)
+					continue;
+			
+				float3 A = entity.position;
+				float3 B = entity.GetColliderTip();
+				half radius = entity.GetRange() * CAPSULE_SHADOW_BOLDEN;
+				half occ = directionalOcclusionCapsule(surface.P, A, B, radius, cone);
+
+				// attenutaion based on capsule-sphere:
+				float3 center = lerp(A, B, 0.5);
+				half range = distance(center, A) + radius + CAPSULE_SHADOW_AFFECTION_RANGE;
+				half range2 = range * range;
+				half dist2 = distance_squared(surface.P, center);
+				occ = 1 - saturate((1 - occ) * saturate(attenuation_pointlight(dist2, range, range2)));
+			
+				capsuleshadow *= occ;
+			}
+		}
+		capsuleshadow = lerp(capsuleshadow, 1, GetCapsuleShadowFade());
+		capsuleshadow = saturate(capsuleshadow);
+		surface.occlusion *= capsuleshadow;
 	}
 
 }
@@ -570,7 +641,7 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 						surface.V,
 						tbn,
 						decal.GetLength(),
-						bindless_textures[decalDisplacementmap],
+						bindless_textures_half4[descriptor_index(decalDisplacementmap)],
 						uvw.xy,
 						decalDX,
 						decalDY,
@@ -581,7 +652,7 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 				[branch]
 				if (decalTexture >= 0)
 				{
-					decalColor *= (half4)bindless_textures[decalTexture].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+					decalColor *= bindless_textures_half4[descriptor_index(decalTexture)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 					if ((decal.GetFlags() & ENTITY_FLAG_DECAL_BASECOLOR_ONLY_ALPHA) == 0)
 					{
 						// perform manual blending of decals:
@@ -593,7 +664,7 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 				[branch]
 				if (decalNormal >= 0)
 				{
-					half3 decalBumpColor = half3(bindless_textures[decalNormal].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
+					half3 decalBumpColor = half3(bindless_textures_half4[descriptor_index(decalNormal)].SampleGrad(sam, uvw.xy, decalDX, decalDY).rg, 1);
 					decalBumpColor = decalBumpColor * 2 - 1;
 					decalBumpColor.rg *= decal.GetAngleScale();
 					decalBumpAccumulation.rgb = mad(1 - decalBumpAccumulation.a, decalColor.a * decalBumpColor.rgb, decalBumpAccumulation.rgb);
@@ -602,7 +673,7 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 				[branch]
 				if (decalSurfacemap >= 0)
 				{
-					half4 decalSurfaceColor = (half4)bindless_textures[decalSurfacemap].SampleGrad(sam, uvw.xy, decalDX, decalDY);
+					half4 decalSurfaceColor = (half4)bindless_textures_half4[descriptor_index(decalSurfacemap)].SampleGrad(sam, uvw.xy, decalDX, decalDY);
 					decalSurfaceAccumulation = mad(1 - decalSurfaceAccumulationAlpha, decalColor.a * decalSurfaceColor, decalSurfaceAccumulation);
 					decalSurfaceAccumulationAlpha = mad(1 - decalColor.a, decalSurfaceAccumulationAlpha, decalColor.a);
 				}
@@ -617,23 +688,23 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 #endif // DISABLE_DECALS
 }
 
-inline void ApplyFog(in float distance, float3 V, inout float4 color)
+inline void ApplyFog(in float distance, float3 V, inout half4 color)
 {
-	const float4 fog = GetFog(distance, GetCamera().position, -V);
+	const half4 fog = GetFog(distance, GetCamera().position, -V);
 	//color.rgb = (1.0 - fog.a) * color.rgb + fog.rgb; // premultiplied fog
 	color.rgb = lerp(color.rgb, fog.rgb, fog.a); // non-premultiplied fog
 }
 
-inline void ApplyAerialPerspective(float2 uv, float3 P, inout float4 color)
+inline void ApplyAerialPerspective(float2 uv, float3 P, inout half4 color)
 {
 	if (GetFrame().options & OPTION_BIT_REALISTIC_SKY_AERIAL_PERSPECTIVE)
 	{
-		const float4 AP = GetAerialPerspectiveTransmittance(uv, P, GetCamera().position, texture_cameravolumelut);
+		const half4 AP = GetAerialPerspectiveTransmittance(uv, P, GetCamera().position, texture_cameravolumelut);
 		color.rgb = color.rgb * (1.0 - AP.a) + AP.rgb;
 	}
 }
 
-inline uint AlphaToCoverage(float alpha, float alphaTest, float4 svposition)
+inline uint AlphaToCoverage(half alpha, half alphaTest, float4 svposition)
 {
 	if (alphaTest == 0)
 	{
@@ -662,6 +733,57 @@ inline uint AlphaToCoverage(float alpha, float alphaTest, float4 svposition)
 		return ~0u >> (31u - uint(alpha * GetCamera().sample_count));
 	}
 	return 0;
+}
+
+half4 InteriorMapping(in float3 P, in float3 N, in float3 V, in ShaderMaterial material, in ShaderMeshInstance meshinstance)
+{
+	[branch]
+	if (!material.textures[BASECOLORMAP].IsValid())
+		return 0;
+	
+	TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(material.textures[BASECOLORMAP].texture_descriptor)];
+
+	// Note: there is some heavy per-pixel matrix math here (mul, inverse, decompose) by intention
+	//	to not increase common structure sizes for single shader that would require these things!
+		
+	half3 scale = material.GetInteriorScale();
+	half3 offset = material.GetInteriorOffset();
+	float4x4 modMatrix = float4x4(
+		scale.x, 0, 0, offset.x,
+		0, scale.y, 0, offset.y,
+		0, 0, scale.z, offset.z,
+		0, 0, 0, 1
+	);
+	float4x4 interiorTransform = mul(meshinstance.transformRaw.GetMatrix(), modMatrix);
+	float4x4 interiorProjection = inverse(interiorTransform);
+	const float3 clipSpacePos = mul(interiorProjection, float4(P, 1)).xyz; // needs fp32 if offset is used
+
+	// We can handle distortion by normals with refract:
+	half3 R = refract(-V, N, 1 - material.GetRefraction());
+
+	// This part is exactly like the local environment probes parallax correction:
+	half3 RayLS = mul((half3x3)interiorProjection, R);
+	half3 FirstPlaneIntersect = (1 - clipSpacePos) / RayLS;
+	half3 SecondPlaneIntersect = (-1 - clipSpacePos) / RayLS;
+	half3 FurthestPlane = max(FirstPlaneIntersect, SecondPlaneIntersect);
+	half Distance = min(FurthestPlane.x, min(FurthestPlane.y, FurthestPlane.z));
+	half3 R_parallaxCorrected = P - meshinstance.center + R * Distance;
+
+	// By rotating the sampling vector I fix the cube projection to the object's rotation:
+	float3 t, s;
+	float4 r;
+	decompose(interiorProjection, t, r, s);
+	R_parallaxCorrected = rotate_vector(R_parallaxCorrected, r);
+
+	half2 rot_sincos = material.GetInteriorSinCos();
+	float3x3 rotMatrix = float3x3(
+		rot_sincos.y, 0, -rot_sincos.x,
+		0, 1, 0,
+		rot_sincos.x, 0, rot_sincos.y
+	);
+	R_parallaxCorrected = mul(rotMatrix, R_parallaxCorrected);
+
+	return cubemap.SampleLevel(sampler_linear_clamp, R_parallaxCorrected, 0);
 }
 
 #endif // WI_SHADING_HF

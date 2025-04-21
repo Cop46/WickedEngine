@@ -23,7 +23,7 @@ namespace wi
 	{
 		if (launchedTasks == 0)
 			return 100;
-		uint32_t counter = AtomicLoad(&ctx.counter);
+		uint32_t counter = wi::jobsystem::GetRemainingJobCount(ctx);
 		float percent = 1 - float(counter) / float(launchedTasks);
 		return (int)std::round(percent * 100);
 	}
@@ -36,13 +36,13 @@ namespace wi
 		}
 	}
 
-	void LoadingScreen::addLoadingComponent(RenderPath* component, Application* main, float fadeSeconds, wi::Color fadeColor)
+	void LoadingScreen::addLoadingComponent(RenderPath* component, Application* main, float fadeSeconds, wi::Color fadeColor, wi::FadeManager::FadeType fadetype)
 	{
 		addLoadingFunction([=](wi::jobsystem::JobArgs args) {
 			component->Load();
 			});
 		onFinished([=] {
-			main->ActivatePath(component, fadeSeconds, fadeColor);
+			main->ActivatePath(component, fadeSeconds, fadeColor, fadetype);
 			});
 	}
 

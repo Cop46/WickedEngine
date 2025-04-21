@@ -7,7 +7,7 @@ using namespace wi::scene;
 void MetadataWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
-	wi::gui::Window::Create(ICON_METADATA " Metadata", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_METADATA " Metadata", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(300, 240));
 
 	closeButton.SetTooltip("Delete MetadataComponent");
@@ -31,6 +31,7 @@ void MetadataWindow::Create(EditorComponent* _editor)
 	presetCombo.AddItem("Enemy", (uint64_t)MetadataComponent::Preset::Enemy);
 	presetCombo.AddItem("Npc", (uint64_t)MetadataComponent::Preset::NPC);
 	presetCombo.AddItem("Pickup", (uint64_t)MetadataComponent::Preset::Pickup);
+	presetCombo.AddItem("Vehicle", (uint64_t)MetadataComponent::Preset::Vehicle);
 	presetCombo.OnSelect([this](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
 		for (auto& x : editor->translator.selected)

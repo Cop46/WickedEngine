@@ -42,6 +42,7 @@ void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 
 	uint primitiveID = texture_primitiveID[pixel];
 	PrimitiveID prim;
+	prim.init();
 	prim.unpack(primitiveID);
 
 	Surface surface;
@@ -55,12 +56,17 @@ void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 		return;
 	}
 
-#ifdef UNLIT
-	half4 color = half4(surface.albedo, 1);
+#ifdef INTERIORMAPPING
+	surface.baseColor.rgb += surface.emissiveColor;
+	surface.baseColor *= InteriorMapping(surface.P, surface.N, surface.V, surface.material, surface.inst);
+#endif // INTERIORMAPPING
+
+#if defined(UNLIT) || defined(INTERIORMAPPING)
+	half4 color = surface.baseColor;
 	ApplyFog(surface.hit_depth, surface.V, color);
 	output[pixel] = color;
 	return;
-#endif // UNLIT
+#endif // UNLIT || INTERIORMAPPING
 
 	// Write out sampleable attributes for post processing into textures:
 #ifdef CLEARCOAT

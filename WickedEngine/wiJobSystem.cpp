@@ -31,7 +31,7 @@ namespace wi::jobsystem
 		uint32_t groupJobOffset;
 		uint32_t groupJobEnd;
 		uint32_t sharedmemory_size;
-		inline void execute()
+		inline uint32_t execute()
 		{
 			JobArgs args;
 			args.groupID = groupID;
@@ -53,7 +53,7 @@ namespace wi::jobsystem
 				task(args);
 			}
 
-			AtomicAdd(&ctx->counter, -1);
+			return ctx->counter.fetch_sub(1); // returns context counter's previous value
 		}
 	};
 	struct JobQueue
@@ -84,8 +84,10 @@ namespace wi::jobsystem
 		wi::vector<std::thread> threads;
 		std::unique_ptr<JobQueue[]> jobQueuePerThread;
 		std::atomic<uint32_t> nextQueue{ 0 };
-		std::condition_variable wakeCondition;
-		std::mutex wakeMutex;
+		std::condition_variable sleepingCondition; // for workers that are sleeping
+		std::mutex sleepingMutex; // for workers that are sleeping
+		std::condition_variable waitingCondition; // for unblocking a Wait()
+		std::mutex waitingMutex; // for unblocking a Wait()
 
 		// Start working on a job queue
 		//	After the job queue is finished, it can switch to an other queue and steal jobs from there
@@ -97,7 +99,14 @@ namespace wi::jobsystem
 				JobQueue& job_queue = jobQueuePerThread[startingQueue % numThreads];
 				while (job_queue.pop_front(job))
 				{
-					job.execute();
+					uint32_t progress_before = job.execute();
+					if (progress_before == 1)
+					{
+						// This is likely the last job because the counter was 1 before it was decremented in execute()
+						//	So wake up the waiting threads here
+						std::unique_lock<std::mutex> lock(waitingMutex);
+						waitingCondition.notify_all();
+					}
 				}
 				startingQueue++; // go to next queue
 			}
@@ -113,6 +122,8 @@ namespace wi::jobsystem
 		std::atomic_bool alive{ true };
 		void ShutDown()
 		{
+			if (IsShuttingDown())
+				return;
 			alive.store(false); // indicate that new jobs cannot be started from this point
 			bool wake_loop = true;
 			std::thread waker([&] {
@@ -120,7 +131,7 @@ namespace wi::jobsystem
 				{
 					for (auto& x : resources)
 					{
-						x.wakeCondition.notify_all(); // wakes up sleeping worker threads
+						x.sleepingCondition.notify_all(); // wakes up sleeping worker threads
 					}
 				}
 			});
@@ -185,20 +196,27 @@ namespace wi::jobsystem
 
 			for (uint32_t threadID = 0; threadID < res.numThreads; ++threadID)
 			{
-#ifdef PLATFORM_LINUX
 				std::thread& worker = res.threads.emplace_back([threadID, priority, &res] {
+
+#ifdef PLATFORM_LINUX
+
+					// from the sched(2) manpage:
+					// In the current [Linux 2.6.23+] implementation, each unit of
+					// difference in the nice values of two processes results in a
+					// factor of 1.25 in the degree to which the scheduler favors
+					// the higher priority process.
+					//
+					// so 3 would mean that other (prio 0) threads are around twice as important
 
 					switch (priority) {
 					case Priority::Low:
-					case Priority::Streaming:
-						// from the sched(2) manpage:
-						// In the current [Linux 2.6.23+] implementation, each unit of
-						// difference in the nice values of two processes results in a
-						// factor of 1.25 in the degree to which the scheduler favors
-						// the higher priority process.
-						//
-						// so 3 would mean that other (prio 0) threads are around twice as important
 						if (setpriority(PRIO_PROCESS, 0, 3) != 0)
+						{
+							perror("setpriority");
+						}
+						break;
+					case Priority::Streaming:
+						if (setpriority(PRIO_PROCESS, 0, 2) != 0)
 						{
 							perror("setpriority");
 						}
@@ -209,16 +227,15 @@ namespace wi::jobsystem
 					default:
 						assert(0);
 					}
-#else
-				std::thread& worker = res.threads.emplace_back([threadID, &res] {
-#endif
+#endif // PLATFORM_LINUX
+
 					while (internal_state.alive.load())
 					{
 						res.work(threadID);
 
 						// finished with jobs, put to sleep
-						std::unique_lock<std::mutex> lock(res.wakeMutex);
-						res.wakeCondition.wait(lock);
+						std::unique_lock<std::mutex> lock(res.sleepingMutex);
+						res.sleepingCondition.wait(lock);
 					}
 
 				});
@@ -260,7 +277,7 @@ namespace wi::jobsystem
 				}
 				else if (priority == Priority::Streaming)
 				{
-					BOOL priority_result = SetThreadPriority(handle, THREAD_PRIORITY_LOWEST);
+					BOOL priority_result = SetThreadPriority(handle, THREAD_PRIORITY_BELOW_NORMAL);
 					assert(priority_result != 0);
 
 					std::wstring wthreadname = L"wi::job_st_" + std::to_wstring(threadID);
@@ -314,14 +331,17 @@ namespace wi::jobsystem
 			}
 		}
 
-		char msg[256] = {};
-		snprintf(msg, arraysize(msg), "wi::jobsystem Initialized with %d cores in %.2f ms\n\tHigh priority threads: %d\n\tLow priority threads: %d\n\tStreaming threads: %d", internal_state.numCores, timer.elapsed(), GetThreadCount(Priority::High), GetThreadCount(Priority::Low), GetThreadCount(Priority::Streaming));
-		wi::backlog::post(msg);
+		wilog("wi::jobsystem Initialized with %d cores in %.2f ms\n\tHigh priority threads: %d\n\tLow priority threads: %d\n\tStreaming threads: %d", internal_state.numCores, timer.elapsed(), GetThreadCount(Priority::High), GetThreadCount(Priority::Low), GetThreadCount(Priority::Streaming));
 	}
 
 	void ShutDown()
 	{
 		internal_state.ShutDown();
+	}
+
+	bool IsShuttingDown()
+	{
+		return internal_state.alive.load() == false;
 	}
 
 	uint32_t GetThreadCount(Priority priority)
@@ -334,7 +354,7 @@ namespace wi::jobsystem
 		PriorityResources& res = internal_state.resources[int(ctx.priority)];
 
 		// Context state is updated:
-		AtomicAdd(&ctx.counter, 1);
+		ctx.counter.fetch_add(1);
 
 		Job job;
 		job.ctx = &ctx;
@@ -352,7 +372,7 @@ namespace wi::jobsystem
 		}
 
 		res.jobQueuePerThread[res.nextQueue.fetch_add(1) % res.numThreads].push_back(job);
-		res.wakeCondition.notify_one();
+		res.sleepingCondition.notify_one();
 	}
 
 	void Dispatch(context& ctx, uint32_t jobCount, uint32_t groupSize, const std::function<void(JobArgs)>& task, size_t sharedmemory_size)
@@ -366,7 +386,7 @@ namespace wi::jobsystem
 		const uint32_t groupCount = DispatchGroupCount(jobCount, groupSize);
 
 		// Context state is updated:
-		AtomicAdd(&ctx.counter, groupCount);
+		ctx.counter.fetch_add(groupCount);
 
 		Job job;
 		job.ctx = &ctx;
@@ -393,7 +413,7 @@ namespace wi::jobsystem
 
 		if (res.numThreads > 1)
 		{
-			res.wakeCondition.notify_all();
+			res.sleepingCondition.notify_all();
 		}
 	}
 
@@ -406,7 +426,7 @@ namespace wi::jobsystem
 	bool IsBusy(const context& ctx)
 	{
 		// Whenever the context label is greater than zero, it means that there is still work that needs to be done
-		return AtomicLoad(&ctx.counter) > 0;
+		return ctx.counter.load() > 0;
 	}
 
 	void Wait(const context& ctx)
@@ -416,19 +436,26 @@ namespace wi::jobsystem
 			PriorityResources& res = internal_state.resources[int(ctx.priority)];
 
 			// Wake any threads that might be sleeping:
-			res.wakeCondition.notify_all();
+			res.sleepingCondition.notify_all();
 
-			// work() will pick up any jobs that are on stand by and execute them on this thread:
+			// work() will pick up any jobs that are on standby and execute them on this thread:
 			res.work(res.nextQueue.fetch_add(1) % res.numThreads);
 
 			while (IsBusy(ctx))
 			{
 				// If we are here, then there are still remaining jobs that work() couldn't pick up.
-				//	In this case those jobs are not standing by on a queue but currently executing
-				//	on other threads, so they cannot be picked up by this thread.
-				//	Allow to swap out this thread by OS to not spin endlessly for nothing
-				std::this_thread::yield();
+				//	The thread enters a sleep until the !IsBusy() waitCondition is signaled
+				std::unique_lock<std::mutex> lock(res.waitingMutex);
+				if (IsBusy(ctx)) // check after locking, to not enter wait when it was completed after lock
+				{
+					res.waitingCondition.wait(lock, [&ctx] { return !IsBusy(ctx); });
+				}
 			}
 		}
+	}
+
+	uint32_t GetRemainingJobCount(const context& ctx)
+	{
+		return ctx.counter.load();
 	}
 }

@@ -17,10 +17,20 @@
 #endif // __XBOX_SCARLETT
 #endif
 
+// Descriptor safety feature:
+//	We init null descriptors for bindless index = 0 for access safety
+//	Because shader compiler sometimes incorrectly loads descriptor outside of safety branch
+//	Note: descriptor index 0 always contains a preinitialized null descriptor
+inline uint descriptor_index(in int x)
+{
+	return max(0, x);
+}
+
 #include "ColorSpaceUtility.hlsli"
 #include "PixelPacking_R11G11B10.hlsli"
 #include "PixelPacking_RGBE.hlsli"
 #include "ShaderInterop.h"
+#include "SH_Lite.hlsli"
 
 inline uint pack_unitvector(in half3 value)
 {
@@ -83,6 +93,10 @@ inline uint pack_half2(in half2 value)
 	retVal = f32tof16(value.x) | (f32tof16(value.y) << 16u);
 	return retVal;
 }
+inline uint pack_half2(in half a, in half b)
+{
+	return pack_half2(half2(a, b));
+}
 inline half2 unpack_half2(in uint value)
 {
 	half2 retVal;
@@ -96,6 +110,10 @@ inline uint2 pack_half3(in half3 value)
 	retVal.x = f32tof16(value.x) | (f32tof16(value.y) << 16u);
 	retVal.y = f32tof16(value.z);
 	return retVal;
+}
+inline uint2 pack_half3(in half a, in half b, in half c)
+{
+	return pack_half3(half3(a, b, c));
 }
 inline half3 unpack_half3(in uint2 value)
 {
@@ -111,6 +129,10 @@ inline uint2 pack_half4(in float4 value)
 	retVal.x = f32tof16(value.x) | (f32tof16(value.y) << 16u);
 	retVal.y = f32tof16(value.z) | (f32tof16(value.w) << 16u);
 	return retVal;
+}
+inline uint2 pack_half4(in half a, in half b, in half c, in half d)
+{
+	return pack_half4(half4(a, b, c, d));
 }
 inline half4 unpack_half4(in uint2 value)
 {
@@ -134,10 +156,45 @@ inline uint2 unpack_pixel(uint value)
 	return retVal;
 }
 
+uint pack_unorm16x2(float2 value)
+{
+	return uint(saturate(value.x) * 65535.0) | (uint(saturate(value.x) * 65535.0) << 16u);
+}
+uint2 pack_unorm16x4(float4 value)
+{
+	return uint2(pack_unorm16x2(value.xy), pack_unorm16x2(value.zw));
+}
+float2 unpack_unorm16x2(uint value)
+{
+	float2 retVal;
+	retVal.x = (value & 0xFFFF) / 65535.0;
+	retVal.y = (value >> 16u) / 65535.0;
+	return retVal;
+}
+float4 unpack_unorm16x4(uint2 value)
+{
+	float4 retVal;
+	retVal.x = (value.x & 0xFFFF) / 65535.0;
+	retVal.y = (value.x >> 16u) / 65535.0;
+	retVal.z = (value.y & 0xFFFF) / 65535.0;
+	retVal.w = (value.y >> 16u) / 65535.0;
+	return retVal;
+}
+
 template<typename T>
 T inverse_lerp(T value1, T value2, T pos)
 {
 	return all(value2 == value1) ? 0 : ((pos - value1) / (value2 - value1));
+}
+
+// Source: https://www.shadertoy.com/view/3s33zj
+float3x3 adjoint(in float4x4 m)
+{
+	return float3x3(
+		cross(m[1].xyz, m[2].xyz), 
+		cross(m[2].xyz, m[0].xyz), 
+		cross(m[0].xyz, m[1].xyz)
+	);
 }
 
 // The root signature will affect shader compilation for DX12.
@@ -181,30 +238,41 @@ T inverse_lerp(T value1, T value2, T pos)
 		"SRV(t0, space = 18, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
 		"SRV(t0, space = 19, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
 		"SRV(t0, space = 20, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 21, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 22, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 23, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 24, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 25, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 26, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 27, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 28, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 29, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 30, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 31, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 32, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 33, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 34, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 35, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"UAV(u0, space = 36, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 37, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 38, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 39, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 40, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 41, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 42, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 43, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 44, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)" \
+		"SRV(t0, space = 21, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 22, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 23, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 24, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 25, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 26, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 27, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 28, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 29, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 30, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 100, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 101, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 102, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 103, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 104, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 105, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 106, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 107, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 108, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 109, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 110, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 111, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 112, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 113, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 114, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"UAV(u0, space = 115, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 200, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 201, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 202, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 203, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 204, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 205, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 206, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 207, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 208, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)" \
 	"), " \
 	"StaticSampler(s100, addressU = TEXTURE_ADDRESS_CLAMP, addressV = TEXTURE_ADDRESS_CLAMP, addressW = TEXTURE_ADDRESS_CLAMP, filter = FILTER_MIN_MAG_MIP_LINEAR)," \
 	"StaticSampler(s101, addressU = TEXTURE_ADDRESS_WRAP, addressV = TEXTURE_ADDRESS_WRAP, addressW = TEXTURE_ADDRESS_WRAP, filter = FILTER_MIN_MAG_MIP_LINEAR)," \
@@ -244,14 +312,24 @@ static const BindlessResource<Buffer<float>> bindless_buffers_float;
 static const BindlessResource<Buffer<float2>> bindless_buffers_float2;
 static const BindlessResource<Buffer<float3>> bindless_buffers_float3;
 static const BindlessResource<Buffer<float4>> bindless_buffers_float4;
+static const BindlessResource<Buffer<half>> bindless_buffers_half;
+static const BindlessResource<Buffer<half2>> bindless_buffers_half2;
+static const BindlessResource<Buffer<half3>> bindless_buffers_half3;
+static const BindlessResource<Buffer<half4>> bindless_buffers_half4;
 static const BindlessResource<Texture2DArray> bindless_textures2DArray;
+static const BindlessResource<Texture2DArray<half4>> bindless_textures2DArray_half4;
 static const BindlessResource<TextureCube> bindless_cubemaps;
+static const BindlessResource<TextureCube<half4>> bindless_cubemaps_half4;
 static const BindlessResource<TextureCubeArray> bindless_cubearrays;
 static const BindlessResource<Texture3D> bindless_textures3D;
+static const BindlessResource<Texture3D<half4>> bindless_textures3D_half4;
 static const BindlessResource<Texture2D<float>> bindless_textures_float;
 static const BindlessResource<Texture2D<float2>> bindless_textures_float2;
 static const BindlessResource<Texture2D<uint>> bindless_textures_uint;
 static const BindlessResource<Texture2D<uint4>> bindless_textures_uint4;
+static const BindlessResource<Texture2D<half4>> bindless_textures_half4;
+static const BindlessResource<Texture1D<float4>> bindless_textures1D;
+static const BindlessResource<Texture1D<half4>> bindless_textures1D_half4;
 
 static const BindlessResource<RWTexture2D<float4>> bindless_rwtextures;
 static const BindlessResource<RWByteAddressBuffer> bindless_rwbuffers;
@@ -292,16 +370,26 @@ static const uint DESCRIPTOR_SET_BINDLESS_ACCELERATION_STRUCTURE = 7;
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<float2> bindless_buffers_float2[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<float3> bindless_buffers_float3[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<float4> bindless_buffers_float4[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<half> bindless_buffers_half[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<half2> bindless_buffers_half2[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<half3> bindless_buffers_half3[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_UNIFORM_TEXEL_BUFFER)]] Buffer<half4> bindless_buffers_half4[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLER)]] SamplerState bindless_samplers[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D bindless_textures[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2DArray bindless_textures2DArray[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2DArray<half4> bindless_textures2DArray_half4[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] TextureCube bindless_cubemaps[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] TextureCube<half4> bindless_cubemaps_half4[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] TextureCubeArray bindless_cubearrays[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture3D bindless_textures3D[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture3D<half4> bindless_textures3D_half4[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D<float> bindless_textures_float[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D<float2> bindless_textures_float2[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D<uint> bindless_textures_uint[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D<uint4> bindless_textures_uint4[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture2D<half4> bindless_textures_half4[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture1D<half4> bindless_textures1D[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_SAMPLED_IMAGE)]] Texture1D<half4> bindless_textures1D_half4[];
 
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] RWByteAddressBuffer bindless_rwbuffers[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_TEXEL_BUFFER)]] RWBuffer<uint> bindless_rwbuffers_uint[];
@@ -339,30 +427,40 @@ Buffer<float4> bindless_buffers_float4[] : register(space11);
 RaytracingAccelerationStructure bindless_accelerationstructures[] : register(space12);
 #endif // RTAPI
 Texture2DArray bindless_textures2DArray[] : register(space13);
-TextureCube bindless_cubemaps[] : register(space14);
-TextureCubeArray bindless_cubearrays[] : register(space15);
-Texture3D bindless_textures3D[] : register(space16);
-Texture2D<float> bindless_textures_float[] : register(space17);
-Texture2D<float2> bindless_textures_float2[] : register(space18);
-Texture2D<uint> bindless_textures_uint[] : register(space19);
-Texture2D<uint4> bindless_textures_uint4[] : register(space20);
+Texture2DArray<half4> bindless_textures2DArray_half4[] : register(space14);
+TextureCube bindless_cubemaps[] : register(space15);
+TextureCube<half4> bindless_cubemaps_half4[] : register(space16);
+TextureCubeArray bindless_cubearrays[] : register(space17);
+Texture3D bindless_textures3D[] : register(space18);
+Texture3D<half4> bindless_textures3D_half4[] : register(space19);
+Texture2D<float> bindless_textures_float[] : register(space20);
+Texture2D<float2> bindless_textures_float2[] : register(space21);
+Texture2D<uint> bindless_textures_uint[] : register(space22);
+Texture2D<uint4> bindless_textures_uint4[] : register(space23);
+Texture2D<half4> bindless_textures_half4[] : register(space24);
+Buffer<half> bindless_buffers_half[] : register(space25);
+Buffer<half2> bindless_buffers_half2[] : register(space26);
+Buffer<half3> bindless_buffers_half3[] : register(space27);
+Buffer<half4> bindless_buffers_half4[] : register(space28);
+Texture1D<float4> bindless_textures1D[] : register(space29);
+Texture1D<half4> bindless_textures1D_half4[] : register(space30);
 
-RWTexture2D<float4> bindless_rwtextures[] : register(space21);
-RWByteAddressBuffer bindless_rwbuffers[] : register(space22);
-RWBuffer<uint> bindless_rwbuffers_uint[] : register(space23);
-RWBuffer<uint2> bindless_rwbuffers_uint2[] : register(space24);
-RWBuffer<uint3> bindless_rwbuffers_uint3[] : register(space25);
-RWBuffer<uint4> bindless_rwbuffers_uint4[] : register(space26);
-RWBuffer<float> bindless_rwbuffers_float[] : register(space27);
-RWBuffer<float2> bindless_rwbuffers_float2[] : register(space28);
-RWBuffer<float3> bindless_rwbuffers_float3[] : register(space29);
-RWBuffer<float4> bindless_rwbuffers_float4[] : register(space30);
-RWTexture2DArray<float4> bindless_rwtextures2DArray[] : register(space31);
-RWTexture3D<float4> bindless_rwtextures3D[] : register(space32);
-RWTexture2D<uint> bindless_rwtextures_uint[] : register(space33);
-RWTexture2D<uint2> bindless_rwtextures_uint2[] : register(space34);
-RWTexture2D<uint3> bindless_rwtextures_uint3[] : register(space35);
-RWTexture2D<uint4> bindless_rwtextures_uint4[] : register(space36);
+RWTexture2D<float4> bindless_rwtextures[] : register(space100);
+RWByteAddressBuffer bindless_rwbuffers[] : register(space101);
+RWBuffer<uint> bindless_rwbuffers_uint[] : register(space102);
+RWBuffer<uint2> bindless_rwbuffers_uint2[] : register(space103);
+RWBuffer<uint3> bindless_rwbuffers_uint3[] : register(space104);
+RWBuffer<uint4> bindless_rwbuffers_uint4[] : register(space105);
+RWBuffer<float> bindless_rwbuffers_float[] : register(space106);
+RWBuffer<float2> bindless_rwbuffers_float2[] : register(space107);
+RWBuffer<float3> bindless_rwbuffers_float3[] : register(space108);
+RWBuffer<float4> bindless_rwbuffers_float4[] : register(space109);
+RWTexture2DArray<float4> bindless_rwtextures2DArray[] : register(space110);
+RWTexture3D<float4> bindless_rwtextures3D[] : register(space111);
+RWTexture2D<uint> bindless_rwtextures_uint[] : register(space112);
+RWTexture2D<uint2> bindless_rwtextures_uint2[] : register(space113);
+RWTexture2D<uint3> bindless_rwtextures_uint3[] : register(space114);
+RWTexture2D<uint4> bindless_rwtextures_uint4[] : register(space115);
 
 #endif // __spirv__
 
@@ -377,6 +475,7 @@ static const BindlessResource<StructuredBuffer<ShaderClusterBounds>> bindless_st
 static const BindlessResource<StructuredBuffer<ShaderMaterial>> bindless_structured_material;
 static const BindlessResource<StructuredBuffer<uint>> bindless_structured_uint;
 static const BindlessResource<StructuredBuffer<ShaderTerrainChunk>> bindless_structured_terrain_chunks;
+static const BindlessResource<StructuredBuffer<DDGIProbe>> bindless_structured_ddi_probes;
 #elif defined(__spirv__)
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderMeshInstance> bindless_structured_meshinstance[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderGeometry> bindless_structured_geometry[];
@@ -386,15 +485,17 @@ static const BindlessResource<StructuredBuffer<ShaderTerrainChunk>> bindless_str
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderMaterial> bindless_structured_material[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<uint> bindless_structured_uint[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[];
 #else
-StructuredBuffer<ShaderMeshInstance> bindless_structured_meshinstance[] : register(space37);
-StructuredBuffer<ShaderGeometry> bindless_structured_geometry[] : register(space38);
-StructuredBuffer<ShaderMeshlet> bindless_structured_meshlet[] : register(space39);
-StructuredBuffer<ShaderCluster> bindless_structured_cluster[] : register(space40);
-StructuredBuffer<ShaderClusterBounds> bindless_structured_cluster_bounds[] : register(space41);
-StructuredBuffer<ShaderMaterial> bindless_structured_material[] : register(space42);
-StructuredBuffer<uint> bindless_structured_uint[] : register(space43);
-StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[] : register(space44);
+StructuredBuffer<ShaderMeshInstance> bindless_structured_meshinstance[] : register(space200);
+StructuredBuffer<ShaderGeometry> bindless_structured_geometry[] : register(space201);
+StructuredBuffer<ShaderMeshlet> bindless_structured_meshlet[] : register(space202);
+StructuredBuffer<ShaderCluster> bindless_structured_cluster[] : register(space203);
+StructuredBuffer<ShaderClusterBounds> bindless_structured_cluster_bounds[] : register(space204);
+StructuredBuffer<ShaderMaterial> bindless_structured_material[] : register(space205);
+StructuredBuffer<uint> bindless_structured_uint[] : register(space206);
+StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[] : register(space207);
+StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[] : register(space208);
 #endif // __spirv__
 
 inline FrameCB GetFrame()
@@ -415,19 +516,19 @@ inline ShaderWeather GetWeather()
 }
 inline ShaderMeshInstance load_instance(uint instanceIndex)
 {
-	return bindless_structured_meshinstance[GetScene().instancebuffer][instanceIndex];
+	return bindless_structured_meshinstance[descriptor_index(GetScene().instancebuffer)][instanceIndex];
 }
 inline ShaderGeometry load_geometry(uint geometryIndex)
 {
-	return bindless_structured_geometry[GetScene().geometrybuffer][geometryIndex];
+	return bindless_structured_geometry[descriptor_index(GetScene().geometrybuffer)][geometryIndex];
 }
 inline ShaderMeshlet load_meshlet(uint meshletIndex)
 {
-	return bindless_structured_meshlet[GetScene().meshletbuffer][meshletIndex];
+	return bindless_structured_meshlet[descriptor_index(GetScene().meshletbuffer)][meshletIndex];
 }
 inline ShaderMaterial load_material(uint materialIndex)
 {
-	return bindless_structured_material[GetScene().materialbuffer][materialIndex];
+	return bindless_structured_material[descriptor_index(GetScene().materialbuffer)][materialIndex];
 }
 uint load_entitytile(uint tileIndex)
 {
@@ -466,7 +567,7 @@ inline void write_mipmap_feedback(uint materialIndex, float4 uvsets_dx, float4 u
 		const uint wave_mask = WaveActiveBitOr(mask);
 		if(WaveIsFirstLane())
 		{
-			InterlockedOr(bindless_rwbuffers_uint[GetScene().texturestreamingbuffer][materialIndex], wave_mask);
+			InterlockedOr(bindless_rwbuffers_uint[descriptor_index(GetScene().texturestreamingbuffer)][materialIndex], wave_mask);
 		}
 	}
 }
@@ -476,7 +577,7 @@ inline void write_mipmap_feedback(uint materialIndex, uint resolution0, uint res
 	if(WaveIsFirstLane() && GetScene().texturestreamingbuffer >= 0)
 	{
 		const uint mask = resolution0 | (resolution1 << 16u);
-		InterlockedOr(bindless_rwbuffers_uint[GetScene().texturestreamingbuffer][materialIndex], mask);
+		InterlockedOr(bindless_rwbuffers_uint[descriptor_index(GetScene().texturestreamingbuffer)][materialIndex], mask);
 	}
 }
 
@@ -530,6 +631,14 @@ struct PrimitiveID
 	uint subsetIndex;
 	bool maybe_clustered;
 
+	inline void init()
+	{
+		primitiveIndex = 0;
+		instanceIndex = 0;
+		subsetIndex = 0;
+		maybe_clustered = false;
+	}
+
 	// These packing methods require meshlet data, and pack into 32 bits:
 	inline uint pack()
 	{
@@ -578,18 +687,19 @@ struct PrimitiveID
 	{
 		ShaderMeshInstance inst = load_instance(instanceIndex);
 		ShaderGeometry geometry = load_geometry(inst.geometryOffset + subsetIndex);
+		[branch]
 		if (maybe_clustered && geometry.vb_clu >= 0)
 		{
 			const uint clusterID = primitiveIndex >> 7u;
 			const uint triangleID = primitiveIndex & 0x7F;
-			ShaderCluster cluster = bindless_structured_cluster[NonUniformResourceIndex(geometry.vb_clu)][clusterID];
+			ShaderCluster cluster = bindless_structured_cluster[NonUniformResourceIndex(descriptor_index(geometry.vb_clu))][clusterID];
 			uint i0 = cluster.vertices[cluster.triangles[triangleID].i0()];
 			uint i1 = cluster.vertices[cluster.triangles[triangleID].i1()];
 			uint i2 = cluster.vertices[cluster.triangles[triangleID].i2()];
 			return uint3(i0, i1, i2);
 		}
 		const uint startIndex = primitiveIndex * 3 + geometry.indexOffset;
-		Buffer<uint> indexBuffer = bindless_buffers_uint[NonUniformResourceIndex(geometry.ib)];
+		Buffer<uint> indexBuffer = bindless_buffers_uint[NonUniformResourceIndex(descriptor_index(geometry.ib))];
 		uint i0 = indexBuffer[startIndex + 0];
 		uint i1 = indexBuffer[startIndex + 1];
 		uint i2 = indexBuffer[startIndex + 2];
@@ -600,26 +710,26 @@ struct PrimitiveID
 	uint i2() { return tri().z; }
 };
 
-#define texture_random64x64 bindless_textures[GetFrame().texture_random64x64_index]
-#define texture_bluenoise bindless_textures[GetFrame().texture_bluenoise_index]
-#define texture_sheenlut bindless_textures[GetFrame().texture_sheenlut_index]
-#define texture_skyviewlut bindless_textures[GetFrame().texture_skyviewlut_index]
-#define texture_transmittancelut bindless_textures[GetFrame().texture_transmittancelut_index]
-#define texture_multiscatteringlut bindless_textures[GetFrame().texture_multiscatteringlut_index]
-#define texture_skyluminancelut bindless_textures[GetFrame().texture_skyluminancelut_index]
-#define texture_cameravolumelut bindless_textures3D[GetFrame().texture_cameravolumelut_index]
-#define texture_wind bindless_textures3D[GetFrame().texture_wind_index]
-#define texture_wind_prev bindless_textures3D[GetFrame().texture_wind_prev_index]
-#define texture_caustics bindless_textures[GetFrame().texture_caustics_index]
-#define scene_acceleration_structure bindless_accelerationstructures[GetScene().TLAS]
+#define texture_random64x64 bindless_textures[descriptor_index(GetFrame().texture_random64x64_index)]
+#define texture_bluenoise bindless_textures[descriptor_index(GetFrame().texture_bluenoise_index)]
+#define texture_sheenlut bindless_textures_half4[descriptor_index(GetFrame().texture_sheenlut_index)]
+#define texture_skyviewlut bindless_textures_half4[descriptor_index(GetFrame().texture_skyviewlut_index)]
+#define texture_transmittancelut bindless_textures_half4[descriptor_index(GetFrame().texture_transmittancelut_index)]
+#define texture_multiscatteringlut bindless_textures_half4[descriptor_index(GetFrame().texture_multiscatteringlut_index)]
+#define texture_skyluminancelut bindless_textures_half4[descriptor_index(GetFrame().texture_skyluminancelut_index)]
+#define texture_cameravolumelut bindless_textures3D_half4[descriptor_index(GetFrame().texture_cameravolumelut_index)]
+#define texture_wind bindless_textures3D[descriptor_index(GetFrame().texture_wind_index)]
+#define texture_wind_prev bindless_textures3D[descriptor_index(GetFrame().texture_wind_prev_index)]
+#define texture_caustics bindless_textures_half4[descriptor_index(GetFrame().texture_caustics_index)]
+#define scene_acceleration_structure bindless_accelerationstructures[descriptor_index(GetScene().TLAS)]
 
-#define texture_depth bindless_textures_float[GetCamera().texture_depth_index]
-#define texture_depth_history bindless_textures_float[GetCamera().texture_depth_index_prev]
-#define texture_lineardepth bindless_textures_float[GetCamera().texture_lineardepth_index]
-#define texture_primitiveID bindless_textures_uint[GetCamera().texture_primitiveID_index]
-#define texture_velocity bindless_textures_float2[GetCamera().texture_velocity_index]
-#define texture_normal bindless_textures_float2[GetCamera().texture_normal_index]
-#define texture_roughness bindless_textures_float[GetCamera().texture_roughness_index]
+#define texture_depth bindless_textures_float[descriptor_index(GetCamera().texture_depth_index)]
+#define texture_depth_history bindless_textures_float[descriptor_index(GetCamera().texture_depth_index_prev)]
+#define texture_lineardepth bindless_textures_float[descriptor_index(GetCamera().texture_lineardepth_index)]
+#define texture_primitiveID bindless_textures_uint[descriptor_index(GetCamera().texture_primitiveID_index)]
+#define texture_velocity bindless_textures_float2[descriptor_index(GetCamera().texture_velocity_index)]
+#define texture_normal bindless_textures_float2[descriptor_index(GetCamera().texture_normal_index)]
+#define texture_roughness bindless_textures_float[descriptor_index(GetCamera().texture_roughness_index)]
 
 // Note: defines can be better for choosing between half/float by compiler than "static const float"
 #define PI 3.14159265358979323846
@@ -630,6 +740,8 @@ struct PrimitiveID
 #define M_TO_SKY_UNIT 0.001
 #define SKY_UNIT_TO_M rcp(M_TO_SKY_UNIT)
 #define MEDIUMP_FLT_MAX 65504.0
+#define SPHERE_SAMPLING_PDF rcp(4 * PI)
+#define HEMISPHERE_SAMPLING_PDF rcp(2 * PI)
 
 #define sqr(a) ((a)*(a))
 #define pow4(a) ((a)*(a)*(a)*(a))
@@ -790,18 +902,66 @@ inline half3 clipspace_to_uv(in half3 clipspace)
 	return clipspace * half3(0.5, -0.5, 0.5) + 0.5;
 }
 
-inline float3 GetSunColor() { return GetWeather().sun_color; } // sun color with intensity applied
-inline float3 GetSunDirection() { return GetWeather().sun_direction; }
-inline float3 GetHorizonColor() { return GetWeather().horizon.rgb; }
-inline float3 GetZenithColor() { return GetWeather().zenith.rgb; }
-inline float3 GetAmbientColor() { return GetWeather().ambient.rgb; }
+inline half3 GetSunColor() { return unpack_half3(GetWeather().sun_color); } // sun color with intensity applied
+inline half3 GetSunDirection() { return normalize(unpack_half3(GetWeather().sun_direction)); }
+inline half3 GetHorizonColor() { return unpack_half3(GetWeather().horizon); }
+inline half3 GetZenithColor() { return unpack_half3(GetWeather().zenith); }
+inline half3 GetAmbientColor() { return unpack_half3(GetWeather().ambient); }
 inline uint2 GetInternalResolution() { return GetCamera().internal_resolution; }
 inline float GetDeltaTime() { return GetFrame().delta_time; }
 inline float GetTime() { return GetFrame().time; }
 inline float GetTimePrev() { return GetFrame().time_previous; }
 inline float GetFrameCount() { return GetFrame().frame_count; }
 inline min16uint2 GetTemporalAASampleRotation() { return uint2(GetFrame().temporalaa_samplerotation & 0xFF, (GetFrame().temporalaa_samplerotation >> 8u) & 0xFF); }
+inline half GetCapsuleShadowFade() { return f16tof32(GetFrame().capsuleshadow_fade_angle); }
+inline half GetCapsuleShadowAngle() { return f16tof32(GetFrame().capsuleshadow_fade_angle >> 16u); }
 inline bool IsStaticSky() { return GetScene().globalenvmap >= 0; }
+inline half GetGIBoost() { return unpack_half2(GetFrame().giboost_packed).x; }
+
+// Indirect debug drawing functionality, useable from any shader:
+inline void draw_line(float3 a, float3 b, float4 color = 1)
+{
+	[branch]
+	if (GetFrame().indirect_debugbufferindex < 0)
+		return;
+	RWByteAddressBuffer indirect_debug_buffer = bindless_rwbuffers[descriptor_index(GetFrame().indirect_debugbufferindex)];
+	uint prevCount;
+	indirect_debug_buffer.InterlockedAdd(0, 2, prevCount); // VertexCountPerInstance += 2
+	struct DebugLine
+	{
+		float4 posA;
+		float4 colorA;
+		float4 posB;
+		float4 colorB;
+	} debugline;
+	debugline.posA = float4(a, 1);
+	debugline.posB = float4(b, 1);
+	debugline.colorA = color;
+	debugline.colorB = color;
+#ifdef __PSSL__
+	indirect_debug_buffer.TypedStore<DebugLine>(sizeof(IndirectDrawArgsInstanced) + sizeof(DebugLine) * prevCount / 2, debugline);
+#else
+	indirect_debug_buffer.Store<DebugLine>(sizeof(IndirectDrawArgsInstanced) + sizeof(DebugLine) * prevCount / 2, debugline);
+#endif // __PSSL__
+}
+inline void draw_point(float3 pos, float size = 1, float4 color = 1)
+{
+	draw_line(pos - float3(size, 0, 0), pos + float3(size, 0, 0), color);
+	draw_line(pos - float3(0, size, 0), pos + float3(0, size, 0), color);
+	draw_line(pos - float3(0, 0, size), pos + float3(0, 0, size), color);
+}
+inline void draw_sphere(float3 pos, float radius, float4 color = 1)
+{
+	const uint segmentcount = 36;
+	for (int i = 0; i < segmentcount; ++i)
+	{
+		const float angle0 = (float)i / (float)segmentcount * PI * 2;
+		const float angle1 = (float)(i + 1) / (float)segmentcount * PI * 2;
+		draw_line(pos + float3(sin(angle0), cos(angle0), 0) * radius, pos + float3(sin(angle1), cos(angle1), 0) * radius, color);
+		draw_line(pos + float3(sin(angle0), 0, cos(angle0)) * radius, pos + float3(sin(angle1), 0, cos(angle1)) * radius, color);
+		draw_line(pos + float3(0, sin(angle0), cos(angle0)) * radius, pos + float3(0, sin(angle1), cos(angle1)) * radius, color);
+	}
+}
 
 // Mie scaterring approximated with Henyey-Greenstein phase function.
 //	https://www.alexandre-pestana.com/volumetric-lights/
@@ -1126,23 +1286,35 @@ inline float3x3 compute_tangent_frame(float3 N, float3 P, float2 UV)
 }
 
 // Computes linear depth from post-projection depth
-inline float compute_lineardepth(in float z, in float near, in float far)
+inline float compute_lineardepth(in float z, in float near, in float far, in bool ortho = false)
 {
+	if (ortho)
+		return near + (1 - z) * (far - near); // ortho
+
+	// Perspective:
 	float z_n = 2 * z - 1;
 	float lin = 2 * far * near / (near + far - z_n * (near - far));
 	return lin;
 }
 inline float compute_lineardepth(in float z)
 {
-	return compute_lineardepth(z, GetCamera().z_near, GetCamera().z_far);
+	return compute_lineardepth(z, GetCamera().z_near, GetCamera().z_far, GetCamera().IsOrtho());
 }
 
 // Computes post-projection depth from linear depth
-inline float compute_inverse_lineardepth(in float lin, in float near, in float far)
+inline float compute_inverse_lineardepth(in float lin, in float near, in float far, in bool ortho = false)
 {
+	if (ortho)
+		return 1 - (lin - near) / (far - near);
+	
+	// Perspective:
 	float z_n = ((lin - 2 * far) * near + far * lin) / (lin * near - far * lin);
 	float z = (z_n + 1) / 2;
 	return z;
+}
+inline float compute_inverse_lineardepth(in float lin)
+{
+	return compute_inverse_lineardepth(lin, GetCamera().z_near, GetCamera().z_far, GetCamera().IsOrtho());
 }
 
 inline float3x3 get_tangentspace(in float3 normal)
@@ -1295,6 +1467,44 @@ inline float3 cubemap_to_uv(in float3 r)
 		faceIndex = 4.0 + negz;
 	}
 	return float3((uvw.xy / uvw.z + 1) * 0.5, faceIndex);
+}
+
+
+inline bool is_inside_uv(in float2 uv, in float4 uv_range)
+{
+	return all(uv.xy >= uv_range.xy) && all(uv.xy <= uv_range.zw);
+}
+
+static const float4 cubemap_cross_ranges[] = {
+	float4(0.5, 0.333, 0.75, 0.667), // positive_x
+	float4(0.0, 0.333, 0.25, 0.667), // negative_x
+	float4(0.25, 0.0, 0.5, 0.333),	 // positive_y
+	float4(0.25, 0.667, 0.5, 1.0),	 // negative_y
+	float4(0.25, 0.333, 0.5, 0.667), // positive_z
+	float4(0.75, 0.333, 1.0, 0.667), // negative_z
+};
+
+// From a 2D UV coordinate, returns 3D cubemap sampling UV to sample the cubemap as an unwrapped 2D cross image
+//	Returns 0 if the input UV doesn't correspond to any face, and a 3D direction vector that can be used to sample a TextureCube otherwise
+inline float3 uv_to_cubemap_cross(in float2 uv)
+{
+	float2 cross_uv = 0;
+	int result_face = -1;
+	for (int face = 0; face < arraysize(cubemap_cross_ranges); ++face)
+	{
+		float4 range = cubemap_cross_ranges[face];
+		if (is_inside_uv(uv.xy, range))
+		{
+			result_face = face;
+			cross_uv = inverse_lerp(range.xy, range.zw, uv.xy);
+			break;
+		}
+	}
+
+	if (result_face >= 0)
+		return uv_to_cubemap(cross_uv, result_face);
+		
+	return 0;
 }
 
 // Samples a texture with Catmull-Rom filtering, using 9 texture fetches instead of 16. ( https://gist.github.com/TheRealMJP/c83b8c0f46b63f3a88a5986f4fa982b1#file-tex2dcatmullrom-hlsl )
@@ -1540,6 +1750,22 @@ half4 qmul(half4 q1, half4 q2)
 	);
 }
 
+// Quaternion normalization
+float4 qnorm(float4 q)
+{
+	float len = length(q);
+	if (len > 0)
+		len = rcp(len);
+	return q * len;
+}
+half4 qnorm(half4 q)
+{
+	half len = length(q);
+	if (len > 0)
+		len = rcp(len);
+	return q * len;
+}
+
 // Vector rotation with a quaternion
 // http://mathworld.wolfram.com/Quaternion.html
 float3 rotate_vector(float3 v, float4 r)
@@ -1568,6 +1794,17 @@ inline float sphere_volume(in float radius)
 inline half sphere_volume(in half radius)
 {
 	return 4.0 / 3.0 * PI * radius * radius * radius;
+}
+
+inline float distance_squared(float3 a, float3 b)
+{
+	float3 diff = b - a;
+	return dot(diff, diff);
+}
+inline half distance_squared(half3 a, half3 b)
+{
+	half3 diff = b - a;
+	return dot(diff, diff);
 }
 
 
@@ -1740,6 +1977,12 @@ float compute_texture_lod(Texture2D tex, float triangle_constant, float3 ray_dir
 	tex.GetDimensions(w, h);
 	return compute_texture_lod(w, h, triangle_constant, ray_direction, surf_normal, cone_width);
 }
+float compute_texture_lod(Texture2D<half4> tex, float triangle_constant, float3 ray_direction, float3 surf_normal, float cone_width)
+{
+	uint w, h;
+	tex.GetDimensions(w, h);
+	return compute_texture_lod(w, h, triangle_constant, ray_direction, surf_normal, cone_width);
+}
 float pixel_cone_spread_angle_from_image_height(float image_height)
 {
 	//return atan(2.0 * frame_constants.view_constants.clip_to_view._11 / image_height);
@@ -1896,10 +2139,10 @@ static const min16uint NUM_PARALLAX_OCCLUSION_STEPS = 32;
 static const half NUM_PARALLAX_OCCLUSION_STEPS_RCP = 1.0 / NUM_PARALLAX_OCCLUSION_STEPS;
 inline void ParallaxOcclusionMapping_Impl(
 	inout float4 uvsets,		// uvsets to modify
-	in half3 V,				// view vector (pointing towards camera)
+	in half3 V,					// view vector (pointing towards camera)
 	in half3x3 TBN,				// tangent basis matrix (same that is used for normal mapping)
 	in half strength,			// material parameters
-	in Texture2D tex,			// displacement map texture
+	in Texture2D<half4> tex,	// displacement map texture
 	in float2 uv,				// uv to use for the displacement map
 	in float2 uv_dx,			// horizontal derivative of displacement map uv
 	in float2 uv_dy,			// vertical derivative of displacement map uv
@@ -1917,19 +2160,19 @@ inline void ParallaxOcclusionMapping_Impl(
 	half curLayerHeight = 0;
 	half2 dtex = strength * V.xy * NUM_PARALLAX_OCCLUSION_STEPS_RCP;
 	float2 currentTextureCoords = uv;
-	half heightFromTexture = 1 - (half)tex.SampleGrad(sam, currentTextureCoords, uv_dx, uv_dy).r;
+	half heightFromTexture = 1 - tex.SampleGrad(sam, currentTextureCoords, uv_dx, uv_dy).r;
 	min16uint iter = 0;
 	[loop]
 	while (heightFromTexture > curLayerHeight && iter < NUM_PARALLAX_OCCLUSION_STEPS)
 	{
 		curLayerHeight += NUM_PARALLAX_OCCLUSION_STEPS_RCP;
 		currentTextureCoords -= dtex;
-		heightFromTexture = 1 - (half)tex.SampleGrad(sam, currentTextureCoords, uv_dx, uv_dy).r;
+		heightFromTexture = 1 - tex.SampleGrad(sam, currentTextureCoords, uv_dx, uv_dy).r;
 		iter++;
 	}
 	float2 prevTCoords = currentTextureCoords + dtex;
 	half nextH = heightFromTexture - curLayerHeight;
-	half prevH = 1 - (half)tex.SampleGrad(sam, prevTCoords, uv_dx, uv_dy).r - curLayerHeight + NUM_PARALLAX_OCCLUSION_STEPS_RCP;
+	half prevH = 1 - tex.SampleGrad(sam, prevTCoords, uv_dx, uv_dy).r - curLayerHeight + NUM_PARALLAX_OCCLUSION_STEPS_RCP;
 	half weight = nextH / (nextH - prevH);
 	float2 finalTextureCoords = mad(prevTCoords, weight, currentTextureCoords * (1.0 - weight));
 	float2 difference = finalTextureCoords - uv;
@@ -1964,6 +2207,273 @@ half3x3 saturationMatrix(half saturation)
 	blue += half3(0, 0, saturation);
 
 	return half3x3(red, green, blue);
+}
+
+
+static const float3 random_colors[] = {
+	float3(0,0,1),
+	float3(0,1,1),
+	float3(0,1,0),
+	float3(1,1,0),
+	float3(1,0,0),
+	float3(1,0,1),
+	float3(0.5,1,1),
+	float3(0.5,1,0.5),
+	float3(1,1,0.5),
+	float3(1,0.5,0.5),
+	float3(1,0.5,1),
+};
+float3 random_color(uint index)
+{
+	return random_colors[index % arraysize(random_colors)];
+}
+
+// Matrix operations for HLSL: https://gist.github.com/mattatz/86fff4b32d198d0928d0fa4ff32cf6fa
+float4x4 inverse(float4x4 m) {
+    float n11 = m[0][0], n12 = m[1][0], n13 = m[2][0], n14 = m[3][0];
+    float n21 = m[0][1], n22 = m[1][1], n23 = m[2][1], n24 = m[3][1];
+    float n31 = m[0][2], n32 = m[1][2], n33 = m[2][2], n34 = m[3][2];
+    float n41 = m[0][3], n42 = m[1][3], n43 = m[2][3], n44 = m[3][3];
+
+    float t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44;
+    float t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44;
+    float t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44;
+    float t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
+
+    float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
+    float idet = 1.0f / det;
+
+    float4x4 ret;
+
+    ret[0][0] = t11 * idet;
+    ret[0][1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * idet;
+    ret[0][2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * idet;
+    ret[0][3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * idet;
+
+    ret[1][0] = t12 * idet;
+    ret[1][1] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * idet;
+    ret[1][2] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * idet;
+    ret[1][3] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * idet;
+
+    ret[2][0] = t13 * idet;
+    ret[2][1] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * idet;
+    ret[2][2] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * idet;
+    ret[2][3] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * idet;
+
+    ret[3][0] = t14 * idet;
+    ret[3][1] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * idet;
+    ret[3][2] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * idet;
+    ret[3][3] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * idet;
+
+    return ret;
+}
+
+// http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
+float4 matrix_to_quaternion(float4x4 m)
+{
+    float tr = m[0][0] + m[1][1] + m[2][2];
+    float4 q = float4(0, 0, 0, 0);
+
+    if (tr > 0)
+    {
+        float s = sqrt(tr + 1.0) * 2; // S=4*qw 
+        q.w = 0.25 * s;
+        q.x = (m[2][1] - m[1][2]) / s;
+        q.y = (m[0][2] - m[2][0]) / s;
+        q.z = (m[1][0] - m[0][1]) / s;
+    }
+    else if ((m[0][0] > m[1][1]) && (m[0][0] > m[2][2]))
+    {
+        float s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2; // S=4*qx 
+        q.w = (m[2][1] - m[1][2]) / s;
+        q.x = 0.25 * s;
+        q.y = (m[0][1] + m[1][0]) / s;
+        q.z = (m[0][2] + m[2][0]) / s;
+    }
+    else if (m[1][1] > m[2][2])
+    {
+        float s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2; // S=4*qy
+        q.w = (m[0][2] - m[2][0]) / s;
+        q.x = (m[0][1] + m[1][0]) / s;
+        q.y = 0.25 * s;
+        q.z = (m[1][2] + m[2][1]) / s;
+    }
+    else
+    {
+        float s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2; // S=4*qz
+        q.w = (m[1][0] - m[0][1]) / s;
+        q.x = (m[0][2] + m[2][0]) / s;
+        q.y = (m[1][2] + m[2][1]) / s;
+        q.z = 0.25 * s;
+    }
+
+    return q;
+}
+
+float4x4 m_scale(float4x4 m, float3 v)
+{
+    float x = v.x, y = v.y, z = v.z;
+
+    m[0][0] *= x; m[1][0] *= y; m[2][0] *= z;
+    m[0][1] *= x; m[1][1] *= y; m[2][1] *= z;
+    m[0][2] *= x; m[1][2] *= y; m[2][2] *= z;
+    m[0][3] *= x; m[1][3] *= y; m[2][3] *= z;
+
+    return m;
+}
+
+float4x4 quaternion_to_matrix(float4 quat)
+{
+    float4x4 m = float4x4(float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0));
+
+    float x = quat.x, y = quat.y, z = quat.z, w = quat.w;
+    float x2 = x + x, y2 = y + y, z2 = z + z;
+    float xx = x * x2, xy = x * y2, xz = x * z2;
+    float yy = y * y2, yz = y * z2, zz = z * z2;
+    float wx = w * x2, wy = w * y2, wz = w * z2;
+
+    m[0][0] = 1.0 - (yy + zz);
+    m[0][1] = xy - wz;
+    m[0][2] = xz + wy;
+
+    m[1][0] = xy + wz;
+    m[1][1] = 1.0 - (xx + zz);
+    m[1][2] = yz - wx;
+
+    m[2][0] = xz - wy;
+    m[2][1] = yz + wx;
+    m[2][2] = 1.0 - (xx + yy);
+
+    m[3][3] = 1.0;
+
+    return m;
+}
+
+float4x4 m_translate(float4x4 m, float3 v)
+{
+    float x = v.x, y = v.y, z = v.z;
+    m[0][3] = x;
+    m[1][3] = y;
+    m[2][3] = z;
+    return m;
+}
+
+float4x4 compose(float3 position, float4 quat, float3 scale)
+{
+    float4x4 m = quaternion_to_matrix(quat);
+    m = m_scale(m, scale);
+    m = m_translate(m, position);
+    return m;
+}
+
+void decompose(in float4x4 m, out float3 position, out float4 rotation, out float3 scale)
+{
+    float sx = length(float3(m[0][0], m[0][1], m[0][2]));
+    float sy = length(float3(m[1][0], m[1][1], m[1][2]));
+    float sz = length(float3(m[2][0], m[2][1], m[2][2]));
+
+    // if determine is negative, we need to invert one scale
+    float det = determinant(m);
+    if (det < 0) {
+        sx = -sx;
+    }
+
+    position.x = m[3][0];
+    position.y = m[3][1];
+    position.z = m[3][2];
+
+    // scale the rotation part
+
+    float invSX = 1.0 / sx;
+    float invSY = 1.0 / sy;
+    float invSZ = 1.0 / sz;
+
+    m[0][0] *= invSX;
+    m[0][1] *= invSX;
+    m[0][2] *= invSX;
+
+    m[1][0] *= invSY;
+    m[1][1] *= invSY;
+    m[1][2] *= invSY;
+
+    m[2][0] *= invSZ;
+    m[2][1] *= invSZ;
+    m[2][2] *= invSZ;
+
+    rotation = matrix_to_quaternion(m);
+
+    scale.x = sx;
+    scale.y = sy;
+    scale.z = sz;
+}
+
+float4x4 axis_matrix(float3 right, float3 up, float3 forward)
+{
+    float3 xaxis = right;
+    float3 yaxis = up;
+    float3 zaxis = forward;
+    return float4x4(
+		xaxis.x, yaxis.x, zaxis.x, 0,
+		xaxis.y, yaxis.y, zaxis.y, 0,
+		xaxis.z, yaxis.z, zaxis.z, 0,
+		0, 0, 0, 1
+	);
+}
+
+// http://stackoverflow.com/questions/349050/calculating-a-lookat-matrix
+float4x4 look_at_matrix(float3 forward, float3 up)
+{
+    float3 xaxis = normalize(cross(forward, up));
+    float3 yaxis = up;
+    float3 zaxis = forward;
+    return axis_matrix(xaxis, yaxis, zaxis);
+}
+
+float4x4 look_at_matrix(float3 at, float3 eye, float3 up)
+{
+    float3 zaxis = normalize(at - eye);
+    float3 xaxis = normalize(cross(up, zaxis));
+    float3 yaxis = cross(zaxis, xaxis);
+    return axis_matrix(xaxis, yaxis, zaxis);
+}
+
+float4x4 extract_rotation_matrix(float4x4 m)
+{
+    float sx = length(float3(m[0][0], m[0][1], m[0][2]));
+    float sy = length(float3(m[1][0], m[1][1], m[1][2]));
+    float sz = length(float3(m[2][0], m[2][1], m[2][2]));
+
+    // if determine is negative, we need to invert one scale
+    float det = determinant(m);
+    if (det < 0) {
+        sx = -sx;
+    }
+
+    float invSX = 1.0 / sx;
+    float invSY = 1.0 / sy;
+    float invSZ = 1.0 / sz;
+
+    m[0][0] *= invSX;
+    m[0][1] *= invSX;
+    m[0][2] *= invSX;
+    m[0][3] = 0;
+
+    m[1][0] *= invSY;
+    m[1][1] *= invSY;
+    m[1][2] *= invSY;
+    m[1][3] = 0;
+
+    m[2][0] *= invSZ;
+    m[2][1] *= invSZ;
+    m[2][2] *= invSZ;
+    m[2][3] = 0;
+
+    m[3][0] = 0;
+    m[3][1] = 0;
+    m[3][2] = 0;
+    m[3][3] = 1;
+
+    return m;
 }
 
 #endif // WI_SHADER_GLOBALS_HF

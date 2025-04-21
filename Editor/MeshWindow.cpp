@@ -25,7 +25,7 @@ MeshComponent* get_mesh(Scene& scene, PickResult x)
 void MeshWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
-	wi::gui::Window::Create(ICON_MESH " Mesh", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE);
+	wi::gui::Window::Create(ICON_MESH " Mesh", wi::gui::Window::WindowControls::COLLAPSE | wi::gui::Window::WindowControls::CLOSE | wi::gui::Window::WindowControls::FIT_ALL_WIDGETS_VERTICAL);
 	SetSize(XMFLOAT2(580, 880));
 
 	closeButton.SetTooltip("Delete MeshComponent");
@@ -48,7 +48,7 @@ void MeshWindow::Create(EditorComponent* _editor)
 	float step = hei + 2;
 	float wid = 170;
 
-	float infolabel_height = 280;
+	float infolabel_height = 360;
 	meshInfoLabel.Create("Mesh Info");
 	meshInfoLabel.SetPos(XMFLOAT2(20, y));
 	meshInfoLabel.SetSize(XMFLOAT2(260, infolabel_height));
@@ -100,27 +100,55 @@ void MeshWindow::Create(EditorComponent* _editor)
 
 			int selected = subsetComboBox.GetSelected();
 
-			uint32_t first_subset = 0;
-			uint32_t last_subset = 0;
-			mesh->GetLODSubsetRange(0, first_subset, last_subset);
-			wi::vector<MeshComponent::MeshSubset> newSubsets;
-			int s = 0;
-			for (uint32_t i = first_subset; i < last_subset; ++i)
-			{
-				if (s != selected)
-				{
-					newSubsets.push_back(mesh->subsets[i]);
-				}
-				s++;
-			}
-			mesh->subsets = newSubsets;
-			mesh->subsets_per_lod = 0;
+			mesh->DeleteSubset(uint32_t(selected));
+
 			SetEntity(entity, selected - 1);
 
 			editor->RecordEntity(archive, entity);
 		}
 	});
 	AddWidget(&subsetRemoveButton);
+
+	subsetLastButton.Create("Move subset to last index");
+	subsetLastButton.SetTooltip("Move subset to the last index to render last. Useful if you want to force transparency render order within subsets.");
+	subsetLastButton.OnClick([=](wi::gui::EventArgs args) {
+		Scene& scene = editor->GetCurrentScene();
+		MeshComponent* mesh = scene.meshes.GetComponent(entity);
+		if (mesh != nullptr)
+		{
+			wi::Archive& archive = editor->AdvanceHistory();
+			archive << EditorComponent::HISTORYOP_COMPONENT_DATA;
+			editor->RecordEntity(archive, entity);
+
+			int selected = subsetComboBox.GetSelected();
+
+			uint32_t lod_count = mesh->GetLODCount();
+			wi::vector<MeshComponent::MeshSubset> newSubsets;
+			newSubsets.reserve(mesh->subsets.size());
+
+			for (uint32_t lod = 0; lod < lod_count; ++lod)
+			{
+				uint32_t first_subset = 0;
+				uint32_t last_subset = 0;
+				mesh->GetLODSubsetRange(lod, first_subset, last_subset);
+				int s = 0;
+				for (uint32_t i = first_subset; i < last_subset; ++i)
+				{
+					if (s != selected)
+					{
+						newSubsets.push_back(mesh->subsets[i]);
+					}
+					s++;
+				}
+				newSubsets.push_back(mesh->subsets[first_subset + selected]);
+			}
+			mesh->subsets = newSubsets;
+			SetEntity(entity, mesh->subsets_per_lod > 0 ? ((int)mesh->subsets_per_lod - 1) : (int)mesh->subsets.size());
+
+			editor->RecordEntity(archive, entity);
+		}
+	});
+	AddWidget(&subsetLastButton);
 
 	doubleSidedCheckBox.Create("Double Sided: ");
 	doubleSidedCheckBox.SetTooltip("If enabled, the inside of the mesh will be visible.");
@@ -243,18 +271,42 @@ void MeshWindow::Create(EditorComponent* _editor)
 	float mod_x = x - 20;
 	float mod_wid = wid + 40;
 
+	instanceSelectButton.Create("Select instances");
+	instanceSelectButton.SetTooltip("Select all instances that use this mesh.");
+	instanceSelectButton.OnClick([&](wi::gui::EventArgs args) {
+		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::vector<Entity> sel;
+		wi::unordered_set<const ObjectComponent*> visited_objects; // fix double visit (straight mesh + object->mesh)
+		for (size_t i = 0; i < scene.objects.GetCount(); ++i)
+		{
+			const ObjectComponent& object = scene.objects[i];
+			if (object.meshID != this->entity || visited_objects.count(&object) > 0)
+				continue;
+			visited_objects.insert(&object);
+			sel.push_back(scene.objects.GetEntity(i));
+		}
+		editor->ClearSelected();
+		for (auto& x : sel)
+		{
+			editor->AddSelected(x);
+		}
+	});
+	AddWidget(&instanceSelectButton);
+
 	flipCullingButton.Create("Flip Culling");
 	flipCullingButton.SetTooltip("Flip faces to reverse triangle culling order.");
 	flipCullingButton.SetSize(XMFLOAT2(mod_wid, hei));
 	flipCullingButton.SetPos(XMFLOAT2(mod_x, y += step));
 	flipCullingButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->FlipCulling();
+			visited_meshes.insert(mesh);
 		}
 		SetEntity(entity, subset);
 	});
@@ -266,12 +318,14 @@ void MeshWindow::Create(EditorComponent* _editor)
 	flipNormalsButton.SetPos(XMFLOAT2(mod_x, y += step));
 	flipNormalsButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->FlipNormals();
+			visited_meshes.insert(mesh);
 		}
 		SetEntity(entity, subset);
 	});
@@ -283,12 +337,14 @@ void MeshWindow::Create(EditorComponent* _editor)
 	computeNormalsSmoothButton.SetPos(XMFLOAT2(mod_x, y += step));
 	computeNormalsSmoothButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->ComputeNormals(MeshComponent::COMPUTE_NORMALS_SMOOTH);
+			visited_meshes.insert(mesh);
 		}
 		SetEntity(entity, subset);
 	});
@@ -300,12 +356,14 @@ void MeshWindow::Create(EditorComponent* _editor)
 	computeNormalsHardButton.SetPos(XMFLOAT2(mod_x, y += step));
 	computeNormalsHardButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->ComputeNormals(MeshComponent::COMPUTE_NORMALS_HARD);
+			visited_meshes.insert(mesh);
 		}
 		SetEntity(entity, subset);
 	});
@@ -317,12 +375,14 @@ void MeshWindow::Create(EditorComponent* _editor)
 	recenterButton.SetPos(XMFLOAT2(mod_x, y += step));
 	recenterButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->Recenter();
+			visited_meshes.insert(mesh);
 		}
 	});
 	AddWidget(&recenterButton);
@@ -333,12 +393,14 @@ void MeshWindow::Create(EditorComponent* _editor)
 	recenterToBottomButton.SetPos(XMFLOAT2(mod_x, y += step));
 	recenterToBottomButton.OnClick([&](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
+		wi::unordered_set<MeshComponent*> visited_meshes; // fix double visit (straight mesh + object->mesh)
 		for (auto& x : editor->translator.selected)
 		{
 			MeshComponent* mesh = get_mesh(scene, x);
-			if (mesh == nullptr)
+			if (mesh == nullptr || visited_meshes.count(mesh) > 0)
 				continue;
 			mesh->RecenterToBottom();
+			visited_meshes.insert(mesh);
 		}
 	});
 	AddWidget(&recenterToBottomButton);
@@ -352,6 +414,7 @@ void MeshWindow::Create(EditorComponent* _editor)
 		ObjectComponent merged_object;
 		MeshComponent merged_mesh;
 		bool valid_normals = false;
+		bool valid_tangents = false;
 		bool valid_uvset_0 = false;
 		bool valid_uvset_1 = false;
 		bool valid_atlas = false;
@@ -439,6 +502,18 @@ void MeshWindow::Create(EditorComponent* _editor)
 					valid_normals = true;
 					merged_mesh.vertex_normals.push_back(mesh->vertex_normals[i]);
 					XMStoreFloat3(&merged_mesh.vertex_normals.back(), XMVector3TransformNormal(XMLoadFloat3(&merged_mesh.vertex_normals.back()), W));
+				}
+
+				if (mesh->vertex_tangents.empty())
+				{
+					merged_mesh.vertex_tangents.emplace_back();
+				}
+				else
+				{
+					valid_tangents = true;
+					merged_mesh.vertex_tangents.push_back(mesh->vertex_tangents[i]);
+					XMFLOAT3* tan = (XMFLOAT3*)&merged_mesh.vertex_tangents.back();
+					XMStoreFloat3(tan, XMVector3TransformNormal(XMLoadFloat3(tan), W));
 				}
 
 				if (mesh->vertex_uvset_0.empty())
@@ -564,6 +639,8 @@ void MeshWindow::Create(EditorComponent* _editor)
 		{
 			if (!valid_normals)
 				merged_mesh.vertex_normals.clear();
+			if (!valid_tangents)
+				merged_mesh.vertex_tangents.clear();
 			if (!valid_uvset_0)
 				merged_mesh.vertex_uvset_0.clear();
 			if (!valid_uvset_1)
@@ -763,15 +840,13 @@ void MeshWindow::Create(EditorComponent* _editor)
 		MeshComponent* mesh = scene.meshes.GetComponent(entity);
 		if (mesh != nullptr && subset >= 0 && subset < mesh->subsets.size())
 		{
-			MeshComponent::MeshSubset& meshsubset = mesh->subsets[subset];
 			if (args.iValue == 0)
 			{
-				meshsubset.materialID = INVALID_ENTITY;
+				mesh->SetSubsetMaterial(uint32_t(subset), INVALID_ENTITY);
 			}
 			else
 			{
-				MeshComponent::MeshSubset& meshsubset = mesh->subsets[subset];
-				meshsubset.materialID = scene.materials.GetEntity(args.iValue - 1);
+				mesh->SetSubsetMaterial(uint32_t(subset), scene.materials.GetEntity(args.iValue - 1));
 			}
 		}
 	});
@@ -921,6 +996,11 @@ void MeshWindow::Create(EditorComponent* _editor)
 			mesh->subsets = subsets;
 
 			mesh->CreateRenderData();
+
+			if (mesh->IsBVHEnabled())
+			{
+				mesh->BuildBVH();
+			}
 		}
 		SetEntity(entity, subset);
 	});
@@ -1151,6 +1231,7 @@ void MeshWindow::ResizeLayout()
 	subsetRemoveButton.SetPos(XMFLOAT2(subsetComboBox.GetPos().x + subsetComboBox.GetSize().x + 1 + subsetComboBox.GetSize().y, subsetComboBox.GetPos().y));
 	subsetRemoveButton.SetSize(XMFLOAT2(subsetComboBox.GetSize().y, subsetComboBox.GetSize().y));
 	add(subsetMaterialComboBox);
+	add(subsetLastButton);
 	add_right(doubleSidedCheckBox);
 	add_right(doubleSidedShadowCheckBox);
 	add_right(bvhCheckBox);
@@ -1158,6 +1239,7 @@ void MeshWindow::ResizeLayout()
 	add_fullwidth(impostorCreateButton);
 	add(impostorDistanceSlider);
 	add(tessellationFactorSlider);
+	add_fullwidth(instanceSelectButton);
 	add_fullwidth(flipCullingButton);
 	add_fullwidth(flipNormalsButton);
 	add_fullwidth(computeNormalsSmoothButton);

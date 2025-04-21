@@ -10,8 +10,10 @@ public:
 	wi::gui::CheckBox versionCheckBox;
 	wi::gui::CheckBox fpsCheckBox;
 	wi::gui::CheckBox otherinfoCheckBox;
+	wi::gui::Slider masterVolumeSlider;
 	wi::gui::ComboBox themeCombo;
 	wi::gui::ComboBox saveModeComboBox;
+	wi::gui::CheckBox saveCompressionCheckBox;
 	wi::gui::ComboBox languageCombo;
 
 	wi::gui::CheckBox physicsDebugCheckBox;
@@ -27,11 +29,14 @@ public:
 	wi::gui::CheckBox cameraVisCheckBox;
 	wi::gui::CheckBox colliderVisCheckBox;
 	wi::gui::CheckBox springVisCheckBox;
+	wi::gui::CheckBox splineVisCheckBox;
 	wi::gui::CheckBox freezeCullingCameraCheckBox;
 	wi::gui::CheckBox disableAlbedoMapsCheckBox;
 	wi::gui::CheckBox forceDiffuseLightingCheckBox;
+	wi::gui::CheckBox focusModeCheckBox;
 
 	wi::gui::Slider transformToolOpacitySlider;
+	wi::gui::Slider transformToolDarkenSlider;
 	wi::gui::Slider bonePickerOpacitySlider;
 	wi::gui::CheckBox skeletonsVisibleCheckBox;
 
@@ -39,6 +44,7 @@ public:
 	wi::gui::Button eliminateCoarseCascadesButton;
 	wi::gui::Button ddsConvButton;
 	wi::gui::Button ktxConvButton;
+	wi::gui::Button duplicateCollidersButton;
 
 	void ResizeLayout() override;
 
