@@ -48,23 +48,29 @@ namespace wi::helper
 	// Returns file path if successful, empty string otherwise
 	std::string screenshot(const wi::graphics::SwapChain& swapchain, const std::string& name = "");
 
+	// Returns file path if successful, empty string otherwise
+	std::string screenshot(const wi::graphics::Texture& texture, const std::string& name = "");
+
 	// Save raw pixel data from the texture to memory
 	bool saveTextureToMemory(const wi::graphics::Texture& texture, wi::vector<uint8_t>& texturedata);
 
-	// Save texture to memory as a file format
+	// Save texture to memory as a file format (file format is determined by extension, supported extensions: .png, .jpg, .jpeg, .tga, .bmp, .dds, .ico, .h, .raw)
 	bool saveTextureToMemoryFile(const wi::graphics::Texture& texture, const std::string& fileExtension, wi::vector<uint8_t>& filedata);
 
-	// Save raw texture data to memory as file format
+	// Save raw texture data to memory as file format (file format is determined by extension, supported extensions: .png, .jpg, .jpeg, .tga, .bmp, .dds, .ico, .h, .raw)
 	bool saveTextureToMemoryFile(const wi::vector<uint8_t>& textureData, const wi::graphics::TextureDesc& desc, const std::string& fileExtension, wi::vector<uint8_t>& filedata);
 
-	// Save texture to file format
+	// Save texture to file format (file format is determined by extension, supported extensions: .png, .jpg, .jpeg, .tga, .bmp, .dds, .ico, .h, .raw)
 	bool saveTextureToFile(const wi::graphics::Texture& texture, const std::string& fileName);
 
-	// Save raw texture data to file format
+	// Save raw texture data to file format (file format is determined by extension, supported extensions: .png, .jpg, .jpeg, .tga, .bmp, .dds, .ico, .h, .raw)
 	bool saveTextureToFile(const wi::vector<uint8_t>& texturedata, const wi::graphics::TextureDesc& desc, const std::string& fileName);
 
 	// Download buffer from GPU into CPU memory
 	bool saveBufferToMemory(const wi::graphics::GPUBuffer& buffer, wi::vector<uint8_t>& data);
+
+	// Creates cursor data from texture. If successful, the file data is returned in the data argument
+	bool CreateCursorFromTexture(const wi::graphics::Texture& texture, int hotspotX, int hotspotY, wi::vector<uint8_t>& data);
 
 	std::string getCurrentDateTimeAsString();
 
@@ -89,6 +95,8 @@ namespace wi::helper
 
 	void MakePathAbsolute(std::string& path);
 
+	std::string BackslashToForwardSlash(const std::string& str);
+
 	void DirectoryCreate(const std::string& path);
 
 	// Returns the file size if the file exists, otherwise 0
@@ -109,9 +117,12 @@ namespace wi::helper
 
 	uint64_t FileTimestamp(const std::string& fileName);
 
+	bool FileCopy(const std::string& filename_src, const std::string& filename_dst);
+
 	std::string GetTempDirectoryPath();
 	std::string GetCacheDirectoryPath();
 	std::string GetCurrentPath();
+	std::string GetExecutablePath();
 
 	struct FileDialogParams
 	{
@@ -122,8 +133,11 @@ namespace wi::helper
 		} type = OPEN;
 		std::string description;
 		wi::vector<std::string> extensions;
+		bool multiselect = true; // only for TYPE::OPEN
 	};
 	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess);
+
+	std::string FolderDialog(const std::string& description = "Select folder");
 
 	void GetFileNamesInDirectory(const std::string& directory, std::function<void(std::string fileName)> onSuccess, const std::string& filter_extension = "");
 
@@ -145,12 +159,14 @@ namespace wi::helper
 	// Parameter - to - must be pre-allocated!
 	// dest_size_in_characters : number of characters in the pre-allocated string memory
 	// returns result string length
-	int StringConvert(const char* from, wchar_t* to, int dest_size_in_characters = -1);
+	int StringConvert(const char* from, wchar_t* to, int dest_size_in_characters);
 
 	// Parameter - to - must be pre-allocated!
 	// dest_size_in_characters : number of characters in the pre-allocated string memory
 	// returns result string length
-	int StringConvert(const wchar_t* from, char* to, int dest_size_in_characters = -1);
+	int StringConvert(const wchar_t* from, char* to, int dest_size_in_characters);
+
+	std::string StringRemoveTrailingWhitespaces(const std::string& str);
 
 	// Prints debug info to the console output
 	enum class DebugLevel
@@ -201,4 +217,10 @@ namespace wi::helper
 
 	// Hash the contents of a file:
 	size_t HashByteData(const uint8_t* data, size_t size);
+
+	// Returns string for paste operation
+	std::wstring GetClipboardText();
+
+	// Copies text to clipboard
+	void SetClipboardText(const std::wstring& wstr);
 };

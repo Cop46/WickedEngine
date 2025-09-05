@@ -1,5 +1,6 @@
 #include "wiEventHandler.h"
 #include "wiUnorderedMap.h"
+#include "wiVector.h"
 
 #include <list>
 #include <mutex>
@@ -23,13 +24,12 @@ namespace wi::eventhandler
 
 		~EventInternal()
 		{
-			manager->locker.lock();
+			std::scoped_lock lck(manager->locker);
 			auto it = manager->subscribers.find(id);
 			if (it != manager->subscribers.end())
 			{
 				it->second.remove(&callback);
 			}
-			manager->locker.unlock();
 		}
 	};
 
@@ -42,54 +42,64 @@ namespace wi::eventhandler
 		eventinternal->id = id;
 		eventinternal->callback = callback;
 
-		manager->locker.lock();
+		std::scoped_lock lck(manager->locker);
 		manager->subscribers[id].push_back(&eventinternal->callback);
-		manager->locker.unlock();
 
 		return handle;
 	}
 
 	void Subscribe_Once(int id, std::function<void(uint64_t)> callback)
 	{
-		manager->locker.lock();
+		std::scoped_lock lck(manager->locker);
 		manager->subscribers_once[id].push_back(callback);
-		manager->locker.unlock();
 	}
 
 	void FireEvent(int id, uint64_t userdata)
 	{
+		manager->locker.lock();
+
 		// Callbacks that only live for once:
 		{
-			manager->locker.lock();
 			auto it = manager->subscribers_once.find(id);
 			bool found = it != manager->subscribers_once.end();
-			manager->locker.unlock();
 
 			if (found)
 			{
 				auto& callbacks = it->second;
 				for (auto& callback : callbacks)
 				{
-					callback(userdata);
+					// move callback into temp var:
+					auto cb = std::move(callback);
+
+					// execute outside lock:
+					manager->locker.unlock();
+					cb(userdata);
+					manager->locker.lock();
 				}
 				callbacks.clear();
 			}
 		}
 		// Callbacks that live until deleted:
 		{
-			manager->locker.lock();
 			auto it = manager->subscribers.find(id);
 			bool found = it != manager->subscribers.end();
-			manager->locker.unlock();
 
 			if (found)
 			{
 				auto& callbacks = it->second;
 				for (auto& callback : callbacks)
 				{
-					(*callback)(userdata);
+					// make copy of callback:
+					auto cb = *callback;
+
+					// execute outside lock:
+					manager->locker.unlock();
+					cb(userdata);
+					manager->locker.lock();
 				}
 			}
 		}
+
+		manager->locker.unlock();
 	}
 }

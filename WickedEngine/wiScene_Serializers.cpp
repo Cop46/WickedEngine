@@ -266,6 +266,10 @@ namespace wi::scene
 			{
 				SerializeEntity(archive, cameraSource, seri);
 			}
+			if (seri.GetVersion() >= 11)
+			{
+				archive >> mesh_blend;
+			}
 
 			for (auto& x : textures)
 			{
@@ -440,6 +444,10 @@ namespace wi::scene
 			if (seri.GetVersion() >= 10)
 			{
 				SerializeEntity(archive, cameraSource, seri);
+			}
+			if (seri.GetVersion() >= 11)
+			{
+				archive << mesh_blend;
 			}
 		}
 	}
@@ -834,6 +842,12 @@ namespace wi::scene
 				SerializeEntity(archive, vehicle.wheel_entity_rear_left, seri);
 				SerializeEntity(archive, vehicle.wheel_entity_rear_right, seri);
 			}
+
+			if (seri.GetVersion() >= 6)
+			{
+				archive >> character.maxSlopeAngle;
+				archive >> character.gravityFactor;
+			}
 		}
 		else
 		{
@@ -907,6 +921,12 @@ namespace wi::scene
 				SerializeEntity(archive, vehicle.wheel_entity_rear_left, seri);
 				SerializeEntity(archive, vehicle.wheel_entity_rear_right, seri);
 			}
+
+			if (seri.GetVersion() >= 6)
+			{
+				archive << character.maxSlopeAngle;
+				archive << character.gravityFactor;
+			}
 		}
 	}
 	void PhysicsConstraintComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
@@ -950,6 +970,10 @@ namespace wi::scene
 				archive >> slider_constraint.target_velocity;
 				archive >> slider_constraint.max_force;
 			}
+			if (seri.GetVersion() >= 6)
+			{
+				archive >> break_distance;
+			}
 		}
 		else
 		{
@@ -989,6 +1013,10 @@ namespace wi::scene
 			{
 				archive << slider_constraint.target_velocity;
 				archive << slider_constraint.max_force;
+			}
+			if (seri.GetVersion() >= 6)
+			{
+				archive << break_distance;
 			}
 		}
 	}
@@ -1139,10 +1167,6 @@ namespace wi::scene
 			archive >> _flags;
 			archive >> color;
 			archive >> (uint32_t&)type;
-			if (type > SPOT)
-			{
-				type = POINT; // fallback from old area light
-			}
 			archive >> intensity;
 			archive >> range;
 			archive >> outerConeAngle;
@@ -1194,6 +1218,14 @@ namespace wi::scene
 			if (seri.GetVersion() >= 3)
 			{
 				archive >> volumetric_boost;
+			}
+			if (seri.GetVersion() >= 4)
+			{
+				archive >> height;
+			}
+			if (seri.GetVersion() >= 5)
+			{
+				SerializeEntity(archive, cameraSource, seri);
 			}
 
 			wi::jobsystem::Execute(seri.ctx, [&](wi::jobsystem::JobArgs args) {
@@ -1266,6 +1298,14 @@ namespace wi::scene
 			if (seri.GetVersion() >= 3)
 			{
 				archive << volumetric_boost;
+			}
+			if (seri.GetVersion() >= 4)
+			{
+				archive << height;
+			}
+			if (seri.GetVersion() >= 5)
+			{
+				SerializeEntity(archive, cameraSource, seri);
 			}
 		}
 	}
@@ -2115,12 +2155,19 @@ namespace wi::scene
 			archive >> _flags;
 			archive >> filename;
 
+			if (seri.GetVersion() >= 1)
+			{
+				archive >> currentTimer;
+			}
+
 			wi::jobsystem::Execute(seri.ctx, [&](wi::jobsystem::JobArgs args) {
 				if (!filename.empty())
 				{
 					filename = dir + filename;
 					videoResource = wi::resourcemanager::Load(filename);
-					wi::video::CreateVideoInstance(&videoResource.GetVideo(), &videoinstance);
+					// Note: video instance can't be created yet, as videoResource is not necessarily ready at this point
+					//	Consider when multiple threads are loading the same sound, one thread will be loading the data,
+					//	the others return early with the resource that will be containing the data once it has been loaded.
 				}
 			});
 		}
@@ -2130,6 +2177,12 @@ namespace wi::scene
 
 			archive << _flags;
 			archive << wi::helper::GetPathRelative(dir, filename);
+
+			if (seri.GetVersion() >= 1)
+			{
+				archive << currentTimer;
+			}
+
 		}
 	}
 	void InverseKinematicsComponent::Serialize(wi::Archive& archive, EntitySerializer& seri)
@@ -2356,6 +2409,12 @@ namespace wi::scene
 			{
 				SerializeEntity(archive, lookAtEntity, seri);
 			}
+
+			if (seri.GetVersion() >= 3)
+			{
+				archive >> arm_spacing;
+				archive >> leg_spacing;
+			}
 		}
 		else
 		{
@@ -2380,6 +2439,12 @@ namespace wi::scene
 			if (seri.GetVersion() >= 2)
 			{
 				SerializeEntity(archive, lookAtEntity, seri);
+			}
+
+			if (seri.GetVersion() >= 3)
+			{
+				archive << arm_spacing;
+				archive << leg_spacing;
 			}
 		}
 	}
@@ -2517,6 +2582,11 @@ namespace wi::scene
 			{
 				archive >> terrain_modifier_amount;
 			}
+			if (seri.GetVersion() >= 2)
+			{
+				archive >> terrain_pushdown;
+				archive >> terrain_texture_falloff;
+			}
 		}
 		else
 		{
@@ -2535,6 +2605,11 @@ namespace wi::scene
 			if (seri.GetVersion() >= 1)
 			{
 				archive << terrain_modifier_amount;
+			}
+			if (seri.GetVersion() >= 2)
+			{
+				archive << terrain_pushdown;
+				archive << terrain_texture_falloff;
 			}
 		}
 	}

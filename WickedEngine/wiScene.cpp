@@ -6,7 +6,6 @@
 #include "wiJobSystem.h"
 #include "wiSpinLock.h"
 #include "wiHelper.h"
-#include "wiRenderer.h"
 #include "wiBacklog.h"
 #include "wiTimer.h"
 #include "wiUnorderedMap.h"
@@ -17,7 +16,11 @@
 #include "shaders/ShaderInterop_SurfelGI.h"
 #include "shaders/ShaderInterop_DDGI.h"
 
+#if __has_include(<sanitizer/asan_interface.h>)
 #include <sanitizer/asan_interface.h>
+#else
+#define ASAN_UNPOISON_MEMORY_REGION(ptr,size)
+#endif
 
 using namespace wi::ecs;
 using namespace wi::enums;
@@ -57,6 +60,11 @@ namespace wi::scene
 				terrain.Generation_Update(camera);
 			}
 		}
+
+		// count colliders in background thread before procedural anim system
+		wi::jobsystem::Execute(collider_bvh_workload, [this](wi::jobsystem::JobArgs args) {
+			CountCPUandGPUColliders();
+		});
 
 		ScanSpringDependencies(); // after terrain, because this saves transform ptrs and terrain can add transforms
 
@@ -266,6 +274,7 @@ namespace wi::scene
 			desc.stride = (uint32_t)device->GetTopLevelAccelerationStructureInstanceSize();
 			desc.size = desc.stride * instanceArraySize * 2; // *2 to grow fast
 			desc.usage = Usage::UPLOAD;
+			desc.alignment = 16ull; // vulkan
 			if (TLAS_instancesUpload->desc.size < desc.size)
 			{
 				for (int i = 0; i < arraysize(TLAS_instancesUpload); ++i)
@@ -279,7 +288,7 @@ namespace wi::scene
 			wi::jobsystem::Execute(ctx, [&](wi::jobsystem::JobArgs args) {
 				// Must not keep inactive TLAS instances, so zero them out for safety:
 				std::memset(TLAS_instancesMapped, 0, TLAS_instancesUpload->desc.size);
-				});
+			});
 		}
 
 		// GPU subset count allocation is ready at this point:
@@ -356,6 +365,8 @@ namespace wi::scene
 
 		RunMeshUpdateSystem(ctx);
 
+		RunVideoUpdateSystem(ctx);
+
 		RunMaterialUpdateSystem(ctx);
 
 		wi::jobsystem::Wait(ctx); // dependencies
@@ -387,8 +398,6 @@ namespace wi::scene
 		RunParticleUpdateSystem(ctx);
 
 		RunSoundUpdateSystem(ctx);
-
-		RunVideoUpdateSystem(ctx);
 
 		RunImpostorUpdateSystem(ctx);
 
@@ -987,6 +996,8 @@ namespace wi::scene
 	{
 		for (auto& entry : componentLibrary.entries)
 		{
+			if (other.componentLibrary.entries.count(entry.first) == 0)
+				continue;
 			entry.second.component_manager->Merge(*other.componentLibrary.entries[entry.first].component_manager);
 		}
 	}
@@ -1010,20 +1021,19 @@ namespace wi::scene
 		matrix_objects_prev.insert(matrix_objects_prev.end(), other.matrix_objects_prev.begin(), other.matrix_objects_prev.end());
 
 		// Recount colliders:
-		collider_allocator_cpu.store(0u);
-		collider_allocator_gpu.store(0u);
+		CountCPUandGPUColliders();
 		const size_t size =
-			sizeof(wi::primitive::AABB) * colliders.GetCount() +
-			sizeof(wi::primitive::AABB) * colliders.GetCount() +
-			sizeof(ColliderComponent) * colliders.GetCount() +
-			sizeof(ColliderComponent) * colliders.GetCount()
+			sizeof(wi::primitive::AABB) * collider_count_cpu +
+			sizeof(wi::primitive::AABB) * collider_count_gpu +
+			sizeof(ColliderComponent) * collider_count_cpu +
+			sizeof(ColliderComponent) * collider_count_gpu
 		;
 		collider_deinterleaved_data.reserve(size);
 		ASAN_UNPOISON_MEMORY_REGION(collider_deinterleaved_data.data(), size);
 		aabb_colliders_cpu = (wi::primitive::AABB*)collider_deinterleaved_data.data();
-		aabb_colliders_gpu = aabb_colliders_cpu + colliders.GetCount();
-		colliders_cpu = (ColliderComponent*)(aabb_colliders_gpu + colliders.GetCount());
-		colliders_gpu = colliders_cpu + colliders.GetCount();
+		aabb_colliders_gpu = aabb_colliders_cpu + collider_count_cpu;
+		colliders_cpu = (ColliderComponent*)(aabb_colliders_gpu + collider_count_gpu);
+		colliders_gpu = colliders_cpu + collider_count_cpu;
 
 		for (size_t i = 0; i < colliders.GetCount(); ++i)
 		{
@@ -1083,19 +1093,15 @@ namespace wi::scene
 
 			if (collider.IsCPUEnabled())
 			{
-				uint32_t index = collider_allocator_cpu.fetch_add(1u);
-				colliders_cpu[index] = collider;
-				aabb_colliders_cpu[index] = aabb;
+				colliders_cpu[collider.cpu_index] = collider;
+				aabb_colliders_cpu[collider.cpu_index] = aabb;
 			}
 			if (collider.IsGPUEnabled())
 			{
-				uint32_t index = collider_allocator_gpu.fetch_add(1u);
-				colliders_gpu[index] = collider;
-				aabb_colliders_gpu[index] = aabb;
+				colliders_gpu[collider.gpu_index] = collider;
+				aabb_colliders_gpu[collider.gpu_index] = aabb;
 			}
 		}
-		collider_count_cpu = collider_allocator_cpu.load();
-		collider_count_gpu = collider_allocator_gpu.load();
 		collider_bvh.Build(aabb_colliders_cpu, collider_count_cpu);
 	}
 	Entity Scene::Instantiate(Scene& prefab, bool attached)
@@ -1454,6 +1460,7 @@ namespace wi::scene
 			SoundComponent& sound = sounds.Create(entity);
 			sound.filename = filename;
 			sound.soundResource = wi::resourcemanager::Load(filename);
+			sound.soundinstance.SetLooped(sound.IsLooped());
 			wi::audio::CreateSoundInstance(&sound.soundResource.GetSound(), &sound.soundinstance);
 		}
 
@@ -1477,7 +1484,10 @@ namespace wi::scene
 			VideoComponent& video = videos.Create(entity);
 			video.filename = filename;
 			video.videoResource = wi::resourcemanager::Load(filename);
-			wi::video::CreateVideoInstance(&video.videoResource.GetVideo(), &video.videoinstance);
+			if (video.videoResource.IsValid())
+			{
+				wi::video::CreateVideoInstance(&video.videoResource.GetVideo(), &video.videoinstance);
+			}
 		}
 
 		return entity;
@@ -1912,7 +1922,7 @@ namespace wi::scene
 			for (size_t animation_index = 0; animation_index < animation_queue.animations.size(); ++animation_index)
 			{
 				AnimationComponent& animation = *animation_queue.animations[animation_index];
-				if (!animation.IsPlaying())
+				if (!animation.IsPlaying() && animation.last_update_time == animation.timer) // The timer check is for scrolling paused animation timer, it should still update anim even if not playing!
 					continue;
 				animation.last_update_time = animation.timer;
 
@@ -1929,10 +1939,12 @@ namespace wi::scene
 
 					const AnimationComponent::AnimationChannel::PathDataType path_data_type = channel.GetPathDataType();
 
-					float timeFirst = std::numeric_limits<float>::max();
-					float timeLast = std::numeric_limits<float>::min();
-					int keyLeft = 0;	float timeLeft = std::numeric_limits<float>::min();
-					int keyRight = 0;	float timeRight = std::numeric_limits<float>::max();
+					float timeFirst = FLT_MAX;
+					float timeLast = -FLT_MAX;
+					int keyLeft = 0;
+					int keyRight = 0;
+					float timeLeft = -FLT_MAX;
+					float timeRight = FLT_MAX;
 
 					// search for usable keyframes:
 					for (int k = 0; k < (int)animationdata->keyframe_times.size(); ++k)
@@ -3161,6 +3173,7 @@ namespace wi::scene
 			if (humanoid == nullptr)
 				continue;
 			character.left_foot = humanoid->bones[size_t(HumanoidComponent::HumanoidBone::LeftFoot)];
+			if (!inverse_kinematics.Contains(character.left_foot))
 			{
 				InverseKinematicsComponent& ik = inverse_kinematics.Create(character.left_foot);
 				ik.use_target_position = true;
@@ -3168,6 +3181,7 @@ namespace wi::scene
 				ik.iteration_count = 10;
 			}
 			character.right_foot = humanoid->bones[size_t(HumanoidComponent::HumanoidBone::RightFoot)];
+			if (!inverse_kinematics.Contains(character.right_foot))
 			{
 				InverseKinematicsComponent& ik = inverse_kinematics.Create(character.right_foot);
 				ik.use_target_position = true;
@@ -3246,11 +3260,11 @@ namespace wi::scene
 						ik_pos = right_result.position;
 					}
 				}
-				character.foot_offset = wi::math::Lerp(character.foot_offset, diff, 0.1f);
+				character.foot_offset = wi::math::Lerp(character.foot_offset, diff, saturate(5 * dt));
 			}
 			else
 			{
-				character.foot_offset = wi::math::Lerp(character.foot_offset, 0.0f, 0.1f);
+				character.foot_offset = wi::math::Lerp(character.foot_offset, 0.0f, saturate(5 * dt));
 			}
 
 			TransformComponent* humanoid_transform = transforms.GetComponent(character.humanoidEntity);
@@ -3261,16 +3275,18 @@ namespace wi::scene
 				humanoid_transform->SetDirty();
 			}
 
+			const float foot_blend = dt == 0.0f ? 1.0f : saturate(0.5f * dt * 60.0f); // teleport immediately when dt is 0 (initial placement)
+
 			// Ease out inverse kinematics by default:
 			if (inverse_kinematics.Contains(character.left_foot))
 			{
 				InverseKinematicsComponent& ik = *inverse_kinematics.GetComponent(character.left_foot);
-				ik.target_position = wi::math::Lerp(ik.target_position, left_pos, 0.6f);
+				ik.target_position = wi::math::Lerp(ik.target_position, left_pos, foot_blend);
 			}
 			if (inverse_kinematics.Contains(character.right_foot))
 			{
 				InverseKinematicsComponent& ik = *inverse_kinematics.GetComponent(character.right_foot);
-				ik.target_position = wi::math::Lerp(ik.target_position, right_pos, 0.6f);
+				ik.target_position = wi::math::Lerp(ik.target_position, right_pos, foot_blend);
 			}
 
 			// The upper foot will use IK:
@@ -3278,7 +3294,7 @@ namespace wi::scene
 			{
 				InverseKinematicsComponent& ik = *inverse_kinematics.GetComponent(ik_foot);
 				ik_pos.y += 0.16f;
-				ik.target_position = wi::math::Lerp(ik.target_position, ik_pos, 0.6f);
+				ik.target_position = wi::math::Lerp(ik.target_position, ik_pos, foot_blend);
 #if 0
 				// Debug draw foot target:
 				locker.lock();
@@ -3478,6 +3494,8 @@ namespace wi::scene
 			}
 		});
 
+		wi::jobsystem::Wait(ctx); // sync needed when there is IK on character arm/leg, and also arm/leg spacing!
+
 		wi::jobsystem::Dispatch(ctx, (uint32_t)humanoids.GetCount(), 1, [this, &recompute_hierarchy](wi::jobsystem::JobArgs args) {
 			Entity humanoidEntity = humanoids.GetEntity(args.jobIndex);
 			HumanoidComponent& humanoid = humanoids[args.jobIndex];
@@ -3602,6 +3620,35 @@ namespace wi::scene
 
 				}
 			}
+
+			if (humanoid.arm_spacing != 0.0f)
+			{
+				recompute_hierarchy.store(true);
+				size_t left_arm = transforms.GetIndex(humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::LeftUpperArm]);
+				size_t right_arm = transforms.GetIndex(humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightUpperArm]);
+				if (left_arm != ~0ull)
+				{
+					transforms_temp[left_arm].Rotate(XMQuaternionRotationNormal(FORWARD, -humanoid.arm_spacing * XM_PIDIV4));
+				}
+				if (right_arm != ~0ull)
+				{
+					transforms_temp[right_arm].Rotate(XMQuaternionRotationNormal(FORWARD, humanoid.arm_spacing * XM_PIDIV4));
+				}
+			}
+			if (humanoid.leg_spacing != 0.0f)
+			{
+				recompute_hierarchy.store(true);
+				size_t left_leg = transforms.GetIndex(humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::LeftUpperLeg]);
+				size_t right_leg = transforms.GetIndex(humanoid.bones[(size_t)HumanoidComponent::HumanoidBone::RightUpperLeg]);
+				if (left_leg != ~0ull)
+				{
+					transforms_temp[left_leg].Rotate(XMQuaternionRotationNormal(FORWARD, -humanoid.leg_spacing * XM_PIDIV4));
+				}
+				if (right_leg != ~0ull)
+				{
+					transforms_temp[right_leg].Rotate(XMQuaternionRotationNormal(FORWARD, humanoid.leg_spacing * XM_PIDIV4));
+				}
+			}
 		});
 
 		wi::jobsystem::Wait(ctx);
@@ -3648,20 +3695,20 @@ namespace wi::scene
 		}
 
 		// Colliders:
-		collider_allocator_cpu.store(0u);
-		collider_allocator_gpu.store(0u);
+		wi::jobsystem::Wait(collider_bvh_workload); // waits for BVH build and collider counts
+		std::swap(collider_bvh, collider_bvh_next);
 		const size_t size =
-			sizeof(wi::primitive::AABB) * colliders.GetCount() +
-			sizeof(wi::primitive::AABB) * colliders.GetCount() +
-			sizeof(ColliderComponent) * colliders.GetCount() +
-			sizeof(ColliderComponent) * colliders.GetCount()
+			sizeof(wi::primitive::AABB) * collider_count_cpu +
+			sizeof(wi::primitive::AABB) * collider_count_gpu +
+			sizeof(ColliderComponent) * collider_count_cpu +
+			sizeof(ColliderComponent) * collider_count_gpu
 		;
 		collider_deinterleaved_data.reserve(size);
 		ASAN_UNPOISON_MEMORY_REGION(collider_deinterleaved_data.data(), size);
 		aabb_colliders_cpu = (wi::primitive::AABB*)collider_deinterleaved_data.data();
-		aabb_colliders_gpu = aabb_colliders_cpu + colliders.GetCount();
-		colliders_cpu = (ColliderComponent*)(aabb_colliders_gpu + colliders.GetCount());
-		colliders_gpu = colliders_cpu + colliders.GetCount();
+		aabb_colliders_gpu = aabb_colliders_cpu + collider_count_cpu;
+		colliders_cpu = (ColliderComponent*)(aabb_colliders_gpu + collider_count_gpu);
+		colliders_gpu = colliders_cpu + collider_count_cpu;
 
 		wi::jobsystem::Dispatch(ctx, (uint32_t)colliders.GetCount(), small_subtask_groupsize, [&](wi::jobsystem::JobArgs args) {
 
@@ -3727,23 +3774,19 @@ namespace wi::scene
 
 			if (collider.IsCPUEnabled())
 			{
-				uint32_t index = collider_allocator_cpu.fetch_add(1u);
-				colliders_cpu[index] = collider;
-				aabb_colliders_cpu[index] = aabb;
+				colliders_cpu[collider.cpu_index] = collider;
+				aabb_colliders_cpu[collider.cpu_index] = aabb;
 			}
 			if (collider.IsGPUEnabled())
 			{
-				uint32_t index = collider_allocator_gpu.fetch_add(1u);
-				colliders_gpu[index] = collider;
-				aabb_colliders_gpu[index] = aabb;
+				colliders_gpu[collider.gpu_index] = collider;
+				aabb_colliders_gpu[collider.gpu_index] = aabb;
 			}
 
-			});
+		});
 
 		wi::jobsystem::Wait(ctx);
-		collider_count_cpu = collider_allocator_cpu.load();
-		collider_count_gpu = collider_allocator_gpu.load();
-		collider_bvh.Build(aabb_colliders_cpu, collider_count_cpu);
+		collider_bvh.Update(aabb_colliders_cpu, collider_count_cpu);
 
 		// Springs:
 		wi::jobsystem::Wait(spring_dependency_scan_workload);
@@ -3751,8 +3794,17 @@ namespace wi::scene
 		{
 			wi::jobsystem::Dispatch(ctx, (uint32_t)spring_queues.size(), 1, [this](wi::jobsystem::JobArgs args) {
 				UpdateSpringsTopDownRecursive(nullptr, *spring_queues[args.jobIndex]);
-				});
+			});
 			wi::jobsystem::Wait(ctx);
+		}
+
+		if (collider_count_cpu > 0)
+		{
+			// Issue the bvh rebuild on a background thread, the result will be used next frame...
+			collider_bvh_workload.priority = wi::jobsystem::Priority::Low;
+			wi::jobsystem::Execute(collider_bvh_workload, [this](wi::jobsystem::JobArgs args) {
+				collider_bvh_next.Build(aabb_colliders_cpu, collider_count_cpu);
+			});
 		}
 
 		wi::profiler::EndRange(range);
@@ -3787,8 +3839,8 @@ namespace wi::scene
 				armature.boneData.resize(armature.boneCollection.size());
 			}
 
-			XMFLOAT3 _min = XMFLOAT3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-			XMFLOAT3 _max = XMFLOAT3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+			XMFLOAT3 _min = XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX);
+			XMFLOAT3 _max = XMFLOAT3(-FLT_MAX, -FLT_MAX, -FLT_MAX);
 
 			uint32_t boneIndex = 0;
 			for (Entity boneEntity : armature.boneCollection)
@@ -4073,11 +4125,12 @@ namespace wi::scene
 
 			material.WriteShaderMaterial(materialArrayMapped + args.jobIndex);
 
-			VideoComponent* video = videos.GetComponent(entity);
+			const VideoComponent* video = videos.GetComponent(entity);
 			if (video != nullptr)
 			{
 				// Video attachment will overwrite texture slots on shader side:
-				int descriptor = GetDevice()->GetDescriptorIndex(&video->videoinstance.output.texture, SubresourceType::SRV, video->videoinstance.output.subresource_srgb);
+				Texture videoTexture = video->videoinstance.GetCurrentFrameTexture();
+				int descriptor = GetDevice()->GetDescriptorIndex(&videoTexture, SubresourceType::SRV, video->videoinstance.GetCurrentFrameTextureSRGBSubresource());
 				material.WriteShaderTextureSlot(materialArrayMapped + args.jobIndex, BASECOLORMAP, descriptor);
 				material.WriteShaderTextureSlot(materialArrayMapped + args.jobIndex, EMISSIVEMAP, descriptor);
 			}
@@ -4242,7 +4295,7 @@ namespace wi::scene
 		{
 			ShaderMaterial material;
 			material.init();
-			material.shaderType = ~0u;
+			material.shaderType_meshblend = 0xFFFF;
 			std::memcpy(materialArrayMapped + impostorMaterialOffset, &material, sizeof(material));
 
 			ShaderGeometry geometry;
@@ -4322,6 +4375,7 @@ namespace wi::scene
 			object.SetDynamic(false);
 			object.SetRequestPlanarReflection(false);
 			object.fadeDistance = object.draw_distance;
+			object.mesh_blend_required = false;
 
 			if (object.meshID != INVALID_ENTITY && meshes.Contains(object.meshID) && transforms.Contains(entity))
 			{
@@ -4400,13 +4454,14 @@ namespace wi::scene
 				{
 					struct
 					{
-						uint32_t shadertype : MaterialComponent::SHADERTYPE_COUNT;
-						uint32_t blendmode : wi::enums::BLENDMODE_COUNT;
+						uint32_t shadertype : 6; // max 64 shader types
+						uint32_t blendmode : 3; // max 8 blendmodes
 						uint32_t doublesided : 1;	// bool
 						uint32_t tessellation : 1;	// bool
 						uint32_t alphatest : 1;		// bool
 						uint32_t customshader : 8;
 						uint32_t sort_priority : 4;
+						uint32_t unused : 8;
 					} bits;
 					uint32_t value;
 				} sort_bits;
@@ -4431,6 +4486,11 @@ namespace wi::scene
 						if (material->HasPlanarReflection())
 						{
 							object.SetRequestPlanarReflection(true);
+						}
+
+						if (material->GetMeshBlend() > 0)
+						{
+							object.mesh_blend_required = true;
 						}
 
 						sort_bits.bits.shadertype |= 1 << material->shaderType;
@@ -4814,7 +4874,7 @@ namespace wi::scene
 			default:
 			case LightComponent::DIRECTIONAL:
 				XMStoreFloat3(&light.direction, XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0, 1, 0, 0), W)));
-				aabb.createFromHalfWidth(XMFLOAT3(0, 0, 0), XMFLOAT3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()));
+				aabb.createFromHalfWidth(XMFLOAT3(0, 0, 0), XMFLOAT3(FLT_MAX, FLT_MAX, FLT_MAX));
 				locker.lock();
 				if (args.jobIndex < weather.most_important_light_index)
 				{
@@ -4836,20 +4896,53 @@ namespace wi::scene
 				XMStoreFloat3(&light.direction, XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(1, 0, 0, 0), W)));
 				aabb.createFromHalfWidth(light.position, XMFLOAT3(light.GetRange(), light.GetRange(), light.GetRange()));
 				break;
+			case LightComponent::RECTANGLE:
+				XMStoreFloat3(&light.direction, XMVector3Normalize(XMVector3TransformNormal(XMVectorSet(0, 0, -1, 0), W)));
+				aabb.createFromHalfWidth(light.position, XMFLOAT3(light.GetRange(), light.GetRange(), light.GetRange()));
+				break;
 			}
 
 			light.maskTexDescriptor = -1;
 
-			const MaterialComponent* material = materials.GetComponent(entity);
-			if (material != nullptr && material->textures[MaterialComponent::BASECOLORMAP].resource.IsValid())
+			GraphicsDevice* device = GetDevice();
+
+			if (light.type == LightComponent::SPOT || light.type == LightComponent::POINT || light.type == LightComponent::RECTANGLE)
 			{
-				const Texture& tex = material->textures[MaterialComponent::BASECOLORMAP].resource.GetTexture();
-				if (
-					(light.type == LightComponent::SPOT && !has_flag(tex.desc.misc_flags, ResourceMiscFlag::TEXTURECUBE)) ||
-					(light.type == LightComponent::POINT && has_flag(tex.desc.misc_flags, ResourceMiscFlag::TEXTURECUBE))
-					)
+				// Material can be used as mask texture for spot, rectangle and point lights:
+				const MaterialComponent* material = materials.GetComponent(entity);
+				if (material != nullptr && material->textures[MaterialComponent::BASECOLORMAP].resource.IsValid())
 				{
-					light.maskTexDescriptor = GetDevice()->GetDescriptorIndex(&tex, SubresourceType::SRV, material->textures[MaterialComponent::BASECOLORMAP].resource.GetTextureSRGBSubresource());
+					const Texture& tex = material->textures[MaterialComponent::BASECOLORMAP].resource.GetTexture();
+					if (
+						(light.type == LightComponent::RECTANGLE && !has_flag(tex.desc.misc_flags, ResourceMiscFlag::TEXTURECUBE)) ||
+						(light.type == LightComponent::SPOT && !has_flag(tex.desc.misc_flags, ResourceMiscFlag::TEXTURECUBE)) ||
+						(light.type == LightComponent::POINT && has_flag(tex.desc.misc_flags, ResourceMiscFlag::TEXTURECUBE))
+						)
+					{
+						light.maskTexDescriptor = device->GetDescriptorIndex(&tex, SubresourceType::SRV, material->textures[MaterialComponent::BASECOLORMAP].resource.GetTextureSRGBSubresource());
+					}
+				}
+			}
+
+			if (light.type == LightComponent::SPOT || light.type == LightComponent::RECTANGLE)
+			{
+				// Video attachment will overwrite texture mask for spotlight and rectangle light:
+				const VideoComponent* video = videos.GetComponent(entity);
+				if (video != nullptr)
+				{
+					Texture videoTexture = video->videoinstance.GetCurrentFrameTexture();
+					light.maskTexDescriptor = device->GetDescriptorIndex(&videoTexture, SubresourceType::SRV, video->videoinstance.GetCurrentFrameTextureSRGBSubresource());
+				}
+			}
+
+			if (light.cameraSource != INVALID_ENTITY)
+			{
+				const CameraComponent* camera = cameras.GetComponent(light.cameraSource);
+				if (camera != nullptr && camera->render_to_texture.rendertarget_render.IsValid())
+				{
+					// Camera attachment will overwrite texture slots on shader side:
+					int descriptor = GetDevice()->GetDescriptorIndex(&camera->render_to_texture.rendertarget_render, SubresourceType::SRV);
+					light.maskTexDescriptor = descriptor;
 				}
 			}
 
@@ -5305,6 +5398,21 @@ namespace wi::scene
 		{
 			VideoComponent& video = videos[i];
 
+			if (!video.videoinstance.IsValid() && video.videoResource.IsValid())
+			{
+				if (wi::video::CreateVideoInstance(&video.videoResource.GetVideo(), &video.videoinstance))
+				{
+					video.Seek(video.currentTimer);
+				}
+			}
+
+			video.currentTimer = 0;
+			if (video.videoResource.IsValid())
+			{
+				const wi::video::Video& vid = video.videoResource.GetVideo();
+				video.currentTimer = video.videoinstance.current_time;
+			}
+
 			if (video.IsPlaying())
 			{
 				video.videoinstance.flags |= wi::video::VideoInstance::Flags::Playing;
@@ -5325,6 +5433,7 @@ namespace wi::scene
 
 			video.videoinstance.flags |= wi::video::VideoInstance::Flags::Mipmapped;
 
+			wi::video::UpdateVideo(&video.videoinstance, dt);
 		}
 	}
 	void Scene::RunScriptUpdateSystem(wi::jobsystem::context& ctx)
@@ -5363,6 +5472,7 @@ namespace wi::scene
 	void Scene::RunSpriteUpdateSystem(wi::jobsystem::context& ctx)
 	{
 		wi::jobsystem::Dispatch(ctx, (uint32_t)sprites.GetCount(), small_subtask_groupsize, [&](wi::jobsystem::JobArgs args) {
+			Entity entity = sprites.GetEntity(args.jobIndex);
 			Sprite& sprite = sprites[args.jobIndex];
 			if (sprite.params.isExtractNormalMapEnabled())
 			{
@@ -5376,6 +5486,18 @@ namespace wi::scene
 			{
 				sprite.params.mask_subresource = sprite.maskResource.GetTextureSRGBSubresource();
 			}
+
+			const VideoComponent* videocomponent = videos.GetComponent(entity);
+			if (videocomponent != nullptr && videocomponent->videoinstance.IsValid())
+			{
+				Texture videoTexture = videocomponent->videoinstance.GetCurrentFrameTexture();
+				if (videoTexture.IsValid())
+				{
+					sprite.textureResource.SetTexture(videoTexture);
+					sprite.params.image_subresource = videocomponent->videoinstance.GetCurrentFrameTextureSRGBSubresource();
+				}
+			}
+
 			sprite.Update(dt);
 		});
 	}
@@ -5479,9 +5601,10 @@ namespace wi::scene
 				XMVECTOR facing_next = XMVector3Normalize(XMVectorSetY(XMLoadFloat3(&character.facing_next), 0));
 				XMVECTOR facing = XMVector3Normalize(XMVectorSetY(XMLoadFloat3(&character.facing), 0));
 				const float facing_correctness = XMVectorGetX(XMVectorSaturate(XMVector3Dot(facing, facing_next)));
-				XMVECTOR movement = XMLoadFloat3(&character.movement) * facing_correctness;
+				XMVECTOR movement = XMLoadFloat3(&character.movement);
 				XMVECTOR position = XMLoadFloat3(&character.position);
 				XMVECTOR height = XMVectorSet(0, character.height, 0, 0);
+				const bool any_movement = character.movement.x != 0 || character.movement.y != 0 || character.movement.z != 0;
 
 				// Swimming:
 				character.swimming = false;
@@ -5592,6 +5715,12 @@ namespace wi::scene
 						}
 					}
 
+					if (!character.ground_intersect && any_movement)
+					{
+						// if there is movement requested by input and character is not touching ground or wall, there is still ground friction to not increase velocity without limit
+						velocity *= wall_friction;
+					}
+
 					// Check character capsules:
 					if (!character.IsCharacterToCharacterCollisionDisabled())
 					{
@@ -5650,6 +5779,8 @@ namespace wi::scene
 				character.leaning_next = lerp(character.leaning_next, turn_leaning, dt * 5);
 				character.leaning = lerp(character.leaning, character.leaning_next, dt * 5);
 
+				character.anim_timer = 0; // default 0 but overridden if there is valid anim
+
 				// Simple animation blending:
 				for (Entity animEntity : character.animations)
 				{
@@ -5666,6 +5797,7 @@ namespace wi::scene
 						animation->amount = clamp(animation->amount + dt, 0.0f, character.anim_amount);
 						animation->Play();
 						character.anim_ended = animation->timer >= animation->end;
+						character.anim_timer = animation->timer;
 					}
 					else
 					{
@@ -5742,13 +5874,42 @@ namespace wi::scene
 
 				XMVECTOR offset = XMLoadFloat3(&character.relative_offset);
 				offset = XMVector3TransformNormal(offset, facing_rot);
+
+				const float shake_timer_decay = std::exp(-character.shake_decay * character.shake_timer);
+				const float shake_intesity_horizontal = character.shake_horizontal * shake_timer_decay;
+				const float shake_intesity_vertical = character.shake_vertical * shake_timer_decay;
+				if (shake_intesity_horizontal > 0.001f || shake_intesity_vertical > 0.001f)
+				{
+					offset += XMVectorSet(
+						shake_intesity_horizontal * std::sin(character.shake_frequency * character.shake_timer),
+						shake_intesity_vertical * std::sin(character.shake_frequency * -character.shake_timer),
+						shake_intesity_horizontal * std::cos(character.shake_frequency * character.shake_timer),
+						0
+					);
+				}
+
 				transform->Translate(offset);
 
 				transform->SetDirty();
 			}
 
+			character.shake_timer += dt;
+
 		});
 		wi::jobsystem::Wait(ctx);
+
+		character_dedicated_shadows.clear();
+		for (size_t i = 0; i < characters.GetCount(); ++i)
+		{
+			if (characters[i].IsDedicatedShadow())
+			{
+				Sphere sphere = characters[i].GetCapsule().getSphere();
+				if (camera.frustum.CheckSphere(sphere.center, sphere.radius)) // only take dedicated shadow for main camera view
+				{
+					character_dedicated_shadows.push_back(sphere);
+				}
+			}
+		}
 	}
 	void Scene::RunSplineUpdateSystem(wi::jobsystem::context& ctx)
 	{
@@ -5783,6 +5944,8 @@ namespace wi::scene
 			dirty |= spline.prev_rotation != spline.rotation;
 
 			bool dirty_terrain = spline.prev_terrain_modifier_amount != spline.terrain_modifier_amount;
+			dirty_terrain |= spline.prev_terrain_pushdown != spline.terrain_pushdown;
+			dirty_terrain |= spline.prev_terrain_texture_falloff != spline.terrain_texture_falloff;
 			dirty_terrain |= spline.prev_terrain_generation_nodes != (int)spline.spline_node_entities.size();
 			dirty_terrain |= spline.prev_looped != spline.IsLooped();
 			dirty_terrain |= spline.prev_width != spline.width;
@@ -5793,6 +5956,15 @@ namespace wi::scene
 			spline.prev_looped = spline.IsLooped();
 
 			spline.spline_node_transforms.resize(spline.spline_node_entities.size());
+
+			if (materials.Contains(entity))
+			{
+				spline.materialEntity = entity;
+			}
+			else
+			{
+				spline.materialEntity = INVALID_ENTITY;
+			}
 
 			// BEFORE mesh update: LOCAL space transform (because mesh will be also transformed by ObjectComponent instance)
 			spline.precomputed_total_distance = 0;
@@ -6296,6 +6468,268 @@ namespace wi::scene
 
 		return result;
 	}
+	void Scene::IntersectsAll(wi::vector<RayIntersectionResult>& results, const Ray& ray, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
+	{
+		const XMVECTOR rayOrigin = XMLoadFloat3(&ray.origin);
+		const XMVECTOR rayDirection = XMVector3Normalize(XMLoadFloat3(&ray.direction));
+
+		if ((filterMask & FILTER_COLLIDER) && collider_bvh.IsValid())
+		{
+			collider_bvh.Intersects(ray, 0, [&](uint32_t collider_index) {
+				if (colliders.GetCount() <= collider_index)
+					return;
+				const ColliderComponent& collider = colliders_cpu[collider_index];
+
+				if ((collider.layerMask & layerMask) == 0)
+					return;
+
+				float dist = 0;
+				XMFLOAT3 direction = {};
+				bool intersects = false;
+
+				switch (collider.shape)
+				{
+				default:
+				case ColliderComponent::Shape::Sphere:
+					intersects = ray.intersects(collider.sphere, dist, direction);
+					break;
+				case ColliderComponent::Shape::Capsule:
+					intersects = ray.intersects(collider.capsule, dist, direction);
+					break;
+				case ColliderComponent::Shape::Plane:
+					intersects = ray.intersects(collider.plane, dist, direction);
+					break;
+				}
+
+				if (intersects)
+				{
+					RayIntersectionResult result;
+					result.distance = dist;
+					result.bary = {};
+					result.entity = colliders.GetEntity(collider_index);
+					result.normal = direction;
+					result.uv = {};
+					result.velocity = {};
+					XMStoreFloat3(&result.position, rayOrigin + rayDirection * dist);
+					result.subsetIndex = -1;
+					result.vertexID0 = 0;
+					result.vertexID1 = 0;
+					result.vertexID2 = 0;
+					result.orientation = ray.GetPlacementOrientation(result.position, result.normal);
+					results.push_back(result);
+				}
+			});
+		}
+
+		if (filterMask & FILTER_OBJECT_ALL)
+		{
+			const size_t objectCount = std::min(objects.GetCount(), aabb_objects.size());
+			for (size_t objectIndex = 0; objectIndex < objectCount; ++objectIndex)
+			{
+				const AABB& aabb = aabb_objects[objectIndex];
+				if ((layerMask & aabb.layerMask) == 0)
+					continue;
+				if (!ray.intersects(aabb))
+					continue;
+
+				const ObjectComponent& object = objects[objectIndex];
+				if (object.meshID == INVALID_ENTITY)
+					continue;
+				if ((filterMask & object.GetFilterMask()) == 0)
+					continue;
+
+				const MeshComponent* mesh = meshes.GetComponent(object.meshID);
+				if (mesh == nullptr)
+					continue;
+
+				const Entity entity = objects.GetEntity(objectIndex);
+				const SoftBodyPhysicsComponent* softbody = softbodies.GetComponent(object.meshID);
+				const XMMATRIX objectMat = XMLoadFloat4x4(&matrix_objects[objectIndex]);
+				const XMMATRIX objectMatPrev = XMLoadFloat4x4(&matrix_objects_prev[objectIndex]);
+				const XMMATRIX objectMat_Inverse = XMMatrixInverse(nullptr, objectMat);
+				const XMVECTOR rayOrigin_local = XMVector3Transform(rayOrigin, objectMat_Inverse);
+				const XMVECTOR rayDirection_local = XMVector3Normalize(XMVector3TransformNormal(rayDirection, objectMat_Inverse));
+				const ArmatureComponent* armature = mesh->IsSkinned() ? armatures.GetComponent(mesh->armatureID) : nullptr;
+
+				auto intersect_triangle = [&](uint32_t subsetIndex, uint32_t indexOffset, uint32_t triangleIndex)
+				{
+					const uint32_t i0 = mesh->indices[indexOffset + triangleIndex * 3 + 0];
+					const uint32_t i1 = mesh->indices[indexOffset + triangleIndex * 3 + 1];
+					const uint32_t i2 = mesh->indices[indexOffset + triangleIndex * 3 + 2];
+
+					XMVECTOR p0;
+					XMVECTOR p1;
+					XMVECTOR p2;
+					if (softbody != nullptr && !softbody->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *softbody, i0);
+						p1 = SkinVertex(*mesh, *softbody, i1);
+						p2 = SkinVertex(*mesh, *softbody, i2);
+					}
+					else if (armature != nullptr && !armature->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *armature, i0);
+						p1 = SkinVertex(*mesh, *armature, i1);
+						p2 = SkinVertex(*mesh, *armature, i2);
+					}
+					else
+					{
+						p0 = XMLoadFloat3(&mesh->vertex_positions[i0]);
+						p1 = XMLoadFloat3(&mesh->vertex_positions[i1]);
+						p2 = XMLoadFloat3(&mesh->vertex_positions[i2]);
+					}
+
+					float distance;
+					XMFLOAT2 bary;
+					if (wi::math::RayTriangleIntersects(rayOrigin_local, rayDirection_local, p0, p1, p2, distance, bary))
+					{
+						const XMVECTOR pos_local = XMVectorAdd(rayOrigin_local, rayDirection_local * distance);
+						const XMVECTOR pos = XMVector3Transform(pos_local, objectMat);
+						distance = wi::math::Distance(pos, rayOrigin);
+
+						// Note: we do the TMin, Tmax check here, in world space! We use the RayTriangleIntersects in local space, so we don't use those in there
+						if (distance >= ray.TMin && distance <= ray.TMax)
+						{
+							XMVECTOR nor;
+							if (softbody != nullptr || mesh->vertex_normals.empty()) // Note: for soft body we compute it instead of loading the simulated normals
+							{
+								nor = XMVector3Cross(p2 - p1, p1 - p0);
+							}
+							else
+							{
+								nor = XMVectorBaryCentric(
+									XMLoadFloat3(&mesh->vertex_normals[i0]),
+									XMLoadFloat3(&mesh->vertex_normals[i1]),
+									XMLoadFloat3(&mesh->vertex_normals[i2]),
+									bary.x,
+									bary.y
+								);
+							}
+							nor = XMVector3Normalize(XMVector3TransformNormal(nor, objectMat));
+							const XMVECTOR vel = pos - XMVector3Transform(pos_local, objectMatPrev);
+
+							RayIntersectionResult result;
+							if (!mesh->vertex_uvset_0.empty())
+							{
+								XMVECTOR uv = XMVectorBaryCentric(
+									XMLoadFloat2(&mesh->vertex_uvset_0[i0]),
+									XMLoadFloat2(&mesh->vertex_uvset_0[i1]),
+									XMLoadFloat2(&mesh->vertex_uvset_0[i2]),
+									bary.x,
+									bary.y
+								);
+								result.uv.x = XMVectorGetX(uv);
+								result.uv.y = XMVectorGetY(uv);
+							}
+							if (!mesh->vertex_uvset_1.empty())
+							{
+								XMVECTOR uv = XMVectorBaryCentric(
+									XMLoadFloat2(&mesh->vertex_uvset_1[i0]),
+									XMLoadFloat2(&mesh->vertex_uvset_1[i1]),
+									XMLoadFloat2(&mesh->vertex_uvset_1[i2]),
+									bary.x,
+									bary.y
+								);
+								result.uv.z = XMVectorGetX(uv);
+								result.uv.w = XMVectorGetY(uv);
+							}
+
+							result.entity = entity;
+							XMStoreFloat3(&result.position, pos);
+							XMStoreFloat3(&result.normal, nor);
+							XMStoreFloat3(&result.velocity, vel);
+							result.distance = distance;
+							result.subsetIndex = (int)subsetIndex;
+							result.vertexID0 = (int)i0;
+							result.vertexID1 = (int)i1;
+							result.vertexID2 = (int)i2;
+							result.bary = bary;
+							result.orientation = ray.GetPlacementOrientation(result.position, result.normal);
+							results.push_back(result);
+						}
+					}
+				};
+
+				if (mesh->bvh.IsValid())
+				{
+					Ray ray_local = Ray(rayOrigin_local, rayDirection_local);
+
+					mesh->bvh.Intersects(ray_local, 0, [&](uint32_t index) {
+						const AABB& leaf = mesh->bvh_leaf_aabbs[index];
+						const uint32_t triangleIndex = leaf.layerMask;
+						const uint32_t subsetIndex = leaf.userdata;
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							return;
+						const uint32_t indexOffset = subset.indexOffset;
+						intersect_triangle(subsetIndex, indexOffset, triangleIndex);
+						});
+				}
+				else
+				{
+					// Brute-force intersection test:
+					uint32_t first_subset = 0;
+					uint32_t last_subset = 0;
+					mesh->GetLODSubsetRange(lod, first_subset, last_subset);
+					for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
+					{
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							continue;
+						const uint32_t indexOffset = subset.indexOffset;
+						const uint32_t triangleCount = subset.indexCount / 3;
+
+						for (uint32_t triangleIndex = 0; triangleIndex < triangleCount; ++triangleIndex)
+						{
+							intersect_triangle(subsetIndex, indexOffset, triangleIndex);
+						}
+					}
+				}
+
+			}
+		}
+
+		if (filterMask & FILTER_RAGDOLL)
+		{
+			for (size_t i = 0; i < humanoids.GetCount(); ++i)
+			{
+				Entity entity = humanoids.GetEntity(i);
+				const LayerComponent* layer = layers.GetComponent(entity);
+				if (layer != nullptr && (layer->GetLayerMask() & layerMask) == 0)
+					continue;
+
+				const HumanoidComponent& humanoid = humanoids[i];
+				if (humanoid.IsIntersectionDisabled())
+					continue;
+				if (!humanoid.ragdoll_bounds.intersects(ray))
+					continue;
+
+				for (auto& bp : humanoid.ragdoll_bodyparts)
+				{
+					float dist = 0;
+					XMFLOAT3 direction = {};
+					if (ray.intersects(bp.capsule, dist, direction))
+					{
+						RayIntersectionResult result;
+						result.distance = dist;
+						result.bary = {};
+						result.entity = entity;
+						result.humanoid_bone = bp.bone;
+						result.normal = direction;
+						result.uv = {};
+						result.velocity = {};
+						XMStoreFloat3(&result.position, rayOrigin + rayDirection * dist);
+						result.subsetIndex = -1;
+						result.vertexID0 = 0;
+						result.vertexID1 = 0;
+						result.vertexID2 = 0;
+						result.orientation = ray.GetPlacementOrientation(result.position, result.normal);
+						results.push_back(result);
+					}
+				}
+			}
+		}
+	}
 	bool Scene::IntersectsFirst(const Ray& ray, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
 	{
 		bool result = false;
@@ -6490,6 +6924,7 @@ namespace wi::scene
 
 		return result;
 	}
+
 	Scene::SphereIntersectionResult Scene::Intersects(const Sphere& sphere, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
 	{
 		SphereIntersectionResult result;
@@ -6799,6 +7234,316 @@ namespace wi::scene
 
 		return result;
 	}
+	void Scene::IntersectsAll(wi::vector<SphereIntersectionResult>& results, const Sphere& sphere, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
+	{
+		const XMVECTOR Center = XMLoadFloat3(&sphere.center);
+		const XMVECTOR Radius = XMVectorReplicate(sphere.radius);
+		const XMVECTOR RadiusSq = XMVectorMultiply(Radius, Radius);
+
+		if ((filterMask & FILTER_COLLIDER) && collider_bvh.IsValid())
+		{
+			collider_bvh.Intersects(sphere, 0, [&](uint32_t collider_index) {
+				if (colliders.GetCount() <= collider_index)
+					return;
+				const ColliderComponent& collider = colliders_cpu[collider_index];
+
+				if ((collider.layerMask & layerMask) == 0)
+					return;
+
+				float dist = 0;
+				XMFLOAT3 direction = {};
+				XMFLOAT3 position = {};
+				bool intersects = false;
+
+				switch (collider.shape)
+				{
+				default:
+				case ColliderComponent::Shape::Sphere:
+					intersects = sphere.intersects(collider.sphere, dist, direction);
+					XMStoreFloat3(&position, XMLoadFloat3(&collider.sphere.center) + XMLoadFloat3(&direction) * dist);
+					break;
+				case ColliderComponent::Shape::Capsule:
+					intersects = sphere.intersects(collider.capsule, dist, direction);
+					break;
+				case ColliderComponent::Shape::Plane:
+					intersects = sphere.intersects(collider.plane, dist, direction);
+					break;
+				}
+
+				if (intersects)
+				{
+					SphereIntersectionResult result;
+					result.depth = dist;
+					result.entity = colliders.GetEntity(collider_index);
+					result.normal = direction;
+					result.position = position;
+					result.velocity = {};
+					result.orientation = sphere.GetPlacementOrientation(result.position, result.normal);
+					results.push_back(result);
+				}
+			});
+		}
+
+		if (filterMask & FILTER_OBJECT_ALL)
+		{
+			const size_t objectCount = std::min(objects.GetCount(), aabb_objects.size());
+			for (size_t objectIndex = 0; objectIndex < objectCount; ++objectIndex)
+			{
+				const AABB& aabb = aabb_objects[objectIndex];
+				if ((layerMask & aabb.layerMask) == 0)
+					continue;
+				if (!sphere.intersects(aabb))
+					continue;
+
+				const ObjectComponent& object = objects[objectIndex];
+				if (object.meshID == INVALID_ENTITY)
+					continue;
+				if ((filterMask & object.GetFilterMask()) == 0)
+					continue;
+
+				const MeshComponent* mesh = meshes.GetComponent(object.meshID);
+				if (mesh == nullptr)
+					continue;
+
+				const Entity entity = objects.GetEntity(objectIndex);
+				const SoftBodyPhysicsComponent* softbody = softbodies.GetComponent(object.meshID);
+				const XMMATRIX objectMat = XMLoadFloat4x4(&matrix_objects[objectIndex]);
+				const XMMATRIX objectMatPrev = XMLoadFloat4x4(&matrix_objects_prev[objectIndex]);
+				const XMMATRIX objectMatInverse = XMMatrixInverse(nullptr, objectMat);
+				const ArmatureComponent* armature = mesh->IsSkinned() ? armatures.GetComponent(mesh->armatureID) : nullptr;
+
+				auto intersect_triangle = [&](uint32_t subsetIndex, uint32_t indexOffset, uint32_t triangleIndex, bool doubleSided)
+				{
+					const uint32_t i0 = mesh->indices[indexOffset + triangleIndex * 3 + 0];
+					const uint32_t i1 = mesh->indices[indexOffset + triangleIndex * 3 + 1];
+					const uint32_t i2 = mesh->indices[indexOffset + triangleIndex * 3 + 2];
+
+					XMVECTOR p0;
+					XMVECTOR p1;
+					XMVECTOR p2;
+					if (softbody != nullptr && !softbody->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *softbody, i0);
+						p1 = SkinVertex(*mesh, *softbody, i1);
+						p2 = SkinVertex(*mesh, *softbody, i2);
+					}
+					else if (armature != nullptr && !armature->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *armature, i0);
+						p1 = SkinVertex(*mesh, *armature, i1);
+						p2 = SkinVertex(*mesh, *armature, i2);
+						p0 = XMVector3Transform(p0, objectMat);
+						p1 = XMVector3Transform(p1, objectMat);
+						p2 = XMVector3Transform(p2, objectMat);
+					}
+					else
+					{
+						p0 = XMLoadFloat3(&mesh->vertex_positions[i0]);
+						p1 = XMLoadFloat3(&mesh->vertex_positions[i1]);
+						p2 = XMLoadFloat3(&mesh->vertex_positions[i2]);
+						p0 = XMVector3Transform(p0, objectMat);
+						p1 = XMVector3Transform(p1, objectMat);
+						p2 = XMVector3Transform(p2, objectMat);
+					}
+
+					XMFLOAT3 min, max;
+					XMStoreFloat3(&min, XMVectorMin(p0, XMVectorMin(p1, p2)));
+					XMStoreFloat3(&max, XMVectorMax(p0, XMVectorMax(p1, p2)));
+					AABB aabb_triangle(min, max);
+					if (sphere.intersects(aabb_triangle) == AABB::OUTSIDE)
+						return;
+
+					// Compute the plane of the triangle (has to be normalized).
+					XMVECTOR N = XMVector3Normalize(XMVector3Cross(p1 - p0, p2 - p0));
+
+					// Assert that the triangle is not degenerate.
+					assert(!XMVector3Equal(N, XMVectorZero()));
+
+					// Find the nearest feature on the triangle to the sphere.
+					XMVECTOR Dist = XMVector3Dot(XMVectorSubtract(Center, p0), N);
+
+					if (!doubleSided && XMVectorGetX(Dist) > 0)
+						return; // pass through back faces
+
+					// If the center of the sphere is farther from the plane of the triangle than
+					// the radius of the sphere, then there cannot be an intersection.
+					XMVECTOR NoIntersection = XMVectorLess(Dist, XMVectorNegate(Radius));
+					NoIntersection = XMVectorOrInt(NoIntersection, XMVectorGreater(Dist, Radius));
+
+					// Project the center of the sphere onto the plane of the triangle.
+					XMVECTOR Point0 = XMVectorNegativeMultiplySubtract(N, Dist, Center);
+
+					// Is it inside all the edges? If so we intersect because the distance 
+					// to the plane is less than the radius.
+					//XMVECTOR Intersection = DirectX::Internal::PointOnPlaneInsideTriangle(Point0, p0, p1, p2);
+
+					// Compute the cross products of the vector from the base of each edge to 
+					// the point with each edge vector.
+					XMVECTOR C0 = XMVector3Cross(XMVectorSubtract(Point0, p0), XMVectorSubtract(p1, p0));
+					XMVECTOR C1 = XMVector3Cross(XMVectorSubtract(Point0, p1), XMVectorSubtract(p2, p1));
+					XMVECTOR C2 = XMVector3Cross(XMVectorSubtract(Point0, p2), XMVectorSubtract(p0, p2));
+
+					// If the cross product points in the same direction as the normal the the
+					// point is inside the edge (it is zero if is on the edge).
+					XMVECTOR Zero = XMVectorZero();
+					XMVECTOR Inside0 = XMVectorLessOrEqual(XMVector3Dot(C0, N), Zero);
+					XMVECTOR Inside1 = XMVectorLessOrEqual(XMVector3Dot(C1, N), Zero);
+					XMVECTOR Inside2 = XMVectorLessOrEqual(XMVector3Dot(C2, N), Zero);
+
+					// If the point inside all of the edges it is inside.
+					XMVECTOR Intersection = XMVectorAndInt(XMVectorAndInt(Inside0, Inside1), Inside2);
+
+					bool inside = XMVector4EqualInt(XMVectorAndCInt(Intersection, NoIntersection), XMVectorTrueInt());
+
+					// Find the nearest point on each edge.
+
+					// Edge 0,1
+					XMVECTOR Point1 = DirectX::Internal::PointOnLineSegmentNearestPoint(p0, p1, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point1)), RadiusSq));
+
+					// Edge 1,2
+					XMVECTOR Point2 = DirectX::Internal::PointOnLineSegmentNearestPoint(p1, p2, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point2)), RadiusSq));
+
+					// Edge 2,0
+					XMVECTOR Point3 = DirectX::Internal::PointOnLineSegmentNearestPoint(p2, p0, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point3)), RadiusSq));
+
+					bool intersects = XMVector4EqualInt(XMVectorAndCInt(Intersection, NoIntersection), XMVectorTrueInt());
+
+					if (intersects)
+					{
+						XMVECTOR bestPoint = Point0;
+						if (!inside)
+						{
+							// If the sphere center's projection on the triangle plane is not within the triangle,
+							//	determine the closest point on triangle to the sphere center
+							float bestDist = XMVectorGetX(XMVector3LengthSq(Point1 - Center));
+							bestPoint = Point1;
+
+							float d = XMVectorGetX(XMVector3LengthSq(Point2 - Center));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								bestPoint = Point2;
+							}
+							d = XMVectorGetX(XMVector3LengthSq(Point3 - Center));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								bestPoint = Point3;
+							}
+						}
+						XMVECTOR intersectionVec = Center - bestPoint;
+						XMVECTOR intersectionVecLen = XMVector3Length(intersectionVec);
+
+						float depth = sphere.radius - XMVectorGetX(intersectionVecLen);
+
+						{
+							SphereIntersectionResult result;
+							result.entity = entity;
+							result.depth = depth;
+							XMStoreFloat3(&result.position, bestPoint);
+							XMStoreFloat3(&result.normal, intersectionVec / intersectionVecLen);
+
+							XMVECTOR vel = bestPoint - XMVector3Transform(XMVector3Transform(bestPoint, objectMatInverse), objectMatPrev);
+							XMStoreFloat3(&result.velocity, vel);
+
+							result.subsetIndex = (int)subsetIndex;
+							result.orientation = sphere.GetPlacementOrientation(result.position, result.normal);
+							results.push_back(result);
+						}
+					}
+				};
+
+				if (mesh->bvh.IsValid())
+				{
+					XMFLOAT3 center_local;
+					float radius_local;
+					XMStoreFloat3(&center_local, XMVector3Transform(XMLoadFloat3(&sphere.center), objectMatInverse));
+					XMStoreFloat(&radius_local, XMVector3Length(XMVector3TransformNormal(XMLoadFloat(&sphere.radius), objectMatInverse)));
+					Sphere sphere_local = Sphere(center_local, radius_local);
+
+					mesh->bvh.Intersects(sphere_local, 0, [&](uint32_t index) {
+						const AABB& leaf = mesh->bvh_leaf_aabbs[index];
+						const uint32_t triangleIndex = leaf.layerMask;
+						const uint32_t subsetIndex = leaf.userdata;
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							return;
+						const uint32_t indexOffset = subset.indexOffset;
+						intersect_triangle(subsetIndex, indexOffset, triangleIndex, subset.IsDoubleSided());
+					});
+				}
+				else
+				{
+					// Brute-force intersection test:
+					uint32_t first_subset = 0;
+					uint32_t last_subset = 0;
+					mesh->GetLODSubsetRange(lod, first_subset, last_subset);
+					for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
+					{
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							continue;
+						const uint32_t indexOffset = subset.indexOffset;
+						const uint32_t triangleCount = subset.indexCount / 3;
+						for (uint32_t triangleIndex = 0; triangleIndex < triangleCount; ++triangleIndex)
+						{
+							intersect_triangle(subsetIndex, indexOffset, triangleIndex, subset.IsDoubleSided());
+						}
+					}
+				}
+
+			}
+		}
+
+		if (filterMask & FILTER_RAGDOLL)
+		{
+			for (size_t i = 0; i < humanoids.GetCount(); ++i)
+			{
+				Entity entity = humanoids.GetEntity(i);
+				const LayerComponent* layer = layers.GetComponent(entity);
+				if (layer != nullptr && (layer->GetLayerMask() & layerMask) == 0)
+					continue;
+
+				const HumanoidComponent& humanoid = humanoids[i];
+				if (humanoid.IsIntersectionDisabled())
+					continue;
+				if (!humanoid.ragdoll_bounds.intersects(sphere))
+					continue;
+
+				for (auto& bp : humanoid.ragdoll_bodyparts)
+				{
+					float dist = 0;
+					XMFLOAT3 direction = {};
+					if (sphere.intersects(bp.capsule, dist, direction))
+					{
+						SphereIntersectionResult result;
+						result.depth = dist;
+						result.entity = entity;
+						result.humanoid_bone = bp.bone;
+						result.normal = direction;
+						result.velocity = {};
+						result.position = {};
+						result.subsetIndex = -1;
+						result.orientation = sphere.GetPlacementOrientation(result.position, result.normal);
+						results.push_back(result);
+					}
+				}
+			}
+		}
+	}
+
 	Scene::CapsuleIntersectionResult Scene::Intersects(const Capsule& capsule, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
 	{
 		CapsuleIntersectionResult result;
@@ -6932,7 +7677,7 @@ namespace wi::scene
 
 					XMVECTOR ReferencePoint;
 					XMVECTOR d = XMVector3Normalize(B - A);
-					if (std::abs(XMVectorGetX(XMVector3Dot(N, d))) < std::numeric_limits<float>::epsilon())
+					if (std::abs(XMVectorGetX(XMVector3Dot(N, d))) < FLT_EPSILON)
 					{
 						// Capsule line cannot be intersected with triangle plane (they are parallel)
 						//	In this case, just take a point from triangle
@@ -7098,7 +7843,7 @@ namespace wi::scene
 						{
 							result.entity = entity;
 							XMStoreFloat3(&result.position, bestPoint);
-							if (lenX > std::numeric_limits<float>::epsilon())
+							if (lenX > FLT_EPSILON)
 							{
 								result.depth = depth;
 								XMStoreFloat3(&result.normal, intersectionVec / intersectionVecLen);
@@ -7229,6 +7974,438 @@ namespace wi::scene
 		result.orientation = capsule.GetPlacementOrientation(result.position, result.normal);
 
 		return result;
+	}
+	void Scene::IntersectsAll(wi::vector<CapsuleIntersectionResult>& results, const Capsule& capsule, uint32_t filterMask, uint32_t layerMask, uint32_t lod) const
+	{
+		const XMVECTOR Base = XMLoadFloat3(&capsule.base);
+		const XMVECTOR Tip = XMLoadFloat3(&capsule.tip);
+		const XMVECTOR Radius = XMVectorReplicate(capsule.radius);
+		const XMVECTOR Axis = XMVector3Normalize(Tip - Base);
+		const XMVECTOR LineEndOffset = Axis * Radius;
+		const XMVECTOR A = Base + LineEndOffset;
+		const XMVECTOR B = Tip - LineEndOffset;
+		const XMVECTOR RadiusSq = XMVectorMultiply(Radius, Radius);
+		const AABB capsule_aabb = capsule.getAABB();
+
+		if ((filterMask & FILTER_COLLIDER) && collider_bvh.IsValid())
+		{
+			collider_bvh.Intersects(capsule_aabb, 0, [&](uint32_t collider_index) {
+				if (colliders.GetCount() <= collider_index)
+					return;
+				const ColliderComponent& collider = colliders_cpu[collider_index];
+
+				if ((collider.layerMask & layerMask) == 0)
+					return;
+
+				float dist = 0;
+				XMFLOAT3 direction = {};
+				XMFLOAT3 position = {};
+				bool intersects = false;
+
+				switch (collider.shape)
+				{
+				default:
+				case ColliderComponent::Shape::Sphere:
+					intersects = capsule.intersects(collider.sphere, dist, direction);
+					XMStoreFloat3(&position, XMLoadFloat3(&collider.sphere.center) + XMLoadFloat3(&direction) * dist);
+					break;
+				case ColliderComponent::Shape::Capsule:
+					intersects = capsule.intersects(collider.capsule, position, direction, dist);
+					break;
+				case ColliderComponent::Shape::Plane:
+					intersects = capsule.intersects(collider.plane, dist, direction);
+					break;
+				}
+
+				if (intersects)
+				{
+					CapsuleIntersectionResult result;
+					result.depth = dist;
+					result.entity = colliders.GetEntity(collider_index);
+					result.normal = direction;
+					result.position = position;
+					result.velocity = {};
+					result.orientation = capsule.GetPlacementOrientation(result.position, result.normal);
+					results.push_back(result);
+				}
+			});
+		}
+
+		if (filterMask & FILTER_OBJECT_ALL)
+		{
+			const size_t objectCount = std::min(objects.GetCount(), aabb_objects.size());
+			for (size_t objectIndex = 0; objectIndex < objectCount; ++objectIndex)
+			{
+				const AABB& aabb = aabb_objects[objectIndex];
+				if ((layerMask & aabb.layerMask) == 0)
+					continue;
+				if (capsule_aabb.intersects(aabb) == AABB::INTERSECTION_TYPE::OUTSIDE)
+					continue;
+
+				const ObjectComponent& object = objects[objectIndex];
+
+				if (object.meshID == INVALID_ENTITY)
+					continue;
+				if ((filterMask & object.GetFilterMask()) == 0)
+					continue;
+
+				const MeshComponent* mesh = meshes.GetComponent(object.meshID);
+				if (mesh == nullptr)
+					continue;
+
+				const Entity entity = objects.GetEntity(objectIndex);
+				const SoftBodyPhysicsComponent* softbody = softbodies.GetComponent(object.meshID);
+				const XMMATRIX objectMat = XMLoadFloat4x4(&matrix_objects[objectIndex]);
+				const XMMATRIX objectMatPrev = XMLoadFloat4x4(&matrix_objects_prev[objectIndex]);
+				const ArmatureComponent* armature = mesh->IsSkinned() ? armatures.GetComponent(mesh->armatureID) : nullptr;
+				const XMMATRIX objectMat_Inverse = XMMatrixInverse(nullptr, objectMat);
+
+				auto intersect_triangle = [&](uint32_t subsetIndex, uint32_t indexOffset, uint32_t triangleIndex, bool doubleSided)
+				{
+					const uint32_t i0 = mesh->indices[indexOffset + triangleIndex * 3 + 0];
+					const uint32_t i1 = mesh->indices[indexOffset + triangleIndex * 3 + 1];
+					const uint32_t i2 = mesh->indices[indexOffset + triangleIndex * 3 + 2];
+
+					XMVECTOR p0;
+					XMVECTOR p1;
+					XMVECTOR p2;
+					if (softbody != nullptr && !softbody->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *softbody, i0);
+						p1 = SkinVertex(*mesh, *softbody, i1);
+						p2 = SkinVertex(*mesh, *softbody, i2);
+					}
+					else if (armature != nullptr && !armature->boneData.empty())
+					{
+						p0 = SkinVertex(*mesh, *armature, i0);
+						p1 = SkinVertex(*mesh, *armature, i1);
+						p2 = SkinVertex(*mesh, *armature, i2);
+						p0 = XMVector3Transform(p0, objectMat);
+						p1 = XMVector3Transform(p1, objectMat);
+						p2 = XMVector3Transform(p2, objectMat);
+					}
+					else
+					{
+						p0 = XMLoadFloat3(&mesh->vertex_positions[i0]);
+						p1 = XMLoadFloat3(&mesh->vertex_positions[i1]);
+						p2 = XMLoadFloat3(&mesh->vertex_positions[i2]);
+						p0 = XMVector3Transform(p0, objectMat);
+						p1 = XMVector3Transform(p1, objectMat);
+						p2 = XMVector3Transform(p2, objectMat);
+					}
+
+					XMFLOAT3 min, max;
+					XMStoreFloat3(&min, XMVectorMin(p0, XMVectorMin(p1, p2)));
+					XMStoreFloat3(&max, XMVectorMax(p0, XMVectorMax(p1, p2)));
+					AABB aabb_triangle(min, max);
+					if (capsule_aabb.intersects(aabb_triangle) == AABB::OUTSIDE)
+						return;
+
+					// Compute the plane of the triangle (has to be normalized).
+					XMVECTOR N = XMVector3Normalize(XMVector3Cross(p1 - p0, p2 - p0));
+
+					XMVECTOR ReferencePoint;
+					XMVECTOR d = XMVector3Normalize(B - A);
+					if (std::abs(XMVectorGetX(XMVector3Dot(N, d))) < FLT_EPSILON)
+					{
+						// Capsule line cannot be intersected with triangle plane (they are parallel)
+						//	In this case, just take a point from triangle
+						ReferencePoint = p0;
+					}
+					else
+					{
+						// Intersect capsule line with triangle plane:
+						XMVECTOR t = XMVector3Dot(N, (Base - p0) / XMVectorAbs(XMVector3Dot(N, d)));
+						XMVECTOR LinePlaneIntersection = Base + d * t;
+
+						// Compute the cross products of the vector from the base of each edge to 
+						// the point with each edge vector.
+						XMVECTOR C0 = XMVector3Cross(XMVectorSubtract(LinePlaneIntersection, p0), XMVectorSubtract(p1, p0));
+						XMVECTOR C1 = XMVector3Cross(XMVectorSubtract(LinePlaneIntersection, p1), XMVectorSubtract(p2, p1));
+						XMVECTOR C2 = XMVector3Cross(XMVectorSubtract(LinePlaneIntersection, p2), XMVectorSubtract(p0, p2));
+
+						// If the cross product points in the same direction as the normal the the
+						// point is inside the edge (it is zero if is on the edge).
+						XMVECTOR Zero = XMVectorZero();
+						XMVECTOR Inside0 = XMVectorLessOrEqual(XMVector3Dot(C0, N), Zero);
+						XMVECTOR Inside1 = XMVectorLessOrEqual(XMVector3Dot(C1, N), Zero);
+						XMVECTOR Inside2 = XMVectorLessOrEqual(XMVector3Dot(C2, N), Zero);
+
+						// If the point inside all of the edges it is inside.
+						XMVECTOR Intersection = XMVectorAndInt(XMVectorAndInt(Inside0, Inside1), Inside2);
+
+						bool inside = XMVectorGetIntX(Intersection) != 0;
+
+						if (inside)
+						{
+							ReferencePoint = LinePlaneIntersection;
+						}
+						else
+						{
+							// Find the nearest point on each edge.
+
+							// Edge 0,1
+							XMVECTOR Point1 = wi::math::ClosestPointOnLineSegment(p0, p1, LinePlaneIntersection);
+
+							// Edge 1,2
+							XMVECTOR Point2 = wi::math::ClosestPointOnLineSegment(p1, p2, LinePlaneIntersection);
+
+							// Edge 2,0
+							XMVECTOR Point3 = wi::math::ClosestPointOnLineSegment(p2, p0, LinePlaneIntersection);
+
+							ReferencePoint = Point1;
+							float bestDist = XMVectorGetX(XMVector3LengthSq(Point1 - LinePlaneIntersection));
+							float d = abs(XMVectorGetX(XMVector3LengthSq(Point2 - LinePlaneIntersection)));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								ReferencePoint = Point2;
+							}
+							d = abs(XMVectorGetX(XMVector3LengthSq(Point3 - LinePlaneIntersection)));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								ReferencePoint = Point3;
+							}
+						}
+
+
+					}
+
+					// Place a sphere on closest point on line segment to intersection:
+					XMVECTOR Center = wi::math::ClosestPointOnLineSegment(A, B, ReferencePoint);
+
+					// Assert that the triangle is not degenerate.
+					assert(!XMVector3Equal(N, XMVectorZero()));
+
+					// Find the nearest feature on the triangle to the sphere.
+					XMVECTOR Dist = XMVector3Dot(XMVectorSubtract(Center, p0), N);
+
+					bool onBackside = XMVectorGetX(Dist) > 0;
+					if (!doubleSided && onBackside)
+						return; // pass through back faces
+
+					// If the center of the sphere is farther from the plane of the triangle than
+					// the radius of the sphere, then there cannot be an intersection.
+					XMVECTOR NoIntersection = XMVectorLess(Dist, XMVectorNegate(Radius));
+					NoIntersection = XMVectorOrInt(NoIntersection, XMVectorGreater(Dist, Radius));
+
+					// Project the center of the sphere onto the plane of the triangle.
+					XMVECTOR Point0 = XMVectorNegativeMultiplySubtract(N, Dist, Center);
+
+					// Is it inside all the edges? If so we intersect because the distance 
+					// to the plane is less than the radius.
+					//XMVECTOR Intersection = DirectX::Internal::PointOnPlaneInsideTriangle(Point0, p0, p1, p2);
+
+					// Compute the cross products of the vector from the base of each edge to 
+					// the point with each edge vector.
+					XMVECTOR C0 = XMVector3Cross(XMVectorSubtract(Point0, p0), XMVectorSubtract(p1, p0));
+					XMVECTOR C1 = XMVector3Cross(XMVectorSubtract(Point0, p1), XMVectorSubtract(p2, p1));
+					XMVECTOR C2 = XMVector3Cross(XMVectorSubtract(Point0, p2), XMVectorSubtract(p0, p2));
+
+					// If the cross product points in the same direction as the normal the the
+					// point is inside the edge (it is zero if is on the edge).
+					XMVECTOR Zero = XMVectorZero();
+					XMVECTOR Inside0 = XMVectorLessOrEqual(XMVector3Dot(C0, N), Zero);
+					XMVECTOR Inside1 = XMVectorLessOrEqual(XMVector3Dot(C1, N), Zero);
+					XMVECTOR Inside2 = XMVectorLessOrEqual(XMVector3Dot(C2, N), Zero);
+
+					// If the point inside all of the edges it is inside.
+					XMVECTOR Intersection = XMVectorAndInt(XMVectorAndInt(Inside0, Inside1), Inside2);
+
+					bool inside = XMVector4EqualInt(XMVectorAndCInt(Intersection, NoIntersection), XMVectorTrueInt());
+
+					// Find the nearest point on each edge.
+
+					// Edge 0,1
+					XMVECTOR Point1 = wi::math::ClosestPointOnLineSegment(p0, p1, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point1)), RadiusSq));
+
+					// Edge 1,2
+					XMVECTOR Point2 = wi::math::ClosestPointOnLineSegment(p1, p2, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point2)), RadiusSq));
+
+					// Edge 2,0
+					XMVECTOR Point3 = wi::math::ClosestPointOnLineSegment(p2, p0, Center);
+
+					// If the distance to the center of the sphere to the point is less than 
+					// the radius of the sphere then it must intersect.
+					Intersection = XMVectorOrInt(Intersection, XMVectorLessOrEqual(XMVector3LengthSq(XMVectorSubtract(Center, Point3)), RadiusSq));
+
+					bool intersects = XMVector4EqualInt(XMVectorAndCInt(Intersection, NoIntersection), XMVectorTrueInt());
+
+					if (intersects)
+					{
+						XMVECTOR bestPoint = Point0;
+						if (!inside)
+						{
+							// If the sphere center's projection on the triangle plane is not within the triangle,
+							//	determine the closest point on triangle to the sphere center
+							float bestDist = XMVectorGetX(XMVector3LengthSq(Point1 - Center));
+							bestPoint = Point1;
+
+							float d = XMVectorGetX(XMVector3LengthSq(Point2 - Center));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								bestPoint = Point2;
+							}
+							d = XMVectorGetX(XMVector3LengthSq(Point3 - Center));
+							if (d < bestDist)
+							{
+								bestDist = d;
+								bestPoint = Point3;
+							}
+						}
+						XMVECTOR intersectionVec = Center - bestPoint;
+						XMVECTOR intersectionVecLen = XMVector3Length(intersectionVec);
+
+						float lenX = XMVectorGetX(intersectionVecLen);
+						float depth = capsule.radius - lenX;
+
+						{
+							CapsuleIntersectionResult result;
+							result.entity = entity;
+							XMStoreFloat3(&result.position, bestPoint);
+							if (lenX > FLT_EPSILON)
+							{
+								result.depth = depth;
+								XMStoreFloat3(&result.normal, intersectionVec / intersectionVecLen);
+							}
+							else
+							{
+								// The line segment that makes the spine of the capsule has 
+								// intersected the triangle plane, so interSectionVec ~= Zero, 
+								// and depth ~= capsule.radius.  Use the triangle normal.
+								XMVECTOR CandNorm;
+								if (onBackside)
+								{
+									CandNorm = N;
+								}
+								else
+								{
+									CandNorm = XMVectorNegate(N);
+								}
+								XMStoreFloat3(&result.normal, CandNorm);
+
+								// If the capsule has penetrated enough to intersect the spine, the
+								// depth is calculated from closest point on the spine, not from the
+								// actual endpoint, so the real depth may be greater, depending on the
+								// orientation of the capsule relative to the triangle normal.
+								// For simplicity, we assume the penetrating endpoint is the one closest
+								// to Center, and we project the distance from Center to the closest endpoint
+								// onto the normal.
+								XMVECTOR A_C = XMVector3LengthSq(Center - A);
+								XMVECTOR B_C = XMVector3LengthSq(Center - B);
+								XMVECTOR CDiff;
+								if (XMVector3Less(A_C, B_C))
+								{
+									CDiff = XMVectorSubtract(A, Center);
+								}
+								else
+								{
+									CDiff = XMVectorSubtract(B, Center);
+								}
+								XMVECTOR CDiffOnN = XMVectorMultiply(XMVector3Dot(CDiff, N), CDiff);
+								result.depth = depth + XMVectorGetX(XMVector3Length(CDiffOnN));
+							}
+
+							XMVECTOR vel = bestPoint - XMVector3Transform(XMVector3Transform(bestPoint, objectMat_Inverse), objectMatPrev);
+							XMStoreFloat3(&result.velocity, vel);
+
+							result.subsetIndex = (int)subsetIndex;
+							result.orientation = capsule.GetPlacementOrientation(result.position, result.normal);
+							results.push_back(result);
+						}
+					}
+				};
+
+				if (mesh->bvh.IsValid())
+				{
+					XMFLOAT3 base_local;
+					XMFLOAT3 tip_local;
+					float radius_local;
+					XMStoreFloat3(&base_local, XMVector3Transform(XMLoadFloat3(&capsule.base), objectMat_Inverse));
+					XMStoreFloat3(&tip_local, XMVector3Transform(XMLoadFloat3(&capsule.tip), objectMat_Inverse));
+					XMStoreFloat(&radius_local, XMVector3Length(XMVector3TransformNormal(XMLoadFloat(&capsule.radius), objectMat_Inverse)));
+					AABB capsule_local_aabb = Capsule(base_local, tip_local, radius_local).getAABB();
+
+					mesh->bvh.Intersects(capsule_local_aabb, 0, [&](uint32_t index) {
+						const AABB& leaf = mesh->bvh_leaf_aabbs[index];
+						const uint32_t triangleIndex = leaf.layerMask;
+						const uint32_t subsetIndex = leaf.userdata;
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							return;
+						const uint32_t indexOffset = subset.indexOffset;
+						intersect_triangle(subsetIndex, indexOffset, triangleIndex, subset.IsDoubleSided());
+					});
+				}
+				else
+				{
+					// Brute-force intersection test:
+					uint32_t first_subset = 0;
+					uint32_t last_subset = 0;
+					mesh->GetLODSubsetRange(lod, first_subset, last_subset);
+					for (uint32_t subsetIndex = first_subset; subsetIndex < last_subset; ++subsetIndex)
+					{
+						const MeshComponent::MeshSubset& subset = mesh->subsets[subsetIndex];
+						if (subset.indexCount == 0)
+							continue;
+						const uint32_t indexOffset = subset.indexOffset;
+						const uint32_t triangleCount = subset.indexCount / 3;
+						for (uint32_t triangleIndex = 0; triangleIndex < triangleCount; ++triangleIndex)
+						{
+							intersect_triangle(subsetIndex, indexOffset, triangleIndex, subset.IsDoubleSided());
+						}
+					}
+				}
+
+			}
+		}
+
+		if (filterMask & FILTER_RAGDOLL)
+		{
+			for (size_t i = 0; i < humanoids.GetCount(); ++i)
+			{
+				Entity entity = humanoids.GetEntity(i);
+				const LayerComponent* layer = layers.GetComponent(entity);
+				if (layer != nullptr && (layer->GetLayerMask() & layerMask) == 0)
+					continue;
+
+				const HumanoidComponent& humanoid = humanoids[i];
+				if (humanoid.IsIntersectionDisabled())
+					continue;
+				if (!humanoid.ragdoll_bounds.intersects(capsule.getAABB()))
+					continue;
+
+				for (auto& bp : humanoid.ragdoll_bodyparts)
+				{
+					XMFLOAT3 position = {};
+					XMFLOAT3 normal = {};
+					float depth = {};
+					if (capsule.intersects(bp.capsule, position, normal, depth))
+					{
+						CapsuleIntersectionResult result;
+						result.depth = depth;
+						result.entity = entity;
+						result.humanoid_bone = bp.bone;
+						result.normal = normal;
+						result.velocity = {};
+						result.position = position;
+						result.subsetIndex = -1;
+						result.orientation = capsule.GetPlacementOrientation(result.position, result.normal);
+						results.push_back(result);
+					}
+				}
+			}
+		}
 	}
 
 	void Scene::VoxelizeObject(size_t objectIndex, wi::VoxelGrid& grid, bool subtract, uint32_t lod)
@@ -7447,6 +8624,17 @@ namespace wi::scene
 				transform->ClearTransform();
 				transform->MatrixTransform(XMMatrixInverse(nullptr, XMLoadFloat4x4(&armature->inverseBindMatrices[i])) * W);
 				transform->UpdateTransform();
+			}
+		}
+
+		// Only re-attach after all transforms updated, because order of bone collection is not guaranteed to be parent->child!
+		//	This fixes resetpose for Mixamo rigs
+		for (size_t i = 0; i < armature->boneCollection.size(); ++i)
+		{
+			Entity bone = armature->boneCollection[i];
+			TransformComponent* transform = transforms.GetComponent(bone);
+			if (transform != nullptr)
+			{
 				const HierarchyComponent* hier = hierarchy.GetComponent(bone);
 				if (hier != nullptr && hier->parentID != INVALID_ENTITY)
 				{
@@ -7757,7 +8945,7 @@ namespace wi::scene
 							auto& retarget_sampler = animation.samplers.emplace_back();
 							retarget_sampler = sampler;
 							retarget_sampler.backwards_compatibility_data = {};
-							retarget_sampler.scene = src_scene == this ? nullptr : src_scene;
+							retarget_sampler.scene = bake_data ? nullptr : (src_scene == this ? nullptr : src_scene);
 
 							XMMATRIX srcParentMatrix = src_scene->ComputeParentMatrixRecursive(bone_source);
 							XMMATRIX srcMatrix = transform_source->GetLocalMatrix() * srcParentMatrix;
@@ -7778,7 +8966,7 @@ namespace wi::scene
 								retarget_sampler.data = retarget_data_entity;
 								retarget_scene.Component_Attach(retarget_data_entity, retarget_entity);
 
-								auto& animation_data = animation_datas.Contains(sampler.data) ? *animation_datas.GetComponent(sampler.data) : sampler.backwards_compatibility_data;
+								auto& animation_data = src_scene->animation_datas.Contains(sampler.data) ? *src_scene->animation_datas.GetComponent(sampler.data) : sampler.backwards_compatibility_data;
 								retarget_animation_data = animation_data;
 
 								XMVECTOR S, R, T; // matrix decompose destinations
@@ -7910,6 +9098,27 @@ namespace wi::scene
 				child_transform->UpdateTransform_Parented(*parent_transform);
 			}
 			RefreshHierarchyTopdownFromParent(child);
+		}
+	}
+
+	void Scene::CountCPUandGPUColliders()
+	{
+		// Note: the collider arrays must be consistent across frames, so can't be counted with multiple threads, this is why it's separated from collider updating
+		collider_count_cpu = 0;
+		collider_count_gpu = 0;
+		for (size_t i = 0; i < colliders.GetCount(); ++i)
+		{
+			ColliderComponent& collider = colliders[i];
+			if (collider.IsCPUEnabled())
+			{
+				collider.cpu_index = collider_count_cpu;
+				collider_count_cpu++;
+			}
+			if (collider.IsGPUEnabled())
+			{
+				collider.gpu_index = collider_count_gpu;
+				collider_count_gpu++;
+			}
 		}
 	}
 

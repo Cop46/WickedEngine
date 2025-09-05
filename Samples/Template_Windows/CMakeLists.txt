@@ -5,10 +5,6 @@ file(GLOB SOURCE_FILES CONFIGURE_DEPENDS "*.cpp" "*.h")
 
 set(LIB_DXCOMPILER "dxcompiler.dll")
 
-list(APPEND SOURCE_FILES
-${CMAKE_CURRENT_SOURCE_DIR}/TemplateWindows.rc
-)
-
 add_executable(${PROJECT_NAME} ${SOURCE_FILES})
 
 set_property(TARGET ${PROJECT_NAME} PROPERTY VS_DEBUGGER_WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
@@ -18,12 +14,19 @@ target_link_libraries(${PROJECT_NAME} PUBLIC
 )
 
 if(MSVC)
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /MP")
+    add_compile_options(/MP)
 endif()
 
 set_target_properties(${PROJECT_NAME} PROPERTIES
 WIN32_EXECUTABLE YES
 )
+
+if(WICKED_USE_IPO)
+set_target_properties(${PROJEC_NAME} PROPERTIES
+    INTERPROCEDURAL_OPTIMIZATION ON
+    INTERPROCEDURAL_OPTIMIZATION_DEBUG OFF
+)
+endif()
 
 set(PLATFORM "Windows")
 add_compile_definitions(WIN32 _WINDOWS)

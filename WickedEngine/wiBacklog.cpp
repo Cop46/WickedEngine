@@ -23,17 +23,13 @@ namespace wi::backlog
 {
 	bool enabled = false;
 	bool was_ever_enabled = enabled;
-	struct LogEntry
-	{
-		std::string text;
-		LogLevel level = LogLevel::Default;
-	};
 	const float speed = 4000.0f;
 	const size_t deletefromline = 500;
 	float pos = 5;
 	float scroll = 0;
 	int historyPos = 0;
 	wi::font::Params font_params;
+	wi::Color backgroundColor = wi::Color(17, 30, 43, 255);
 	Texture backgroundTex;
 	bool refitscroll = false;
 	wi::gui::TextInputField inputField;
@@ -58,11 +54,15 @@ namespace wi::backlog
 		{
 			std::scoped_lock lck(entriesLock);
 			std::string retval;
-			for (auto& x : entries)
-			{
-				retval += x.text;
-			}
+			_forEachLogEntry_unsafe([&](auto&& entry) {retval += entry.text;});
 			return retval;
+		}
+		inline void _forEachLogEntry_unsafe(std::function<void(const LogEntry&)> cb)
+		{
+			for (auto& entry : entries)
+			{
+				cb(entry);
+			}
 		}
 		void writeLogfile()
 		{
@@ -94,7 +94,7 @@ namespace wi::backlog
 	{
 		if (!locked)
 		{
-			if (wi::input::Press(wi::input::KEYBOARD_BUTTON_HOME) && !GUI.IsTyping())
+			if (wi::input::Press(wi::input::KEYBOARD_BUTTON_HOME))
 			{
 				Toggle();
 			}
@@ -223,21 +223,15 @@ namespace wi::backlog
 		GraphicsDevice* device = GetDevice();
 		device->EventBegin("Backlog", cmd);
 
-		if (!backgroundTex.IsValid())
-		{
-			const uint8_t colorData[] = { 0, 0, 43, 200, 43, 31, 141, 223 };
-			wi::texturehelper::CreateTexture(backgroundTex, colorData, 1, 2);
-			device->SetName(&backgroundTex, "wi::backlog::backgroundTex");
-		}
-
 		wi::image::Params fx = wi::image::Params((float)canvas.GetLogicalWidth(), (float)canvas.GetLogicalHeight());
 		fx.pos = XMFLOAT3(0, pos, 0);
-		fx.opacity = wi::math::Lerp(1, 0, -pos / canvas.GetLogicalHeight());
+		fx.opacity = wi::math::Lerp(0.9f, 0, saturate(-pos / canvas.GetLogicalHeight()));
 		if (colorspace != ColorSpace::SRGB)
 		{
 			fx.enableLinearOutputMapping(9);
 		}
-		wi::image::Draw(&backgroundTex, fx, cmd);
+		fx.color = backgroundColor;
+		wi::image::Draw(backgroundTex.IsValid() ? &backgroundTex : nullptr, fx, cmd);
 
 		wi::image::Params inputbg;
 		inputbg.color = wi::Color(80, 140, 180, 200);
@@ -347,6 +341,11 @@ namespace wi::backlog
 	{
 		return internal_state.getText();
 	}
+	// You generally don't want to use this. See notes in header
+	void _forEachLogEntry_unsafe(std::function<void(const LogEntry&)> cb)
+	{
+		internal_state._forEachLogEntry_unsafe(cb);
+	}
 	void clear()
 	{
 		std::scoped_lock lck(internal_state.entriesLock);
@@ -447,6 +446,10 @@ namespace wi::backlog
 	void setBackground(Texture* texture)
 	{
 		backgroundTex = *texture;
+	}
+	void setBackgroundColor(wi::Color color)
+	{
+		backgroundColor = color;
 	}
 	void setFontSize(int value)
 	{

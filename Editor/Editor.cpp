@@ -6,6 +6,13 @@
 #include "Translator.h"
 #include "DummyVisualizer.h"
 
+// some application parameters can be overwritten in the executable by finding the 256 byte long pattern in the first member:
+ApplicationExeCustomization exe_customization = {
+	"Wicked Editor                                                                                                          ",
+	wi::Color(130, 210, 220, 255),
+	wi::Color(17, 30, 43, 255)
+};
+
 using namespace wi::graphics;
 using namespace wi::primitive;
 using namespace wi::scene;
@@ -20,6 +27,7 @@ enum class FileType
 	GLTF,
 	GLB,
 	VRM,
+	VRMA,
 	FBX,
 	IMAGE,
 	VIDEO,
@@ -35,6 +43,7 @@ static wi::unordered_map<std::string, FileType> filetypes = {
 	{"GLTF", FileType::GLTF},
 	{"GLB", FileType::GLB},
 	{"VRM", FileType::VRM},
+	{"VRMA", FileType::VRMA},
 	{"FBX", FileType::FBX},
 	{"H", FileType::HEADER},
 	{"CPP", FileType::CPP},
@@ -58,6 +67,7 @@ enum class EditorActions
 	SELECT_ALL_ENTITIES,
 	DESELECT_ALL_ENTITIES,
 	FOCUS_ON_SELECTION,
+	RENAME_SELECTED,
 
 	// Edit actions
 	UNDO_ACTION,
@@ -73,7 +83,8 @@ enum class EditorActions
 	SCALE_TOGGLE_ACTION,
 
 	// Engine actions
-	MAKE_NEW_SCREENSHOT,
+	SCREENSHOT,
+	SCREENSHOT_ALPHA,
 	INSPECTOR_MODE,
 	PLACE_INSTANCES,
 
@@ -117,6 +128,7 @@ HotkeyInfo hotkeyActions[size_t(EditorActions::COUNT)] = {
 	{wi::input::BUTTON('A'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ false},	//SELECT_ALL_ENTITIES,
 	{wi::input::BUTTON::KEYBOARD_BUTTON_ESCAPE,	/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//DESELECT_ALL_ENTITIES,
 	{wi::input::BUTTON('F'),					/*press=*/ false,		/*control=*/ false,		/*shift=*/ false},	//FOCUS_ON_SELECTION,
+	{wi::input::BUTTON::KEYBOARD_BUTTON_F2,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//RENAME_SELECTED,
 	{wi::input::BUTTON('Z'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ false},	//UNDO_ACTION,
 	{wi::input::BUTTON('Y'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ false},	//REDO_ACTION,
 	{wi::input::BUTTON('C'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ false},	//COPY_ACTION,
@@ -126,7 +138,8 @@ HotkeyInfo hotkeyActions[size_t(EditorActions::COUNT)] = {
 	{wi::input::BUTTON('1'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//MOVE_TOGGLE_ACTION,
 	{wi::input::BUTTON('2'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//ROTATE_TOGGLE_ACTION,
 	{wi::input::BUTTON('3'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCALE_TOGGLE_ACTION,
-	{wi::input::BUTTON::KEYBOARD_BUTTON_F2,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//MAKE_NEW_SCREENSHOT,
+	{wi::input::BUTTON::KEYBOARD_BUTTON_F3,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT,
+	{wi::input::BUTTON::KEYBOARD_BUTTON_F4,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT_ALPHA,
 	{wi::input::BUTTON('I'),					/*press=*/ false,		/*control=*/ false,		/*shift=*/ false},	//INSPECTOR_MODE,
 	{wi::input::BUTTON::MOUSE_BUTTON_LEFT,		/*press=*/ true,		/*control=*/ true,		/*shift=*/ true},	//PLACE_INSTANCES,
 	{wi::input::BUTTON('S'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ true},	//SAVE_SCENE_AS,
@@ -190,6 +203,7 @@ void HotkeyRemap(Editor* main)
 		{"SELECT_ALL_ENTITIES", EditorActions::SELECT_ALL_ENTITIES},
 		{"DESELECT_ALL_ENTITIES", EditorActions::DESELECT_ALL_ENTITIES},
 		{"FOCUS_ON_SELECTION", EditorActions::FOCUS_ON_SELECTION},
+		{"RENAME_SELECTED", EditorActions::RENAME_SELECTED},
 		{"UNDO_ACTION", EditorActions::UNDO_ACTION},
 		{"REDO_ACTION", EditorActions::REDO_ACTION},
 		{"COPY_ACTION", EditorActions::COPY_ACTION},
@@ -199,7 +213,8 @@ void HotkeyRemap(Editor* main)
 		{"MOVE_TOGGLE_ACTION", EditorActions::MOVE_TOGGLE_ACTION},
 		{"ROTATE_TOGGLE_ACTION", EditorActions::ROTATE_TOGGLE_ACTION},
 		{"SCALE_TOGGLE_ACTION", EditorActions::SCALE_TOGGLE_ACTION},
-		{"MAKE_NEW_SCREENSHOT", EditorActions::MAKE_NEW_SCREENSHOT},
+		{"MAKE_NEW_SCREENSHOT", EditorActions::SCREENSHOT},
+		{"MAKE_NEW_SCREENSHOT_ALPHA", EditorActions::SCREENSHOT_ALPHA},
 		{"INSPECTOR_MODE", EditorActions::INSPECTOR_MODE},
 		{"PLACE_INSTANCES", EditorActions::PLACE_INSTANCES},
 		{"SAVE_SCENE_AS", EditorActions::SAVE_SCENE_AS},
@@ -279,6 +294,7 @@ void HotkeyRemap(Editor* main)
 		// Remap hotkey if button is successfully found:
 		if (button != wi::input::BUTTON_NONE)
 		{
+				
 			hotkeyActions[size_t(action)] = HotkeyInfo{ button, hotkeyActions[size_t(action)].press, hotkeyString.find("CTRL") != std::string::npos, hotkeyString.find("SHIFT") != std::string::npos };
 		}
 	}
@@ -288,25 +304,16 @@ void Editor::Initialize()
 {
 	if (config.Has("font"))
 	{
-		// Replace default font from config:
+		// Replace default font from config before engine initialization:
 		wi::font::AddFontStyle(config.GetText("font"));
 	}
 
-	auto ext_video = wi::resourcemanager::GetSupportedVideoExtensions();
-	for (auto& x : ext_video)
-	{
-		filetypes[x] = FileType::VIDEO;
-	}
-	auto ext_sound = wi::resourcemanager::GetSupportedSoundExtensions();
-	for (auto& x : ext_sound)
-	{
-		filetypes[x] = FileType::SOUND;
-	}
-	auto ext_image = wi::resourcemanager::GetSupportedImageExtensions();
-	for (auto& x : ext_image)
-	{
-		filetypes[x] = FileType::IMAGE;
-	}
+	wi::backlog::setFontColor(exe_customization.font_color);
+	wi::backlog::setBackgroundColor(exe_customization.background_color);
+	XMFLOAT4 clearcol = exe_customization.background_color;
+	swapChain.desc.clear_color[0] = clearcol.x;
+	swapChain.desc.clear_color[1] = clearcol.y;
+	swapChain.desc.clear_color[2] = clearcol.z;
 
 	Application::Initialize();
 
@@ -320,24 +327,46 @@ void Editor::Initialize()
 	//infoDisplay.heap_allocation_counter = true;
 	//infoDisplay.vram_usage = true;
 
-	wi::backlog::setFontColor(wi::Color(130, 210, 220, 255));
+	// Font icon is from #include "FontAwesomeV6.h"
+	//	We will not directly use this font style, but let the font renderer fall back on it
+	//	when an icon character is not found in the default font.
+	wi::font::AddFontStyle("FontAwesomeV6", font_awesome_v6, font_awesome_v6_size);
 
-	wi::renderer::SetOcclusionCullingEnabled(true);
-
-	renderComponent.main = this;
-	uint32_t msaa = 4;
-	if (config.Has("gui_antialiasing"))
+	if (!IsScriptReplacement()) // we only activate editor functionality if this exe does not have a script replacement
 	{
-		msaa = std::max(1u, (uint32_t)config.GetInt("gui_antialiasing"));
-	}
-	renderComponent.setMSAASampleCount(msaa);
-	renderComponent.Load();
-	ActivatePath(&renderComponent, 0.5f, wi::Color::Black(), wi::FadeManager::FadeType::CrossFade);
+		renderComponent.main = this;
+		uint32_t msaa = 4;
+		if (config.Has("gui_antialiasing"))
+		{
+			msaa = std::max(1u, (uint32_t)config.GetInt("gui_antialiasing"));
+		}
+		renderComponent.setMSAASampleCount(msaa);
+		renderComponent.Load();
+		ActivatePath(&renderComponent, 0.5f, wi::Color::Black(), wi::FadeManager::FadeType::CrossFade);
 
-	wi::lua::EnableEditorFunctionality(this, &renderComponent);
+		wi::lua::EnableEditorFunctionality(this, &renderComponent);
+
+		auto ext_video = wi::resourcemanager::GetSupportedVideoExtensions();
+		for (auto& x : ext_video)
+		{
+			filetypes[x] = FileType::VIDEO;
+		}
+		auto ext_sound = wi::resourcemanager::GetSupportedSoundExtensions();
+		for (auto& x : ext_sound)
+		{
+			filetypes[x] = FileType::SOUND;
+		}
+		auto ext_image = wi::resourcemanager::GetSupportedImageExtensions();
+		for (auto& x : ext_image)
+		{
+			filetypes[x] = FileType::IMAGE;
+		}
+	}
 }
 void Editor::HotReload()
 {
+	if (IsScriptReplacement())
+		return;
 	if (!wi::initializer::IsInitializeFinished())
 		return;
 
@@ -391,6 +420,14 @@ void EditorComponent::ResizeBuffers()
 	renderPath->width = 0; // force resize buffers
 	renderPath->height = 0;// force resize buffers
 	ResizeViewport3D();
+
+	TextureDesc desc;
+	desc.width = GetPhysicalWidth();
+	desc.height = GetPhysicalHeight();
+	desc.format = Format::R10G10B10A2_UNORM;
+	desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
+	GetDevice()->CreateTexture(&desc, nullptr, &gui_background_effect);
+	GetDevice()->SetName(&gui_background_effect, "gui_background_effect");
 }
 void EditorComponent::ResizeLayout()
 {
@@ -412,6 +449,12 @@ void EditorComponent::ResizeLayout()
 
 	contentBrowserWnd.SetSize(XMFLOAT2(screenW / 1.6f, screenH / 1.2f));
 	contentBrowserWnd.SetPos(XMFLOAT2(screenW / 2.0f - contentBrowserWnd.scale.x / 2.0f, screenH / 2.0f - contentBrowserWnd.scale.y / 2.0f));
+
+	projectCreatorWnd.SetSize(XMFLOAT2(projectCreatorWnd.backgroundColorPicker.GetSize().x * 2 + 4 * 3, std::min(780.0f, screenH * 0.8f)));
+	projectCreatorWnd.SetPos(XMFLOAT2(screenW / 2.0f - projectCreatorWnd.scale.x / 2.0f, screenH / 2.0f - projectCreatorWnd.scale.y / 2.0f));
+
+	themeEditorWnd.SetSize(XMFLOAT2(740, std::min(780.0f, screenH * 0.8f)));
+	themeEditorWnd.SetPos(XMFLOAT2(screenW / 2.0f - themeEditorWnd.scale.x / 2.0f, screenH / 2.0f - themeEditorWnd.scale.y / 2.0f));
 
 }
 void EditorComponent::Load()
@@ -525,7 +568,7 @@ void EditorComponent::Load()
 	newSceneButton.Create("+");
 	newSceneButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
 	newSceneButton.SetTooltip("New scene");
-	newSceneButton.OnClick([&](wi::gui::EventArgs args) {
+	newSceneButton.OnClick([this](wi::gui::EventArgs args) {
 		NewScene();
 		});
 	topmenuWnd.AddWidget(&newSceneButton);
@@ -536,6 +579,7 @@ void EditorComponent::Load()
 		NEW_MATERIAL,
 		NEW_POINTLIGHT,
 		NEW_SPOTLIGHT,
+		NEW_RECTLIGHT,
 		NEW_DIRECTIONALLIGHT,
 		NEW_ENVIRONMENTPROBE,
 		NEW_FORCE,
@@ -571,6 +615,7 @@ void EditorComponent::Load()
 	newEntityCombo.AddItem("Transform " ICON_TRANSFORM, NEW_TRANSFORM);
 	newEntityCombo.AddItem("Material " ICON_MATERIAL, NEW_MATERIAL);
 	newEntityCombo.AddItem("Point Light " ICON_POINTLIGHT, NEW_POINTLIGHT);
+	newEntityCombo.AddItem("Rectangle Light " ICON_RECTLIGHT, NEW_RECTLIGHT);
 	newEntityCombo.AddItem("Spot Light " ICON_SPOTLIGHT, NEW_SPOTLIGHT);
 	newEntityCombo.AddItem("Directional Light " ICON_DIRECTIONALLIGHT, NEW_DIRECTIONALLIGHT);
 	newEntityCombo.AddItem("Environment Probe " ICON_ENVIRONMENTPROBE, NEW_ENVIRONMENTPROBE);
@@ -617,6 +662,14 @@ void EditorComponent::Load()
 			pick.entity = scene.Entity_CreateLight("pointlight", in_front_of_camera, XMFLOAT3(1, 1, 1), 2, 60);
 			scene.lights.GetComponent(pick.entity)->type = LightComponent::POINT;
 			scene.lights.GetComponent(pick.entity)->intensity = 20;
+			break;
+		case NEW_RECTLIGHT:
+			pick.entity = scene.Entity_CreateLight("rectlight", in_front_of_camera, XMFLOAT3(1, 1, 1), 2, 60);
+			scene.lights.GetComponent(pick.entity)->type = LightComponent::RECTANGLE;
+			scene.lights.GetComponent(pick.entity)->intensity = 20;
+			scene.lights.GetComponent(pick.entity)->length = 2;
+			scene.lights.GetComponent(pick.entity)->height = 2;
+			scene.lights.GetComponent(pick.entity)->SetVisualizerEnabled(true);
 			break;
 		case NEW_SPOTLIGHT:
 			pick.entity = scene.Entity_CreateLight("spotlight", in_front_of_camera, XMFLOAT3(1, 1, 1), 2, 60);
@@ -830,7 +883,7 @@ void EditorComponent::Load()
 		scaleButton.SetShadowRadius(2);
 		scaleButton.SetTooltip("Scale\nHotkey: 3");
 		scaleButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
-		scaleButton.OnClick([&](wi::gui::EventArgs args) {
+		scaleButton.OnClick([this](wi::gui::EventArgs args) {
 			translator.isScalator = true;
 			translator.isTranslator = false;
 			translator.isRotator = false;
@@ -840,7 +893,7 @@ void EditorComponent::Load()
 		rotateButton.SetShadowRadius(2);
 		rotateButton.SetTooltip("Rotate\nHotkey: 2");
 		rotateButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
-		rotateButton.OnClick([&](wi::gui::EventArgs args) {
+		rotateButton.OnClick([this](wi::gui::EventArgs args) {
 			translator.isRotator = true;
 			translator.isScalator = false;
 			translator.isTranslator = false;
@@ -850,7 +903,7 @@ void EditorComponent::Load()
 		translateButton.SetShadowRadius(2);
 		translateButton.SetTooltip("Translate/Move (Ctrl + T)\nHotkey: 1");
 		translateButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
-		translateButton.OnClick([&](wi::gui::EventArgs args) {
+		translateButton.OnClick([this](wi::gui::EventArgs args) {
 			translator.isTranslator = true;
 			translator.isScalator = false;
 			translator.isRotator = false;
@@ -865,7 +918,7 @@ void EditorComponent::Load()
 	{
 		wi::physics::SetSimulationEnabled(main->config.GetSection("options").GetBool("physics"));
 	}
-	physicsButton.OnClick([&](wi::gui::EventArgs args) {
+	physicsButton.OnClick([this](wi::gui::EventArgs args) {
 		if (wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL))
 		{
 			wi::physics::ResetPhysicsObjects(GetCurrentScene());
@@ -883,7 +936,7 @@ void EditorComponent::Load()
 	dummyButton.SetShadowRadius(2);
 	dummyButton.SetTooltip("Toggle reference dummy visualizer\n - Use the reference dummy to get an idea about object sizes compared to a human character size.\n - Position the dummy by clicking on something with the middle mouse button while the dummy is active.\n - Pressing this button while Ctrl key is held down will reset dummy position to the origin.\n - Pressing this button while the Shift key is held down will switch between male and female dummies.");
 	dummyButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
-	dummyButton.OnClick([&](wi::gui::EventArgs args) {
+	dummyButton.OnClick([this](wi::gui::EventArgs args) {
 		if (wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL) || wi::input::Down(wi::input::KEYBOARD_BUTTON_RCONTROL))
 		{
 			dummy_pos = XMFLOAT3(0, 0, 0);
@@ -903,7 +956,7 @@ void EditorComponent::Load()
 	navtestButton.SetShadowRadius(2);
 	navtestButton.SetTooltip("Toggle navigation testing. When enabled, you can visualize path finding results.\nYou can put down START and GOAL waypoints inside voxel grids to test path finding.\nControls:\n----------\nF5 + middle click: put START to surface\nF6 + middle click: put GOAL to surface\nF7 + middle click: put START to air\nF8 + middle click: put GOAL to air");
 	navtestButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
-	navtestButton.OnClick([&](wi::gui::EventArgs args) {
+	navtestButton.OnClick([this](wi::gui::EventArgs args) {
 		navtest_enabled = !navtest_enabled;
 	});
 	GetGUI().AddWidget(&navtestButton);
@@ -913,27 +966,12 @@ void EditorComponent::Load()
 	playButton.SetShadowRadius(2);
 	playButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
 	playButton.SetTooltip("Execute the last used (standalone) script.\nTo use a new script, use the Open button.");
-	playButton.OnClick([&](wi::gui::EventArgs args) {
+	playButton.OnClick([this](wi::gui::EventArgs args) {
 		if (last_script_path.empty() || !wi::helper::FileExists(last_script_path))
 		{
-			wi::helper::FileDialogParams params;
-			params.type = wi::helper::FileDialogParams::OPEN;
-			params.description = ".lua";
-			params.extensions.push_back("lua");
-			wi::helper::FileDialog(params, [&](std::string fileName) {
-				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
-
-					std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(fileName));
-					if (!extension.compare("LUA"))
-					{
-						last_script_path = fileName;
-						main->config.Set("last_script_path", last_script_path);
-						main->config.Commit();
-						playButton.SetScriptTip("dofile(\"" + last_script_path + "\")");
-						wi::lua::RunFile(fileName);
-					}
-				});
-			});
+			contentBrowserWnd.RefreshContent();
+			contentBrowserWnd.SetVisible(true);
+			contentBrowserWnd.SetEnabled(true);
 		}
 		else
 		{
@@ -957,10 +995,21 @@ void EditorComponent::Load()
 	stopButton.SetShadowRadius(2);
 	stopButton.SetTooltip("Stops every script background processes that are still running.");
 	stopButton.SetScriptTip("killProcesses()");
-	stopButton.OnClick([&](wi::gui::EventArgs args) {
+	stopButton.OnClick([](wi::gui::EventArgs args) {
 		wi::lua::KillProcesses();
 	});
 	topmenuWnd.AddWidget(&stopButton);
+
+
+	projectCreatorButton.Create(ICON_PROJECT_CREATE);
+	projectCreatorButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
+	projectCreatorButton.font.params.shadowColor = wi::Color::Transparent();
+	projectCreatorButton.SetShadowRadius(2);
+	projectCreatorButton.SetTooltip("Create a new project.");
+	projectCreatorButton.OnClick([this](wi::gui::EventArgs args) {
+		projectCreatorWnd.SetVisible(!projectCreatorWnd.IsVisible());
+	});
+	topmenuWnd.AddWidget(&projectCreatorButton);
 
 
 
@@ -971,7 +1020,7 @@ void EditorComponent::Load()
 	saveButton.SetTooltip("Save the current scene to a new file (Ctrl + Shift + S)\nBy default, the scene will be saved into .wiscene, but you can specify .gltf or .glb extensions to export into GLTF.\nYou can also use Ctrl + S to quicksave, without browsing.");
 	saveButton.SetColor(wi::Color(50, 180, 100, 180), wi::gui::WIDGETSTATE::IDLE);
 	saveButton.SetColor(wi::Color(50, 220, 140, 255), wi::gui::WIDGETSTATE::FOCUS);
-	saveButton.OnClick([&](wi::gui::EventArgs args) {
+	saveButton.OnClick([this](wi::gui::EventArgs args) {
 		SaveAs();
 		});
 	topmenuWnd.AddWidget(&saveButton);
@@ -987,7 +1036,7 @@ void EditorComponent::Load()
 #endif // PLATFORM_WINDOWS_DESKTOP
 	openButton.SetColor(wi::Color(50, 100, 255, 180), wi::gui::WIDGETSTATE::IDLE);
 	openButton.SetColor(wi::Color(120, 160, 255, 255), wi::gui::WIDGETSTATE::FOCUS);
-	openButton.OnClick([&](wi::gui::EventArgs args) {
+	openButton.OnClick([this](wi::gui::EventArgs args) {
 		wi::helper::FileDialogParams params;
 		params.type = wi::helper::FileDialogParams::OPEN;
 		params.description = ".wiscene, .obj, .gltf, .glb, .vrm, .fbx, .lua, .mp4, .png, ...";
@@ -996,6 +1045,7 @@ void EditorComponent::Load()
 		params.extensions.push_back("gltf");
 		params.extensions.push_back("glb");
 		params.extensions.push_back("vrm");
+		params.extensions.push_back("vrma");
 		params.extensions.push_back("fbx");
 		params.extensions.push_back("lua");
 		params.extensions.push_back("txt");
@@ -1030,7 +1080,7 @@ void EditorComponent::Load()
 	contentBrowserButton.SetTooltip("Browse content.");
 	contentBrowserButton.SetColor(wi::Color(50, 100, 255, 180), wi::gui::WIDGETSTATE::IDLE);
 	contentBrowserButton.SetColor(wi::Color(120, 160, 255, 255), wi::gui::WIDGETSTATE::FOCUS);
-	contentBrowserButton.OnClick([&](wi::gui::EventArgs args) {
+	contentBrowserButton.OnClick([this](wi::gui::EventArgs args) {
 		contentBrowserWnd.SetVisible(!contentBrowserWnd.IsVisible());
 		if (contentBrowserWnd.IsVisible())
 		{
@@ -1047,7 +1097,7 @@ void EditorComponent::Load()
 	logButton.SetTooltip("Open the backlog (toggle with HOME button)");
 	logButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	logButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
-	logButton.OnClick([&](wi::gui::EventArgs args) {
+	logButton.OnClick([](wi::gui::EventArgs args) {
 		wi::backlog::Toggle();
 		});
 	topmenuWnd.AddWidget(&logButton);
@@ -1060,7 +1110,7 @@ void EditorComponent::Load()
 	profilerButton.SetTooltip("View the profiler frame timings");
 	profilerButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	profilerButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
-	profilerButton.OnClick([&](wi::gui::EventArgs args) {
+	profilerButton.OnClick([this](wi::gui::EventArgs args) {
 		profilerWnd.SetVisible(!wi::profiler::IsEnabled());
 		wi::profiler::SetEnabled(!wi::profiler::IsEnabled());
 	});
@@ -1074,7 +1124,7 @@ void EditorComponent::Load()
 	cinemaButton.SetTooltip("Enter cinema mode (all HUD disabled). Press ESC to return to normal.");
 	cinemaButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	cinemaButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
-	cinemaButton.OnClick([&](wi::gui::EventArgs args) {
+	cinemaButton.OnClick([this](wi::gui::EventArgs args) {
 		if (renderPath != nullptr)
 		{
 			renderPath->GetGUI().SetVisible(false);
@@ -1093,7 +1143,7 @@ void EditorComponent::Load()
 	fullscreenButton.SetTooltip("Toggle full screen");
 	fullscreenButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	fullscreenButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
-	fullscreenButton.OnClick([&](wi::gui::EventArgs args) {
+	fullscreenButton.OnClick([this](wi::gui::EventArgs args) {
 		bool fullscreen = main->config.GetBool("fullscreen");
 		fullscreen = !fullscreen;
 		main->config.Set("fullscreen", fullscreen);
@@ -1128,7 +1178,7 @@ void EditorComponent::Load()
 	aboutButton.SetTooltip("About...");
 	aboutButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	aboutButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
-	aboutButton.OnClick([&](wi::gui::EventArgs args) {
+	aboutButton.OnClick([this](wi::gui::EventArgs args) {
 		aboutWindow.SetVisible(!aboutWindow.IsVisible());
 		});
 	topmenuWnd.AddWidget(&aboutButton);
@@ -1156,6 +1206,7 @@ void EditorComponent::Load()
 		ss += "Duplicate entity: " + GetInputString(EditorActions::DUPLICATE_ENTITY) + "\n";
 		ss += "Select All: " + GetInputString(EditorActions::SELECT_ALL_ENTITIES) + "\n";
 		ss += "Deselect All: " + GetInputString(EditorActions::DESELECT_ALL_ENTITIES) + "\n";
+		ss += "Rename Selected: " + GetInputString(EditorActions::RENAME_SELECTED) + " (this hotkey is temporary, will be F2 in the future)" + "\n";
 		ss += "Undo: " + GetInputString(EditorActions::UNDO_ACTION) + "\n";
 		ss += "Redo: " + GetInputString(EditorActions::REDO_ACTION) + "\n";
 		ss += "Copy: " + GetInputString(EditorActions::COPY_ACTION) + "\n";
@@ -1169,7 +1220,8 @@ void EditorComponent::Load()
 		ss += "Rotate Toggle: " + GetInputString(EditorActions::ROTATE_TOGGLE_ACTION) + "\n";
 		ss += "Scale Toggle: " + GetInputString(EditorActions::SCALE_TOGGLE_ACTION) + "\n";
 		ss += "Wireframe mode: " + GetInputString(EditorActions::WIREFRAME_MODE) + "\n";
-		ss += "Screenshot (saved into Editor's screenshots folder): " + GetInputString(EditorActions::MAKE_NEW_SCREENSHOT) + "\n";
+		ss += "Screenshot (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT) + "\n";
+		ss += "Screenshot with background as alpha (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_ALPHA) + "\n";
 		ss += "Depth of field refocus to point: " + GetInputString(EditorActions::DEPTH_OF_FIELD_REFOCUS_TO_POINT) + " + left mouse button" + "\n";
 		ss += "Color grading reference: " + GetInputString(EditorActions::COLOR_GRADING_REFERENCE) + " (color grading palette reference will be displayed in top left corner)\n";
 		ss += "Focus on selected: " + GetInputString(EditorActions::FOCUS_ON_SELECTION) + " button, this will make the camera jump to selection.\n";
@@ -1215,7 +1267,7 @@ void EditorComponent::Load()
 		aboutWindow.OnResize([this]() {
 			aboutLabel.SetSize(XMFLOAT2(aboutWindow.GetWidgetAreaSize().x - 20, aboutLabel.GetSize().y));
 		});
-		aboutWindow.OnCollapse([&](wi::gui::EventArgs args) {
+		aboutWindow.OnCollapse([this](wi::gui::EventArgs args) {
 			for (int i = 0; i < arraysize(wi::gui::Widget::sprites); ++i)
 			{
 				aboutWindow.sprites[i].params.enableCornerRounding();
@@ -1235,7 +1287,7 @@ void EditorComponent::Load()
 	exitButton.SetTooltip("Exit");
 	exitButton.SetColor(wi::Color(160, 50, 50, 180), wi::gui::WIDGETSTATE::IDLE);
 	exitButton.SetColor(wi::Color(200, 50, 50, 255), wi::gui::WIDGETSTATE::FOCUS);
-	exitButton.OnClick([this](wi::gui::EventArgs args) {
+	exitButton.OnClick([](wi::gui::EventArgs args) {
 		wi::platform::Exit();
 		});
 	topmenuWnd.AddWidget(&exitButton);
@@ -1276,34 +1328,16 @@ void EditorComponent::Load()
 	contentBrowserWnd.Create(this);
 	GetGUI().AddWidget(&contentBrowserWnd);
 
-	std::string theme = main->config.GetSection("options").GetText("theme");
-	if(theme.empty())
-	{
-		generalWnd.themeCombo.SetSelected(0);
-	}
-	else if (!theme.compare("Dark"))
-	{
-		generalWnd.themeCombo.SetSelected(0);
-	}
-	else if (!theme.compare("Bright"))
-	{
-		generalWnd.themeCombo.SetSelected(1);
-	}
-	else if (!theme.compare("Soft"))
-	{
-		generalWnd.themeCombo.SetSelected(2);
-	}
-	else if (!theme.compare("Hacking"))
-	{
-		generalWnd.themeCombo.SetSelected(3);
-	}
-	else if (!theme.compare("Nord"))
-	{
-		generalWnd.themeCombo.SetSelected(4);
-	}
+	projectCreatorWnd.Create(this);
+	GetGUI().AddWidget(&projectCreatorWnd);
+
+	themeEditorWnd.Create(this);
+	GetGUI().AddWidget(&themeEditorWnd);
 
 	SetDefaultLocalization();
 	generalWnd.RefreshLanguageSelectionAfterWholeGUIWasInitialized();
+
+	generalWnd.RefreshTheme();
 
 	auto load_font = [this](std::string filename) {
 		font_datas.emplace_back().name = filename;
@@ -1370,14 +1404,6 @@ void EditorComponent::Load()
 }
 void EditorComponent::Start()
 {
-	// Start() is called after system initialization is complete, while Load() can be while initialization is still not finished
-	//	Therefore we initialize things in Start which would need to be after system initializations:
-
-	// Font icon is from #include "FontAwesomeV6.h"
-	//	We will not directly use this font style, but let the font renderer fall back on it
-	//	when an icon character is not found in the default font.
-	wi::font::AddFontStyle("FontAwesomeV6", font_awesome_v6, font_awesome_v6_size);
-
 	// Add other fonts that were loaded from fonts directory as fallback fonts:
 	for (auto& x : font_datas)
 	{
@@ -1385,6 +1411,8 @@ void EditorComponent::Start()
 	}
 
 	graphicsWnd.ApplySamplerSettings();
+
+	componentsWnd.RefreshEntityTree(); // called at Start() for updating the tree list when returning from scripts too
 
 	RenderPath2D::Start();
 }
@@ -1406,9 +1434,22 @@ void EditorComponent::Update(float dt)
 
 	main->canvas.scaling = float(guiScalingCombo.GetSelectedUserdata()) / 100.0f;
 
-	if (CheckInput(EditorActions::MAKE_NEW_SCREENSHOT))
+	if (CheckInput(EditorActions::SCREENSHOT))
 	{
 		std::string filename = wi::helper::screenshot(main->swapChain);
+		PostSaveText(filename);
+		if (filename.empty())
+		{
+			PostSaveText("Error! Screenshot was not successful!");
+		}
+		else
+		{
+			PostSaveText("Screenshot saved: ", filename);
+		}
+	}
+	if (CheckInput(EditorActions::SCREENSHOT_ALPHA))
+	{
+		std::string filename = wi::helper::screenshot(renderPath->CreateScreenshotWithAlphaBackground());
 		PostSaveText(filename);
 		if (filename.empty())
 		{
@@ -1433,10 +1474,10 @@ void EditorComponent::Update(float dt)
 		scene.Entity_Remove(grass_interaction_entity);
 	}
 
-	cameraWnd.Update();
-	paintToolWnd.Update(dt);
-	graphicsWnd.Update();
-	componentsWnd.Update(dt);
+	cameraWnd.UpdateData();
+	paintToolWnd.UpdateData(dt);
+	graphicsWnd.UpdateData();
+	componentsWnd.UpdateData(dt);
 
 	// Pulsating selection color update:
 	outlineTimer += dt;
@@ -1603,6 +1644,20 @@ void EditorComponent::Update(float dt)
 		drive_orbit_horizontal = lerp(drive_orbit_horizontal, 0.0f, dt);
 	}
 
+	if (!GetGUI().IsTyping() && !translator.selected.empty() && CheckInput(EditorActions::RENAME_SELECTED))
+	{
+		for (auto& x : translator.selected)
+		{
+			if (!scene.names.Contains(x.entity))
+			{
+				scene.names.Create(x.entity);
+			}
+		}
+		componentsWnd.nameWnd.SetEntity(translator.selected.back().entity);
+		componentsWnd.nameWnd.SetCollapsed(false);
+		componentsWnd.nameWnd.nameInput.SetAsActive(true);
+	}
+
 	// Camera control:
 	if (!drive_mode && !wi::backlog::isActive() && !GetGUI().HasFocus())
 	{
@@ -1744,6 +1799,21 @@ void EditorComponent::Update(float dt)
 
 			editorscene.camera_transform.UpdateTransform();
 			XMStoreFloat3(&editorscene.cam_move, move);
+
+			// Modify camera speed with mouse scroll in FPS mode:
+			//	Note: in Paint tool window the scroll is used to modify the brush size
+			if (!paintToolWnd.IsVisible() && std::abs(currentMouse.z) > 0.1f)
+			{
+				float current = cameraWnd.movespeedSlider.GetValue();
+				float increment = current > 10 ? 2.0f : 1.0f;
+				float add = currentMouse.z < 0 ? -increment : increment;
+				cameraWnd.movespeedSlider.SetValue(std::max(0.1f, std::ceil(current + add)));
+				char txt[256];
+				snprintf(txt, arraysize(txt), "Camera speed: %.1f", cameraWnd.movespeedSlider.GetValue());
+				save_text_message = txt;
+				save_text_alpha = 1.0f;
+				main->config.GetSection("camera").Set("move_speed", cameraWnd.movespeedSlider.GetValue());
+			}
 		}
 		else
 		{
@@ -2100,82 +2170,16 @@ void EditorComponent::Update(float dt)
 			}
 			if (bone_picking)
 			{
-				for (size_t i = 0; i < scene.armatures.GetCount(); ++i)
+				for (auto& it : bone_picking_items)
 				{
-					const ArmatureComponent& armature = scene.armatures[i];
-					for (Entity entity : armature.boneCollection)
+					Entity entity = it.first;
+					const Capsule& capsule = it.second;
+					float dis = -1;
+					if (pickRay.intersects(capsule, dis) && dis < hovered.distance)
 					{
-						if (!scene.transforms.Contains(entity))
-							continue;
-						const TransformComponent& transform = *scene.transforms.GetComponent(entity);
-						XMVECTOR a = transform.GetPositionV();
-						XMVECTOR b = a + XMVectorSet(0, 0.1f, 0, 0);
-						// Search for child to connect bone tip:
-						bool child_found = false;
-						for (size_t h = 0; (h < scene.humanoids.GetCount()) && !child_found; ++h)
-						{
-							const HumanoidComponent& humanoid = scene.humanoids[h];
-							int bodypart = 0;
-							for (Entity child : humanoid.bones)
-							{
-								const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
-								if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
-								{
-									if (bodypart == int(HumanoidComponent::HumanoidBone::Hips))
-									{
-										// skip root-hip connection
-										child_found = true;
-										break;
-									}
-									const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
-									b = child_transform.GetPositionV();
-									child_found = true;
-									break;
-								}
-								bodypart++;
-							}
-						}
-						if (!child_found)
-						{
-							for (Entity child : armature.boneCollection)
-							{
-								const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
-								if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
-								{
-									const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
-									b = child_transform.GetPositionV();
-									child_found = true;
-									break;
-								}
-							}
-						}
-						if (!child_found)
-						{
-							// No child, try to guess bone tip compared to parent (if it has parent):
-							const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(entity);
-							if (hierarchy != nullptr && scene.transforms.Contains(hierarchy->parentID))
-							{
-								const TransformComponent& parent_transform = *scene.transforms.GetComponent(hierarchy->parentID);
-								XMVECTOR ab = a - parent_transform.GetPositionV();
-								b = a + ab;
-							}
-						}
-						XMVECTOR ab = XMVector3Normalize(b - a);
-
-						wi::primitive::Capsule capsule;
-						capsule.radius = wi::math::Distance(a, b) * 0.1f;
-						a -= ab * capsule.radius;
-						b += ab * capsule.radius;
-						XMStoreFloat3(&capsule.base, a);
-						XMStoreFloat3(&capsule.tip, b);
-
-						float dis = -1;
-						if (pickRay.intersects(capsule, dis) && dis < hovered.distance)
-						{
-							hovered = wi::scene::PickResult();
-							hovered.entity = entity;
-							hovered.distance = dis;
-						}
+						hovered = wi::scene::PickResult();
+						hovered.entity = entity;
+						hovered.distance = dis;
 					}
 				}
 			}
@@ -2401,7 +2405,7 @@ void EditorComponent::Update(float dt)
 	main->infoDisplay.colorgrading_helper = false;
 
 	// Control operations...
-	if (!GetGUI().IsTyping() && wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL) || wi::input::Down(wi::input::KEYBOARD_BUTTON_RCONTROL))
+	if (!GetGUI().IsTyping() && (wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL) || wi::input::Down(wi::input::KEYBOARD_BUTTON_RCONTROL)))
 	{
 		bool isCtrlDown = wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL) || wi::input::Down(wi::input::KEYBOARD_BUTTON_RCONTROL);
 		bool isShiftDown = wi::input::Down(wi::input::KEYBOARD_BUTTON_LSHIFT) || wi::input::Down(wi::input::KEYBOARD_BUTTON_RSHIFT);
@@ -3023,6 +3027,27 @@ void EditorComponent::Update(float dt)
 	{
 		wi::renderer::SetToDrawDebugSprings(generalWnd.springVisCheckBox.GetCheck());
 	}
+
+	if (generalWnd.focusModeCheckBox.GetCheck() || themeEditorWnd.waveColor.getA() == 0)
+	{
+		topmenuWnd.background_overlay = {};
+		componentsWnd.background_overlay = {};
+		generalWnd.background_overlay = {};
+		graphicsWnd.background_overlay = {};
+		paintToolWnd.background_overlay = {};
+		cameraWnd.background_overlay = {};
+		materialPickerWnd.background_overlay = {};
+	}
+	else
+	{
+		topmenuWnd.background_overlay = gui_background_effect;
+		componentsWnd.background_overlay = gui_background_effect;
+		generalWnd.background_overlay = gui_background_effect;
+		graphicsWnd.background_overlay = gui_background_effect;
+		paintToolWnd.background_overlay = gui_background_effect;
+		cameraWnd.background_overlay = gui_background_effect;
+		materialPickerWnd.background_overlay = gui_background_effect;
+	}
 }
 void EditorComponent::PostUpdate()
 {
@@ -3511,7 +3536,7 @@ void EditorComponent::Render() const
 			{
 				device->EventBegin("Selection Outline Edge", cmd);
 				wi::renderer::BindCommonResources(cmd);
-				float opacity = wi::math::Lerp(0.4f, 1.0f, selectionColorIntensity);
+				float opacity = wi::math::Lerp(0.4f, 1.0f, selectionColorIntensity) * generalWnd.outlineOpacitySlider.GetValue();
 				XMFLOAT4 col = selectionColor2;
 				col.w *= opacity;
 				wi::renderer::Postprocess_Outline(rt_selectionOutline[0], cmd, 0.1f, 1, col);
@@ -3588,6 +3613,9 @@ void EditorComponent::Render() const
 						break;
 					case LightComponent::DIRECTIONAL:
 						wi::font::Draw(ICON_DIRECTIONALLIGHT, fp, cmd);
+						break;
+					case LightComponent::RECTANGLE:
+						wi::font::Draw(ICON_RECTLIGHT, fp, cmd);
 						break;
 					default:
 						break;
@@ -4121,13 +4149,7 @@ void EditorComponent::Render() const
 					LoadShaders();
 				}
 
-				size_t bone_count = 0;
-				for (size_t i = 0; i < scene.armatures.GetCount(); ++i)
-				{
-					const ArmatureComponent& armature = scene.armatures[i];
-					bone_count += armature.boneCollection.size();
-				}
-
+				size_t bone_count = bone_picking_items.size();
 				if (bone_count > 0)
 				{
 					struct Vertex
@@ -4147,168 +4169,98 @@ void EditorComponent::Render() const
 					const XMVECTOR Eye = camera.GetEye();
 					const XMVECTOR Unit = XMVectorSet(0, 1, 0, 0);
 
-					for (size_t i = 0; i < scene.armatures.GetCount(); ++i)
+					for (auto& it : bone_picking_items)
 					{
-						const ArmatureComponent& armature = scene.armatures[i];
-						for (Entity entity : armature.boneCollection)
+						Entity entity = it.first;
+						const Capsule& capsule = it.second;
+						XMVECTOR a = XMLoadFloat3(&capsule.base);
+						XMVECTOR b = XMLoadFloat3(&capsule.tip);
+						XMVECTOR ab = XMVector3Normalize(b - a);
+
+						XMFLOAT4 color = inactiveEntityColor;
+
+						if (scene.springs.Contains(entity))
 						{
-							if (!scene.transforms.Contains(entity))
-								continue;
-							const TransformComponent& transform = *scene.transforms.GetComponent(entity);
-							XMVECTOR a = transform.GetPositionV();
-							XMVECTOR b = a + XMVectorSet(0, 0.1f, 0, 0);
-							const SpringComponent* spring = scene.springs.GetComponent(entity);
-							if (spring != nullptr)
+							color = springDebugColor;
+						}
+						else if (scene.inverse_kinematics.Contains(entity))
+						{
+							color = ikDebugColor;
+						}
+
+						if (hovered.entity == entity)
+						{
+							color = hoveredEntityColor;
+						}
+						for (auto& picked : translator.selected)
+						{
+							if (picked.entity == entity)
 							{
-								// Spring has information about bone tip already:
-								b = XMLoadFloat3(&spring->currentTail);
+								color = selectedEntityColor;
+								break;
+							}
+						}
+
+						color.w *= generalWnd.bonePickerOpacitySlider.GetValue();
+
+						XMVECTOR Base = XMLoadFloat3(&capsule.base);
+						XMVECTOR Tip = XMLoadFloat3(&capsule.tip);
+						XMVECTOR Radius = XMVectorReplicate(capsule.radius);
+						XMVECTOR Normal = XMVector3Normalize(Tip - Base);
+						XMVECTOR Tangent = XMVector3Normalize(XMVector3Cross(Normal, Base - Eye));
+						XMVECTOR Binormal = XMVector3Normalize(XMVector3Cross(Tangent, Normal));
+						XMVECTOR LineEndOffset = Normal * Radius;
+						XMVECTOR A = Base + LineEndOffset;
+						XMVECTOR B = Tip - LineEndOffset;
+						XMVECTOR AB = Unit * XMVector3Length(B - A);
+						XMMATRIX M = { Tangent,Normal,Binormal,XMVectorSetW(A, 1) };
+
+						uint32_t center_vertex_index = vertex_count;
+						Vertex center_vertex;
+						XMStoreFloat4(&center_vertex.position, A);
+						center_vertex.position.w = 1;
+						center_vertex.color = color;
+						center_vertex.color.w = 0;
+						std::memcpy(vertices + vertex_count, &center_vertex, sizeof(center_vertex));
+						vertex_count++;
+
+						for (size_t i = 0; i < segment_count; ++i)
+						{
+							XMVECTOR segment_pos;
+							const float angle0 = XM_PIDIV2 + (float)i / (float)segment_count * XM_2PI;
+							if (i < 18)
+							{
+								segment_pos = XMVectorSet(sinf(angle0) * capsule.radius, cosf(angle0) * capsule.radius, 0, 1);
+							}
+							else if (i == 18)
+							{
+								segment_pos = XMVectorSet(sinf(angle0) * capsule.radius, cosf(angle0) * capsule.radius, 0, 1);
+							}
+							else if (i > 18 && i < 18 + 1 + 18)
+							{
+								segment_pos = AB + XMVectorSet(sinf(angle0) * capsule.radius * 0.5f, cosf(angle0) * capsule.radius * 0.5f, 0, 1);
 							}
 							else
 							{
-								// Search for child to connect bone tip:
-								bool child_found = false;
-								for (size_t h = 0; (h < scene.humanoids.GetCount()) && !child_found; ++h)
-								{
-									const HumanoidComponent& humanoid = scene.humanoids[h];
-									int bodypart = 0;
-									for (Entity child : humanoid.bones)
-									{
-										const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
-										if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
-										{
-											if (bodypart == int(HumanoidComponent::HumanoidBone::Hips))
-											{
-												// skip root-hip connection
-												child_found = true;
-												break;
-											}
-											const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
-											b = child_transform.GetPositionV();
-											child_found = true;
-											break;
-										}
-										bodypart++;
-									}
-								}
-								if (!child_found)
-								{
-									for (Entity child : armature.boneCollection)
-									{
-										const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
-										if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
-										{
-											const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
-											b = child_transform.GetPositionV();
-											child_found = true;
-											break;
-										}
-									}
-								}
-								if (!child_found)
-								{
-									// No child, try to guess bone tip compared to parent (if it has parent):
-									const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(entity);
-									if (hierarchy != nullptr && scene.transforms.Contains(hierarchy->parentID))
-									{
-										const TransformComponent& parent_transform = *scene.transforms.GetComponent(hierarchy->parentID);
-										XMVECTOR ab = a - parent_transform.GetPositionV();
-										b = a + ab;
-									}
-								}
+								segment_pos = AB + XMVectorSet(sinf(angle0) * capsule.radius * 0.5f, cosf(angle0) * capsule.radius * 0.5f, 0, 1);
 							}
-							XMVECTOR ab = XMVector3Normalize(b - a);
+							segment_pos = XMVector3Transform(segment_pos, M);
 
-							wi::primitive::Capsule capsule;
-							capsule.radius = wi::math::Distance(a, b) * 0.1f;
-							a -= ab * capsule.radius;
-							b += ab * capsule.radius;
-							XMStoreFloat3(&capsule.base, a);
-							XMStoreFloat3(&capsule.tip, b);
-							XMFLOAT4 color = inactiveEntityColor;
-
-							if (spring != nullptr)
-							{
-								color = springDebugColor;
-							}
-							else if (scene.inverse_kinematics.Contains(entity))
-							{
-								color = ikDebugColor;
-							}
-
-							if (hovered.entity == entity)
-							{
-								color = hoveredEntityColor;
-							}
-							for (auto& picked : translator.selected)
-							{
-								if (picked.entity == entity)
-								{
-									color = selectedEntityColor;
-									break;
-								}
-							}
-
-							color.w *= generalWnd.bonePickerOpacitySlider.GetValue();
-
-							XMVECTOR Base = XMLoadFloat3(&capsule.base);
-							XMVECTOR Tip = XMLoadFloat3(&capsule.tip);
-							XMVECTOR Radius = XMVectorReplicate(capsule.radius);
-							XMVECTOR Normal = XMVector3Normalize(Tip - Base);
-							XMVECTOR Tangent = XMVector3Normalize(XMVector3Cross(Normal, Base - Eye));
-							XMVECTOR Binormal = XMVector3Normalize(XMVector3Cross(Tangent, Normal));
-							XMVECTOR LineEndOffset = Normal * Radius;
-							XMVECTOR A = Base + LineEndOffset;
-							XMVECTOR B = Tip - LineEndOffset;
-							XMVECTOR AB = Unit * XMVector3Length(B - A);
-							XMMATRIX M = { Tangent,Normal,Binormal,XMVectorSetW(A, 1) };
-
-							uint32_t center_vertex_index = vertex_count;
-							Vertex center_vertex;
-							XMStoreFloat4(&center_vertex.position, A);
-							center_vertex.position.w = 1;
-							center_vertex.color = color;
-							center_vertex.color.w = 0;
-							std::memcpy(vertices + vertex_count, &center_vertex, sizeof(center_vertex));
-							vertex_count++;
-
-							for (size_t i = 0; i < segment_count; ++i)
-							{
-								XMVECTOR segment_pos;
-								const float angle0 = XM_PIDIV2 + (float)i / (float)segment_count * XM_2PI;
-								if (i < 18)
-								{
-									segment_pos = XMVectorSet(sinf(angle0) * capsule.radius, cosf(angle0) * capsule.radius, 0, 1);
-								}
-								else if (i == 18)
-								{
-									segment_pos = XMVectorSet(sinf(angle0) * capsule.radius, cosf(angle0) * capsule.radius, 0, 1);
-								}
-								else if (i > 18 && i < 18 + 1 + 18)
-								{
-									segment_pos = AB + XMVectorSet(sinf(angle0) * capsule.radius * 0.5f, cosf(angle0) * capsule.radius * 0.5f, 0, 1);
-								}
-								else
-								{
-									segment_pos = AB + XMVectorSet(sinf(angle0) * capsule.radius * 0.5f, cosf(angle0) * capsule.radius * 0.5f, 0, 1);
-								}
-								segment_pos = XMVector3Transform(segment_pos, M);
-
-								Vertex vertex;
-								XMStoreFloat4(&vertex.position, segment_pos);
-								vertex.position.w = 1;
-								vertex.color = color;
-								//vertex.color.w = 0;
-								std::memcpy(vertices + vertex_count, &vertex, sizeof(vertex));
-								uint32_t ind[] = { center_vertex_index,vertex_count - 1,vertex_count };
-								std::memcpy(indices + index_count, ind, sizeof(ind));
-								index_count += arraysize(ind);
-								vertex_count++;
-							}
-							// closing triangle fan:
-							uint32_t ind[] = { center_vertex_index,vertex_count - 1,center_vertex_index+1 };
+							Vertex vertex;
+							XMStoreFloat4(&vertex.position, segment_pos);
+							vertex.position.w = 1;
+							vertex.color = color;
+							//vertex.color.w = 0;
+							std::memcpy(vertices + vertex_count, &vertex, sizeof(vertex));
+							uint32_t ind[] = { center_vertex_index,vertex_count - 1,vertex_count };
 							std::memcpy(indices + index_count, ind, sizeof(ind));
 							index_count += arraysize(ind);
+							vertex_count++;
 						}
+						// closing triangle fan:
+						uint32_t ind[] = { center_vertex_index,vertex_count - 1,center_vertex_index + 1 };
+						std::memcpy(indices + index_count, ind, sizeof(ind));
+						index_count += arraysize(ind);
 					}
 
 					device->EventBegin("Bone capsules", cmd);
@@ -4438,7 +4390,41 @@ void EditorComponent::Render() const
 			}
 #endif
 
+			if (drive_mode)
+			{
+				wi::font::Params params;
+				params.color = save_text_color;
+				params.shadowColor = wi::Color::Black();
+				params.shadowColor.setA(params.color.getA());
+				params.position = XMFLOAT3(PhysicalToLogical(viewport3D.width * 0.5f), 20, 0);
+				params.h_align = wi::font::WIFALIGN_CENTER;
+				params.v_align = wi::font::WIFALIGN_TOP;
+				params.size = 30;
+				params.shadow_softness = 1;
+				wi::font::Draw("Drive Mode", params, cmd);
+			}
+
 			device->RenderPassEnd(cmd);
+		}
+
+		if(!generalWnd.focusModeCheckBox.GetCheck() && themeEditorWnd.waveColor.getA() > 0)
+		{
+			device->EventBegin("Background wave effect", cmd);
+			device->RenderPassBegin(&gui_background_effect, cmd);
+
+			Viewport vp;
+			vp.width = (float)gui_background_effect.desc.width;
+			vp.height = (float)gui_background_effect.desc.height;
+			device->BindViewports(1, &vp, cmd);
+
+			Rect rect;
+			rect.from_viewport(vp);
+			device->BindScissorRects(1, &rect, cmd);
+
+			wi::renderer::DrawWaveEffect(themeEditorWnd.waveColor, cmd);
+
+			device->RenderPassEnd(cmd);
+			device->EventEnd(cmd);
 		}
 
 		device->EventEnd(cmd);
@@ -4473,38 +4459,16 @@ void EditorComponent::Compose(CommandList cmd) const
 		params.v_align = wi::font::WIFALIGN_CENTER;
 		params.size = 30;
 		params.shadow_softness = 1;
+		if (colorspace != ColorSpace::SRGB)
+		{
+			params.enableLinearOutputMapping(9);
+		}
 		wi::font::Cursor cursor = wi::font::Draw(save_text_message, params, cmd);
 
 		params.size = 24;
 		params.position.y += cursor.size.y;
 		wi::font::Draw(save_text_filename, params, cmd);
 	}
-
-	if (drive_mode)
-	{
-		wi::font::Params params;
-		params.color = save_text_color;
-		params.shadowColor = wi::Color::Black();
-		params.shadowColor.setA(params.color.getA());
-		params.position = XMFLOAT3(PhysicalToLogical(viewport3D.top_left_x + viewport3D.width * 0.5f), PhysicalToLogical(viewport3D.top_left_y + 5), 0);
-		params.h_align = wi::font::WIFALIGN_CENTER;
-		params.v_align = wi::font::WIFALIGN_TOP;
-		params.size = 30;
-		params.shadow_softness = 1;
-		wi::font::Draw("Drive Mode", params, cmd);
-	}
-
-#ifdef TERRAIN_VIRTUAL_TEXTURE_DEBUG
-	auto& scene = GetCurrentScene();
-	if (scene.terrains.GetCount() > 0)
-	{
-		auto& terrain = scene.terrains[0];
-		if (!terrain.chunks[terrain.center_chunk].vt.empty())
-		{
-			terrain.chunks[terrain.center_chunk].vt[0].DrawDebug(cmd);
-		}
-	}
-#endif // TERRAIN_VIRTUAL_TEXTURE_DEBUG
 }
 
 void EditorComponent::ResizeViewport3D()
@@ -5039,8 +5003,9 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 	componentsWnd.RefreshEntityTree();
 }
 
-void EditorComponent::RegisterRecentlyUsed(const std::string& filename)
+void EditorComponent::RegisterRecentlyUsed(std::string filename)
 {
+	filename = wi::helper::BackslashToForwardSlash(filename);
 	{
 		for (size_t i = 0; i < recentFilenames.size();)
 		{
@@ -5094,6 +5059,8 @@ void EditorComponent::RegisterRecentlyUsed(const std::string& filename)
 
 void EditorComponent::Open(std::string filename)
 {
+	if (main->IsScriptReplacement())
+		return;
 	std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename));
 
 	FileType type = FileType::INVALID;
@@ -5188,7 +5155,7 @@ void EditorComponent::Open(std::string filename)
 		{
 			ImportModel_OBJ(filename, *scene);
 		}
-		else if (type == FileType::GLTF || type == FileType::GLB || type == FileType::VRM)
+		else if (type == FileType::GLTF || type == FileType::GLB || type == FileType::VRM || type == FileType::VRMA)
 		{
 			ImportModel_GLTF(filename, *scene);
 		}
@@ -5242,7 +5209,7 @@ void EditorComponent::Open(std::string filename)
 			}
 			RefreshSceneList();
 
-			componentsWnd.weatherWnd.Update();
+			componentsWnd.weatherWnd.UpdateData();
 			componentsWnd.RefreshEntityTree();
 			wi::backlog::post("[Editor] finished loading model: " + filename);
 		});
@@ -5333,14 +5300,11 @@ void EditorComponent::SaveAs()
 	});
 }
 
-Texture EditorComponent::CreateThumbnailScreenshot() const
+Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps) const
 {
 	GraphicsDevice* device = GetDevice();
 	CommandList cmd = device->BeginCommandList();
-	static const uint32_t target_width = 256;
-	static const uint32_t target_height = 128;
-
-	Texture thumbnail = *renderPath->GetLastPostprocessRT();
+	Texture thumbnail = texture;
 
 	// Overestimate actual size with aspect (note that downscale factor will be 4x later):
 	uint32_t current_width = target_width;
@@ -5351,11 +5315,20 @@ Texture EditorComponent::CreateThumbnailScreenshot() const
 		current_height *= 4;
 	}
 
+	// It is invalid top create texture above 16K resolution, so force downsize if this happens:
+	while (current_width > 16384 || current_height > 16384)
+	{
+		current_width /= 2;
+		current_height /= 2;
+	}
+
 	// Crop target:
 	{
 		TextureDesc desc = thumbnail.desc;
+		desc.format = Format::R8G8B8A8_UNORM;
 		desc.width = current_width;
 		desc.height = current_height;
+		desc.mip_levels = mipmaps? 0 : 1;
 		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::RENDER_TARGET | BindFlag::UNORDERED_ACCESS;
 		Texture upsized;
 		device->CreateTexture(&desc, nullptr, &upsized);
@@ -5408,8 +5381,10 @@ Texture EditorComponent::CreateThumbnailScreenshot() const
 	while (thumbnail.desc.width > target_width || thumbnail.desc.height > target_height)
 	{
 		TextureDesc desc = thumbnail.desc;
+		desc.format = Format::R8G8B8A8_UNORM;
 		desc.width = std::max(target_width, desc.width / 4u);
 		desc.height = std::max(target_height, desc.height / 4u);
+		desc.mip_levels = mipmaps ? 0 : 1;
 		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::RENDER_TARGET | BindFlag::UNORDERED_ACCESS;
 		Texture downsized;
 		device->CreateTexture(&desc, nullptr, &downsized);
@@ -5417,7 +5392,17 @@ Texture EditorComponent::CreateThumbnailScreenshot() const
 		thumbnail = downsized;
 	}
 
+	if (mipmaps)
+	{
+		device->CreateMipgenSubresources(thumbnail);
+		wi::renderer::GenerateMipChain(thumbnail, wi::renderer::MIPGENFILTER_LINEAR, cmd);
+	}
+
 	return thumbnail;
+}
+Texture EditorComponent::CreateThumbnailScreenshot() const
+{
+	return CreateThumbnail(*renderPath->GetLastPostprocessRT(), 256, 128);
 }
 
 void EditorComponent::PostSaveText(const std::string& message, const std::string& filename, float time_seconds)
@@ -5430,39 +5415,164 @@ void EditorComponent::PostSaveText(const std::string& message, const std::string
 
 void EditorComponent::CheckBonePickingEnabled()
 {
+	Scene& scene = GetCurrentScene();
+
 	if (generalWnd.skeletonsVisibleCheckBox.GetCheck())
 	{
 		bone_picking = true;
-		return;
 	}
-
-	// Check if armature or bone is selected to allow bone picking:
-	//	(Don't want to always enable bone picking, because it can make the screen look very busy.)
-	Scene& scene = GetCurrentScene();
-
-	bone_picking = false;
-	for (size_t i = 0; i < scene.armatures.GetCount() && !bone_picking; ++i)
+	else
 	{
-		Entity entity = scene.armatures.GetEntity(i);
-		for (auto& x : translator.selected)
+		// Check if armature or bone or humanoid is selected to allow bone picking:
+		//	(Don't want to always enable bone picking, because it can make the screen look very busy.)
+
+		bone_picking = false;
+		for (size_t i = 0; i < scene.humanoids.GetCount() && !bone_picking; ++i)
 		{
-			if (entity == x.entity)
-			{
-				bone_picking = true;
-				break;
-			}
-		}
-		for (Entity bone : scene.armatures[i].boneCollection)
-		{
+			Entity entity = scene.humanoids.GetEntity(i);
 			for (auto& x : translator.selected)
 			{
-				if (bone == x.entity)
+				if (entity == x.entity)
 				{
 					bone_picking = true;
 					break;
 				}
 			}
+			for (Entity bone : scene.humanoids[i].bones)
+			{
+				for (auto& x : translator.selected)
+				{
+					if (bone == x.entity)
+					{
+						bone_picking = true;
+						break;
+					}
+				}
+			}
 		}
+		for (size_t i = 0; i < scene.armatures.GetCount() && !bone_picking; ++i)
+		{
+			Entity entity = scene.armatures.GetEntity(i);
+			for (auto& x : translator.selected)
+			{
+				if (entity == x.entity)
+				{
+					bone_picking = true;
+					break;
+				}
+			}
+			for (Entity bone : scene.armatures[i].boneCollection)
+			{
+				for (auto& x : translator.selected)
+				{
+					if (bone == x.entity)
+					{
+						bone_picking = true;
+						break;
+					}
+				}
+			}
+		}
+	}
+
+	if (!bone_picking)
+		return;
+	
+	bone_picking_items.clear();
+	auto bone_pick_iterate = [&](const Entity* entities, size_t entity_count) {
+		for (size_t i = 0; i < entity_count; ++i)
+		{
+			Entity entity = entities[i];
+			if (entity == INVALID_ENTITY)
+				continue;
+			if (bone_picking_items.count(entity) > 0)
+				continue;
+			if (!scene.transforms.Contains(entity))
+				continue;
+			const TransformComponent& transform = *scene.transforms.GetComponent(entity);
+			XMVECTOR a = transform.GetPositionV();
+			XMVECTOR b = a + XMVectorSet(0, 0.1f, 0, 0);
+			const SpringComponent* spring = scene.springs.GetComponent(entity);
+			if (spring != nullptr)
+			{
+				// Spring has information about bone tip already:
+				b = XMLoadFloat3(&spring->currentTail);
+			}
+			else
+			{
+				// Search for child to connect bone tip:
+				bool child_found = false;
+				for (size_t h = 0; (h < scene.humanoids.GetCount()) && !child_found; ++h)
+				{
+					const HumanoidComponent& humanoid = scene.humanoids[h];
+					int bodypart = 0;
+					for (Entity child : humanoid.bones)
+					{
+						const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
+						if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
+						{
+							if (bodypart == int(HumanoidComponent::HumanoidBone::Hips))
+							{
+								// skip root-hip connection
+								child_found = true;
+								break;
+							}
+							const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
+							b = child_transform.GetPositionV();
+							child_found = true;
+							break;
+						}
+						bodypart++;
+					}
+				}
+				if (!child_found)
+				{
+					for (size_t j = 0; j < entity_count; ++j)
+					{
+						Entity child = entities[j];
+						const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(child);
+						if (hierarchy != nullptr && hierarchy->parentID == entity && scene.transforms.Contains(child))
+						{
+							const TransformComponent& child_transform = *scene.transforms.GetComponent(child);
+							b = child_transform.GetPositionV();
+							child_found = true;
+							break;
+						}
+					}
+				}
+				if (!child_found)
+				{
+					// No child, try to guess bone tip compared to parent (if it has parent):
+					const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(entity);
+					if (hierarchy != nullptr && scene.transforms.Contains(hierarchy->parentID))
+					{
+						const TransformComponent& parent_transform = *scene.transforms.GetComponent(hierarchy->parentID);
+						XMVECTOR ab = a - parent_transform.GetPositionV();
+						b = a + ab;
+					}
+				}
+			}
+			XMVECTOR ab = XMVector3Normalize(b - a);
+
+			wi::primitive::Capsule capsule;
+			capsule.radius = wi::math::Distance(a, b) * 0.1f;
+			a -= ab * capsule.radius;
+			b += ab * capsule.radius;
+			XMStoreFloat3(&capsule.base, a);
+			XMStoreFloat3(&capsule.tip, b);
+
+			bone_picking_items[entity] = capsule;
+		}
+	};
+	for (size_t i = 0; i < scene.humanoids.GetCount(); ++i)
+	{
+		const HumanoidComponent& humanoid = scene.humanoids[i];
+		bone_pick_iterate(humanoid.bones, arraysize(humanoid.bones));
+	}
+	for (size_t i = 0; i < scene.armatures.GetCount(); ++i)
+	{
+		const ArmatureComponent& armature = scene.armatures[i];
+		bone_pick_iterate(armature.boneCollection.data(), armature.boneCollection.size());
 	}
 }
 
@@ -5621,8 +5731,10 @@ void EditorComponent::UpdateDynamicWidgets()
 
 	float static_pos = screenW - wid_idle * 12;
 
+	projectCreatorButton.SetSize(XMFLOAT2(wid_idle * 0.75f, hei));
+	projectCreatorButton.SetPos(XMFLOAT2(static_pos - stopButton.GetSize().x - 20, y));
 	stopButton.SetSize(XMFLOAT2(wid_idle * 0.75f, hei));
-	stopButton.SetPos(XMFLOAT2(static_pos - stopButton.GetSize().x - 20, y));
+	stopButton.SetPos(XMFLOAT2(projectCreatorButton.GetPos().x - playButton.GetSize().x - padding, y));
 	playButton.SetSize(XMFLOAT2(wid_idle * 0.75f, hei));
 	playButton.SetPos(XMFLOAT2(stopButton.GetPos().x - playButton.GetSize().x - padding, y));
 
@@ -5755,14 +5867,17 @@ void EditorComponent::UpdateDynamicWidgets()
 	if (wi::backlog::GetUnseenLogLevelMax() >= wi::backlog::LogLevel::Error)
 	{
 		logButton.sprites[wi::gui::IDLE].params.color = wi::Color::Error();
+		logButton.sprites[wi::gui::IDLE].params.gradient = wi::image::Params::Gradient::None;
 	}
 	else if (wi::backlog::GetUnseenLogLevelMax() >= wi::backlog::LogLevel::Warning)
 	{
 		logButton.sprites[wi::gui::IDLE].params.color = wi::Color::Warning();
+		logButton.sprites[wi::gui::IDLE].params.gradient = wi::image::Params::Gradient::None;
 	}
 	else
 	{
 		logButton.sprites[wi::gui::IDLE].params.color = color_off;
+		logButton.sprites[wi::gui::IDLE].params.gradient = wi::image::Params::Gradient::Linear;
 	}
 
 
@@ -5868,7 +5983,7 @@ void EditorComponent::SetCurrentScene(int index)
 }
 void EditorComponent::RefreshSceneList()
 {
-	generalWnd.themeCombo.SetSelected(generalWnd.themeCombo.GetSelected());
+	generalWnd.RefreshTheme();
 	for (int i = 0; i < int(scenes.size()); ++i)
 	{
 		auto& editorscene = scenes[i];

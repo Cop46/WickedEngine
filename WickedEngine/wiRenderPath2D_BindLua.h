@@ -29,6 +29,7 @@ namespace wi::lua
 		virtual ~RenderPath2D_BindLua() = default;
 
 		int AddSprite(lua_State* L);
+		int AddVideoSprite(lua_State* L);
 		int AddFont(lua_State* L);
 		int RemoveSprite(lua_State* L);
 		int RemoveFont(lua_State* L);
@@ -42,6 +43,9 @@ namespace wi::lua
 		int SetLayerOrder(lua_State* L);
 		int SetSpriteOrder(lua_State* L);
 		int SetFontOrder(lua_State* L);
+
+		int GetHDRScaling(lua_State* L);
+		int SetHDRScaling(lua_State* L);
 
 		int CopyFrom(lua_State* L);
 

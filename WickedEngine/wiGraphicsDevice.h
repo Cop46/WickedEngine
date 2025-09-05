@@ -250,14 +250,14 @@ namespace wi::graphics
 			return CreateBuffer2(desc, [&](void* dest) { std::memcpy(dest, initial_data, desc->size); }, buffer, alias, alias_offset);
 		}
 
-		bool CreateBufferCleared(const GPUBufferDesc* desc, uint8_t value, GPUBuffer* buffer) const
+		bool CreateBufferCleared(const GPUBufferDesc* desc, uint8_t value, GPUBuffer* buffer, const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const
 		{
-			return CreateBuffer2(desc, [&](void* dest) { std::memset(dest, value, desc->size); }, buffer);
+			return CreateBuffer2(desc, [&](void* dest) { std::memset(dest, value, desc->size); }, buffer, alias, alias_offset);
 		}
 
-		bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer) const
+		bool CreateBufferZeroed(const GPUBufferDesc* desc, GPUBuffer* buffer, const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const
 		{
-			return CreateBufferCleared(desc, 0, buffer);
+			return CreateBufferCleared(desc, 0, buffer, alias, alias_offset);
 		}
 
 		void Barrier(const GPUBarrier& barrier, CommandList cmd)
@@ -353,6 +353,19 @@ namespace wi::graphics
 				RenderPassImage::RenderTarget(rendertarget, clear ? RenderPassImage::LoadOp::CLEAR : RenderPassImage::LoadOp::LOAD),
 			};
 			RenderPassBegin(rp, arraysize(rp), cmd);
+		}
+
+		// Creates subresources for mipgen where each number directly refers to either SRV or UAV for the same numbered mip level:
+		void CreateMipgenSubresources(Texture& texture)
+		{
+			for (uint32_t i = 0; i < texture.desc.mip_levels; ++i)
+			{
+				int subresource_index;
+				subresource_index = CreateSubresource(&texture, SubresourceType::SRV, 0, 1, i, 1);
+				assert(subresource_index == i);
+				subresource_index = CreateSubresource(&texture, SubresourceType::UAV, 0, 1, i, 1);
+				assert(subresource_index == i);
+			}
 		}
 
 		// Deprecated, kept for back-compat:

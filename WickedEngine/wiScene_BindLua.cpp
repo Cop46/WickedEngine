@@ -12,8 +12,10 @@
 #include "wiUnorderedMap.h"
 #include "wiVoxelGrid_BindLua.h"
 #include "wiAudio_BindLua.h"
+#include "wiVideo_BindLua.h"
 #include "wiAsync_BindLua.h"
 #include "wiPathQuery_BindLua.h"
+#include "wiApplication_BindLua.h"
 
 #include <string>
 
@@ -492,6 +494,8 @@ void Bind()
 		wi::lua::RegisterFunc("SceneIntersectCapsule", SceneIntersectCapsule);
 
 		Luna<Scene_BindLua>::Register(L);
+		Luna<RayIntersectionResult_BindLua>::Register(L);
+		Luna<SphereIntersectionResult_BindLua>::Register(L);
 		Luna<NameComponent_BindLua>::Register(L);
 		Luna<LayerComponent_BindLua>::Register(L);
 		Luna<TransformComponent_BindLua>::Register(L);
@@ -514,6 +518,7 @@ void Bind()
 		Luna<Weather_VolumetricCloudParams_BindLua>::Register(L);
 		Luna<WeatherComponent_BindLua>::Register(L);
 		Luna<SoundComponent_BindLua>::Register(L);
+		Luna<VideoComponent_BindLua>::Register(L);
 		Luna<ColliderComponent_BindLua>::Register(L);
 		Luna<ExpressionComponent_BindLua>::Register(L);
 		Luna<HumanoidComponent_BindLua>::Register(L);
@@ -534,6 +539,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Instantiate),
 	lunamethod(Scene_BindLua, UpdateHierarchy),
 	lunamethod(Scene_BindLua, Intersects),
+	lunamethod(Scene_BindLua, IntersectsAll),
 	lunamethod(Scene_BindLua, IntersectsFirst),
 	lunamethod(Scene_BindLua, FindAllEntities),
 	lunamethod(Scene_BindLua, Entity_FindByName),
@@ -558,6 +564,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Component_CreateForceField),
 	lunamethod(Scene_BindLua, Component_CreateWeather),
 	lunamethod(Scene_BindLua, Component_CreateSound),
+	lunamethod(Scene_BindLua, Component_CreateVideo),
 	lunamethod(Scene_BindLua, Component_CreateCollider),
 	lunamethod(Scene_BindLua, Component_CreateExpression),
 	lunamethod(Scene_BindLua, Component_CreateHumanoid),
@@ -587,6 +594,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Component_GetForceField),
 	lunamethod(Scene_BindLua, Component_GetWeather),
 	lunamethod(Scene_BindLua, Component_GetSound),
+	lunamethod(Scene_BindLua, Component_GetVideo),
 	lunamethod(Scene_BindLua, Component_GetCollider),
 	lunamethod(Scene_BindLua, Component_GetExpression),
 	lunamethod(Scene_BindLua, Component_GetHumanoid),
@@ -616,6 +624,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Component_GetForceFieldArray),
 	lunamethod(Scene_BindLua, Component_GetWeatherArray),
 	lunamethod(Scene_BindLua, Component_GetSoundArray),
+	lunamethod(Scene_BindLua, Component_GetVideoArray),
 	lunamethod(Scene_BindLua, Component_GetColliderArray),
 	lunamethod(Scene_BindLua, Component_GetExpressionArray),
 	lunamethod(Scene_BindLua, Component_GetHumanoidArray),
@@ -646,6 +655,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Entity_GetForceFieldArray),
 	lunamethod(Scene_BindLua, Entity_GetWeatherArray),
 	lunamethod(Scene_BindLua, Entity_GetSoundArray),
+	lunamethod(Scene_BindLua, Entity_GetVideoArray),
 	lunamethod(Scene_BindLua, Entity_GetColliderArray),
 	lunamethod(Scene_BindLua, Entity_GetExpressionArray),
 	lunamethod(Scene_BindLua, Entity_GetHumanoidArray),
@@ -675,6 +685,7 @@ Luna<Scene_BindLua>::FunctionType Scene_BindLua::methods[] = {
 	lunamethod(Scene_BindLua, Component_RemoveForceField),
 	lunamethod(Scene_BindLua, Component_RemoveWeather),
 	lunamethod(Scene_BindLua, Component_RemoveSound),
+	lunamethod(Scene_BindLua, Component_RemoveVideo),
 	lunamethod(Scene_BindLua, Component_RemoveCollider),
 	lunamethod(Scene_BindLua, Component_RemoveExpression),
 	lunamethod(Scene_BindLua, Component_RemoveHumanoid),
@@ -996,6 +1007,86 @@ int Scene_BindLua::Intersects(lua_State* L)
 	else
 	{
 		wi::lua::SError(L, "Scene::Intersects(Ray|Sphere|Capsule primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) not enough arguments!");
+	}
+	return 0;
+}
+int Scene_BindLua::IntersectsAll(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		uint32_t filterMask = wi::enums::FILTER_ALL;
+		uint32_t layerMask = ~0u;
+		uint lod = 0;
+		if (argc > 1)
+		{
+			filterMask = (uint32_t)wi::lua::SGetInt(L, 2);
+			if (argc > 2)
+			{
+				layerMask = (uint32_t)wi::lua::SGetInt(L, 3);
+				if (argc > 3)
+				{
+					lod = (uint32_t)wi::lua::SGetInt(L, 4);
+				}
+			}
+		}
+
+		Ray_BindLua* ray = Luna<Ray_BindLua>::lightcheck(L, 1);
+		if (ray != nullptr)
+		{
+			wi::vector<Scene::RayIntersectionResult> results;
+			scene->IntersectsAll(results, ray->ray, filterMask, layerMask, lod);
+			int cnt = (int)results.size();
+			lua_createtable(L, cnt, 0);
+			int newTable = lua_gettop(L);
+			for (size_t i = 0; i < results.size(); ++i)
+			{
+				const auto& result = results[i];
+				Luna<RayIntersectionResult_BindLua>::push(L, result);
+				lua_rawseti(L, newTable, lua_Integer(i + 1));
+			}
+			return cnt;
+		}
+
+		Sphere_BindLua* sphere = Luna<Sphere_BindLua>::lightcheck(L, 1);
+		if (sphere != nullptr)
+		{
+			wi::vector<Scene::SphereIntersectionResult> results;
+			scene->IntersectsAll(results, sphere->sphere, filterMask, layerMask, lod);
+			int cnt = (int)results.size();
+			lua_createtable(L, cnt, 0);
+			int newTable = lua_gettop(L);
+			for (size_t i = 0; i < results.size(); ++i)
+			{
+				const auto& result = results[i];
+				Luna<SphereIntersectionResult_BindLua>::push(L, result);
+				lua_rawseti(L, newTable, lua_Integer(i + 1));
+			}
+			return cnt;
+		}
+
+		Capsule_BindLua* capsule = Luna<Capsule_BindLua>::lightcheck(L, 1);
+		if (capsule != nullptr)
+		{
+			wi::vector<Scene::CapsuleIntersectionResult> results;
+			scene->IntersectsAll(results, capsule->capsule, filterMask, layerMask, lod);
+			int cnt = (int)results.size();
+			lua_createtable(L, cnt, 0);
+			int newTable = lua_gettop(L);
+			for (size_t i = 0; i < results.size(); ++i)
+			{
+				const auto& result = results[i];
+				Luna<SphereIntersectionResult_BindLua>::push(L, result);
+				lua_rawseti(L, newTable, lua_Integer(i + 1));
+			}
+			return cnt;
+		}
+
+		wi::lua::SError(L, "Scene::IntersectsAll(Ray|Sphere|Capsule primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) first argument is not an accepted primitive type!");
+	}
+	else
+	{
+		wi::lua::SError(L, "Scene::IntersectsAll(Ray|Sphere|Capsule primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) not enough arguments!");
 	}
 	return 0;
 }
@@ -1323,6 +1414,23 @@ int Scene_BindLua::Component_CreateSound(lua_State* L)
 	else
 	{
 		wi::lua::SError(L, "Scene::Component_CreateSound(Entity entity) not enough arguments!");
+	}
+	return 0;
+}
+int Scene_BindLua::Component_CreateVideo(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		Entity entity = (Entity)wi::lua::SGetLongLong(L, 1);
+
+		VideoComponent& component = scene->videos.Create(entity);
+		Luna<VideoComponent_BindLua>::push(L, &component);
+		return 1;
+	}
+	else
+	{
+		wi::lua::SError(L, "Scene::Component_CreateVideo(Entity entity) not enough arguments!");
 	}
 	return 0;
 }
@@ -1898,6 +2006,28 @@ int Scene_BindLua::Component_GetSound(lua_State* L)
 	}
 	return 0;
 }
+int Scene_BindLua::Component_GetVideo(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		Entity entity = (Entity)wi::lua::SGetLongLong(L, 1);
+
+		VideoComponent* component = scene->videos.GetComponent(entity);
+		if (component == nullptr)
+		{
+			return 0;
+		}
+
+		Luna<VideoComponent_BindLua>::push(L, component);
+		return 1;
+	}
+	else
+	{
+		wi::lua::SError(L, "Scene::Component_GetVideo(Entity entity) not enough arguments!");
+	}
+	return 0;
+}
 int Scene_BindLua::Component_GetCollider(lua_State* L)
 {
 	int argc = wi::lua::SGetArgCount(L);
@@ -2306,6 +2436,17 @@ int Scene_BindLua::Component_GetSoundArray(lua_State* L)
 	}
 	return 1;
 }
+int Scene_BindLua::Component_GetVideoArray(lua_State* L)
+{
+	lua_createtable(L, (int)scene->videos.GetCount(), 0);
+	int newTable = lua_gettop(L);
+	for (size_t i = 0; i < scene->videos.GetCount(); ++i)
+	{
+		Luna<VideoComponent_BindLua>::push(L, &scene->videos[i]);
+		lua_rawseti(L, newTable, lua_Integer(i + 1));
+	}
+	return 1;
+}
 int Scene_BindLua::Component_GetColliderArray(lua_State* L)
 {
 	lua_createtable(L, (int)scene->colliders.GetCount(), 0);
@@ -2622,6 +2763,17 @@ int Scene_BindLua::Entity_GetSoundArray(lua_State* L)
 	for (size_t i = 0; i < scene->sounds.GetCount(); ++i)
 	{
 		wi::lua::SSetLongLong(L, scene->sounds.GetEntity(i));
+		lua_rawseti(L, newTable, lua_Integer(i + 1));
+	}
+	return 1;
+}
+int Scene_BindLua::Entity_GetVideoArray(lua_State* L)
+{
+	lua_createtable(L, (int)scene->videos.GetCount(), 0);
+	int newTable = lua_gettop(L);
+	for (size_t i = 0; i < scene->videos.GetCount(); ++i)
+	{
+		wi::lua::SSetLongLong(L, scene->videos.GetEntity(i));
 		lua_rawseti(L, newTable, lua_Integer(i + 1));
 	}
 	return 1;
@@ -3066,6 +3218,23 @@ int Scene_BindLua::Component_RemoveSound(lua_State* L)
 	}
 	return 0;
 }
+int Scene_BindLua::Component_RemoveVideo(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		Entity entity = (Entity)wi::lua::SGetLongLong(L, 1);
+		if(scene->videos.Contains(entity))
+		{
+			scene->videos.Remove(entity);
+		}
+	}
+	else
+	{
+		wi::lua::SError(L, "Scene::Component_RemoveVideo(Entity entity) not enough arguments!");
+	}
+	return 0;
+}
 int Scene_BindLua::Component_RemoveCollider(lua_State* L)
 {
 	int argc = wi::lua::SGetArgCount(L);
@@ -3443,6 +3612,160 @@ int Scene_BindLua::FixupNans(lua_State* L)
 	scene->FixupNans();
 	return 0;
 }
+
+
+
+
+
+Luna<RayIntersectionResult_BindLua>::FunctionType RayIntersectionResult_BindLua::methods[] = {
+	lunamethod(RayIntersectionResult_BindLua, GetEntity),
+	lunamethod(RayIntersectionResult_BindLua, GetPosition),
+	lunamethod(RayIntersectionResult_BindLua, GetNormal),
+	lunamethod(RayIntersectionResult_BindLua, GetUV),
+	lunamethod(RayIntersectionResult_BindLua, GetVelocity),
+	lunamethod(RayIntersectionResult_BindLua, GetDistance),
+	lunamethod(RayIntersectionResult_BindLua, GetSubsetIndex),
+	lunamethod(RayIntersectionResult_BindLua, GetVertexID0),
+	lunamethod(RayIntersectionResult_BindLua, GetVertexID1),
+	lunamethod(RayIntersectionResult_BindLua, GetVertexID2),
+	lunamethod(RayIntersectionResult_BindLua, GetBarycentrics),
+	lunamethod(RayIntersectionResult_BindLua, GetOrientation),
+	lunamethod(RayIntersectionResult_BindLua, GetHumanoidBone),
+	{ NULL, NULL }
+};
+Luna<RayIntersectionResult_BindLua>::PropertyType RayIntersectionResult_BindLua::properties[] = {
+	{ NULL, NULL }
+};
+
+int RayIntersectionResult_BindLua::GetEntity(lua_State* L)
+{
+	wi::lua::SSetLongLong(L, result.entity);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetPosition(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.position);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetNormal(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.normal);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetUV(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.uv);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetVelocity(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.velocity);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetDistance(lua_State* L)
+{
+	wi::lua::SSetFloat(L, result.distance);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetSubsetIndex(lua_State* L)
+{
+	wi::lua::SSetInt(L, result.subsetIndex);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetVertexID0(lua_State* L)
+{
+	wi::lua::SSetInt(L, result.vertexID0);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetVertexID1(lua_State* L)
+{
+	wi::lua::SSetInt(L, result.vertexID1);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetVertexID2(lua_State* L)
+{
+	wi::lua::SSetInt(L, result.vertexID2);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetBarycentrics(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.bary);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetOrientation(lua_State* L)
+{
+	Luna<Matrix_BindLua>::push(L, result.orientation);
+	return 1;
+}
+int RayIntersectionResult_BindLua::GetHumanoidBone(lua_State* L)
+{
+	wi::lua::SSetInt(L, (int)result.humanoid_bone);
+	return 1;
+}
+
+
+
+
+
+Luna<SphereIntersectionResult_BindLua>::FunctionType SphereIntersectionResult_BindLua::methods[] = {
+	lunamethod(SphereIntersectionResult_BindLua, GetEntity),
+	lunamethod(SphereIntersectionResult_BindLua, GetPosition),
+	lunamethod(SphereIntersectionResult_BindLua, GetNormal),
+	lunamethod(SphereIntersectionResult_BindLua, GetVelocity),
+	lunamethod(SphereIntersectionResult_BindLua, GetDepth),
+	lunamethod(SphereIntersectionResult_BindLua, GetSubsetIndex),
+	lunamethod(SphereIntersectionResult_BindLua, GetOrientation),
+	lunamethod(SphereIntersectionResult_BindLua, GetHumanoidBone),
+	{ NULL, NULL }
+};
+Luna<SphereIntersectionResult_BindLua>::PropertyType SphereIntersectionResult_BindLua::properties[] = {
+	{ NULL, NULL }
+};
+
+int SphereIntersectionResult_BindLua::GetEntity(lua_State* L)
+{
+	wi::lua::SSetLongLong(L, result.entity);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetPosition(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.position);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetNormal(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.normal);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetVelocity(lua_State* L)
+{
+	Luna<Vector_BindLua>::push(L, result.velocity);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetDepth(lua_State* L)
+{
+	wi::lua::SSetFloat(L, result.depth);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetSubsetIndex(lua_State* L)
+{
+	wi::lua::SSetInt(L, result.subsetIndex);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetOrientation(lua_State* L)
+{
+	Luna<Matrix_BindLua>::push(L, result.orientation);
+	return 1;
+}
+int SphereIntersectionResult_BindLua::GetHumanoidBone(lua_State* L)
+{
+	wi::lua::SSetInt(L, (int)result.humanoid_bone);
+	return 1;
+}
+
+
+
+
 
 
 
@@ -3919,6 +4242,7 @@ Luna<CameraComponent_BindLua>::FunctionType CameraComponent_BindLua::methods[] =
 	lunamethod(CameraComponent_BindLua, SetUpDirection),
 	lunamethod(CameraComponent_BindLua, SetOrtho),
 	lunamethod(CameraComponent_BindLua, IsOrtho),
+	lunamethod(CameraComponent_BindLua, ProjectToScreen),
 	{ NULL, NULL }
 };
 Luna<CameraComponent_BindLua>::PropertyType CameraComponent_BindLua::properties[] = {
@@ -4216,6 +4540,34 @@ int CameraComponent_BindLua::SetOrtho(lua_State* L)
 		wi::lua::SError(L, "SetOrtho(bool value) not enough arguments!");
 	}
 	return 0;
+}
+int CameraComponent_BindLua::ProjectToScreen(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 2)
+	{
+		wi::lua::SError(L, "ProjectToScreen(Vector point, Canvas canvas) not enough arguments!");
+		return 0;
+	}
+	Vector_BindLua* vector = Luna<Vector_BindLua>::lightcheck(L, 1);
+	if (vector == nullptr)
+	{
+		wi::lua::SError(L, "ProjectToScreen(Vector point, Canvas canvas) first argument is not a Vector!");
+		return 0;
+	}
+	Canvas_BindLua* canvas = Luna<Canvas_BindLua>::lightcheck(L, 2);
+	if (canvas == nullptr)
+	{
+		wi::lua::SError(L, "ProjectToScreen(Vector point, Canvas canvas) second argument is not a Canvas!");
+		return 0;
+	}
+	XMVECTOR result = XMLoadFloat4(&vector->data);
+	XMMATRIX VP = component->GetViewProjection();
+	result = XMVector3TransformCoord(result, VP);
+	result = XMVectorMultiplyAdd(result, XMVectorSet(0.5f, -0.5f, 1, 1), XMVectorSet(0.5f, 0.5f, 0, 0));
+	result = XMVectorMultiply(result, XMVectorSet(canvas->canvas.GetLogicalWidth(), canvas->canvas.GetLogicalHeight(), 1, 1));
+	Luna<Vector_BindLua>::push(L, result);
+	return 1;
 }
 
 
@@ -6080,9 +6432,11 @@ Luna<RigidBodyPhysicsComponent_BindLua>::FunctionType RigidBodyPhysicsComponent_
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsDisableDeactivation),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsKinematic),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, IsStartDeactivated),
+	lunamethod(RigidBodyPhysicsComponent_BindLua, IsCharacterPhysics),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, SetDisableDeactivation),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, SetKinematic),
 	lunamethod(RigidBodyPhysicsComponent_BindLua, SetStartDeactivated),
+	lunamethod(RigidBodyPhysicsComponent_BindLua, SetCharacterPhysics),
 	{ NULL, NULL }
 };
 Luna<RigidBodyPhysicsComponent_BindLua>::PropertyType RigidBodyPhysicsComponent_BindLua::properties[] = {
@@ -6098,6 +6452,8 @@ Luna<RigidBodyPhysicsComponent_BindLua>::PropertyType RigidBodyPhysicsComponent_
 	lunaproperty(RigidBodyPhysicsComponent_BindLua, CapsuleParams_Radius),
 	lunaproperty(RigidBodyPhysicsComponent_BindLua, CapsuleParams_Height),
 	lunaproperty(RigidBodyPhysicsComponent_BindLua, TargetMeshLOD),
+	lunaproperty(RigidBodyPhysicsComponent_BindLua, MaxSlopeAngle),
+	lunaproperty(RigidBodyPhysicsComponent_BindLua, GravityFactor),
 	{ NULL, NULL }
 };
 
@@ -6172,6 +6528,25 @@ int RigidBodyPhysicsComponent_BindLua::SetStartDeactivated(lua_State* L)
 		wi::lua::SError(L, "SetStartDeactivated(bool value) not enough arguments!");
 	}
 	return 0;
+}
+int RigidBodyPhysicsComponent_BindLua::SetCharacterPhysics(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		bool value = wi::lua::SGetBool(L, 1);
+		component->SetCharacterPhysics(value);
+	}
+	else
+	{
+		wi::lua::SError(L, "SetCharacterPhysics(bool value) not enough arguments!");
+	}
+	return 0;
+}
+int RigidBodyPhysicsComponent_BindLua::IsCharacterPhysics(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsCharacterPhysics());
+	return 1;
 }
 
 
@@ -6890,6 +7265,141 @@ int SoundComponent_BindLua::GetSoundInstance(lua_State* L)
 
 
 
+Luna<VideoComponent_BindLua>::FunctionType VideoComponent_BindLua::methods[] = {
+	lunamethod(VideoComponent_BindLua, SetFilename),
+	lunamethod(VideoComponent_BindLua, GetFilename),
+	lunamethod(VideoComponent_BindLua, IsPlaying),
+	lunamethod(VideoComponent_BindLua, IsLooped),
+	lunamethod(VideoComponent_BindLua, Play),
+	lunamethod(VideoComponent_BindLua, Stop),
+	lunamethod(VideoComponent_BindLua, SetLooped),
+	lunamethod(VideoComponent_BindLua, GetLength),
+	lunamethod(VideoComponent_BindLua, GetCurrentTimer),
+	lunamethod(VideoComponent_BindLua, Seek),
+	lunamethod(VideoComponent_BindLua, SetVideo),
+	lunamethod(VideoComponent_BindLua, SetVideoInstance),
+	lunamethod(VideoComponent_BindLua, GetVideo),
+	lunamethod(VideoComponent_BindLua, GetVideoInstance),
+	{ NULL, NULL }
+};
+Luna<VideoComponent_BindLua>::PropertyType VideoComponent_BindLua::properties[] = {
+	lunaproperty(VideoComponent_BindLua, Filename),
+	{ NULL, NULL }
+};
+
+int VideoComponent_BindLua::IsPlaying(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsPlaying());
+	return 1;
+}
+int VideoComponent_BindLua::IsLooped(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsLooped());
+	return 1;
+}
+int VideoComponent_BindLua::Play(lua_State* L)
+{
+	component->Play();
+	return 0;
+}
+int VideoComponent_BindLua::Stop(lua_State* L)
+{
+	component->Stop();
+	return 0;
+}
+int VideoComponent_BindLua::SetLooped(lua_State* L)
+{
+	bool value = true;
+
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		value = wi::lua::SGetBool(L, 1);
+	}
+
+	component->SetLooped(value);
+
+	return 0;
+}
+int VideoComponent_BindLua::GetLength(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->GetLength());
+	return 1;
+}
+int VideoComponent_BindLua::GetCurrentTimer(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->currentTimer);
+	return 1;
+}
+int VideoComponent_BindLua::Seek(lua_State* L)
+{
+	float value = 0;
+
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		value = wi::lua::SGetFloat(L, 1);
+	}
+
+	component->Seek(value);
+
+	return 0;
+}
+int VideoComponent_BindLua::SetVideo(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 1)
+	{
+		wi::lua::SError(L, "SetVideo(Video Video): not enough arguments!");
+		return 0;
+	}
+
+	Video_BindLua* Video = Luna<Video_BindLua>::lightcheck(L, 1);
+	if (Video == nullptr)
+	{
+		wi::lua::SError(L, "SetVideo(Video Video): argument is not a Video!");
+		return 0;
+	}
+
+	component->videoResource = Video->videoResource;
+	return 0;
+}
+int VideoComponent_BindLua::SetVideoInstance(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 1)
+	{
+		wi::lua::SError(L, "SetVideoInstance(VideoInstance inst): not enough arguments!");
+		return 0;
+	}
+
+	VideoInstance_BindLua* inst = Luna<VideoInstance_BindLua>::lightcheck(L, 1);
+	if (inst == nullptr)
+	{
+		wi::lua::SError(L, "SetVideoInstance(VideoInstance inst): argument is not a VideoInstance!");
+		return 0;
+	}
+
+	component->videoinstance = inst->videoinstance;
+	return 0;
+}
+int VideoComponent_BindLua::GetVideo(lua_State* L)
+{
+	Luna<Video_BindLua>::push(L, component->videoResource);
+	return 1;
+}
+int VideoComponent_BindLua::GetVideoInstance(lua_State* L)
+{
+	Luna<VideoInstance_BindLua>::push(L, component->videoinstance);
+	return 1;
+}
+
+
+
+
+
+
+
 Luna<ColliderComponent_BindLua>::FunctionType ColliderComponent_BindLua::methods[] = {
 	lunamethod(ColliderComponent_BindLua, SetCPUEnabled),
 	lunamethod(ColliderComponent_BindLua, SetGPUEnabled),
@@ -7263,6 +7773,10 @@ Luna<HumanoidComponent_BindLua>::FunctionType HumanoidComponent_BindLua::methods
 	lunamethod(HumanoidComponent_BindLua, SetRagdollHeadSize),
 	lunamethod(HumanoidComponent_BindLua, GetRagdollFatness),
 	lunamethod(HumanoidComponent_BindLua, GetRagdollHeadSize),
+	lunamethod(HumanoidComponent_BindLua, SetArmSpacing),
+	lunamethod(HumanoidComponent_BindLua, GetArmSpacing),
+	lunamethod(HumanoidComponent_BindLua, SetLegSpacing),
+	lunamethod(HumanoidComponent_BindLua, GetLegSpacing),
 	{ NULL, NULL }
 };
 Luna<HumanoidComponent_BindLua>::PropertyType HumanoidComponent_BindLua::properties[] = {
@@ -7398,6 +7912,42 @@ int HumanoidComponent_BindLua::GetRagdollFatness(lua_State* L)
 int HumanoidComponent_BindLua::GetRagdollHeadSize(lua_State* L)
 {
 	wi::lua::SSetFloat(L, component->ragdoll_headsize);
+	return 1;
+}
+int HumanoidComponent_BindLua::SetArmSpacing(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		component->arm_spacing = wi::lua::SGetFloat(L, 1);
+	}
+	else
+	{
+		wi::lua::SError(L, "SetArmSpacing(float value) not enough arguments!");
+	}
+	return 0;
+}
+int HumanoidComponent_BindLua::GetArmSpacing(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->arm_spacing);
+	return 1;
+}
+int HumanoidComponent_BindLua::SetLegSpacing(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc > 0)
+	{
+		component->leg_spacing = wi::lua::SGetFloat(L, 1);
+	}
+	else
+	{
+		wi::lua::SError(L, "SetLegSpacing(float value) not enough arguments!");
+	}
+	return 0;
+}
+int HumanoidComponent_BindLua::GetLegSpacing(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->leg_spacing);
 	return 1;
 }
 
@@ -7662,12 +8212,14 @@ Luna<CharacterComponent_BindLua>::FunctionType CharacterComponent_BindLua::metho
 	lunamethod(CharacterComponent_BindLua, Jump),
 	lunamethod(CharacterComponent_BindLua, Turn),
 	lunamethod(CharacterComponent_BindLua, Lean),
+	lunamethod(CharacterComponent_BindLua, Shake),
 
 	lunamethod(CharacterComponent_BindLua, AddAnimation),
 	lunamethod(CharacterComponent_BindLua, PlayAnimation),
 	lunamethod(CharacterComponent_BindLua, StopAnimation),
 	lunamethod(CharacterComponent_BindLua, SetAnimationAmount),
 	lunamethod(CharacterComponent_BindLua, GetAnimationAmount),
+	lunamethod(CharacterComponent_BindLua, GetAnimationTimer),
 	lunamethod(CharacterComponent_BindLua, IsAnimationEnded),
 
 	lunamethod(CharacterComponent_BindLua, SetGroundFriction),
@@ -7690,6 +8242,7 @@ Luna<CharacterComponent_BindLua>::FunctionType CharacterComponent_BindLua::metho
 	lunamethod(CharacterComponent_BindLua, SetRelativeOffset),
 	lunamethod(CharacterComponent_BindLua, SetFootPlacementEnabled),
 	lunamethod(CharacterComponent_BindLua, SetCharacterToCharacterCollisionDisabled),
+	lunamethod(CharacterComponent_BindLua, SetDedicatedShadow),
 
 	lunamethod(CharacterComponent_BindLua, GetHealth),
 	lunamethod(CharacterComponent_BindLua, GetWidth),
@@ -7705,6 +8258,7 @@ Luna<CharacterComponent_BindLua>::FunctionType CharacterComponent_BindLua::metho
 	lunamethod(CharacterComponent_BindLua, IsSwimming),
 	lunamethod(CharacterComponent_BindLua, IsFootPlacementEnabled),
 	lunamethod(CharacterComponent_BindLua, IsCharacterToCharacterCollisionDisabled),
+	lunamethod(CharacterComponent_BindLua, IsDedicatedShadow),
 	lunamethod(CharacterComponent_BindLua, GetCapsule),
 	lunamethod(CharacterComponent_BindLua, GetFacing),
 	lunamethod(CharacterComponent_BindLua, GetFacingSmoothed),
@@ -7794,6 +8348,33 @@ int CharacterComponent_BindLua::Lean(lua_State* L)
 	component->Lean(wi::lua::SGetFloat(L, 1));
 	return 0;
 }
+int CharacterComponent_BindLua::Shake(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 1)
+	{
+		wi::lua::SError(L, "Shake(float horizontal, opt float vertical = 0) not enough arguments!");
+		return 0;
+	}
+	float horizontal = wi::lua::SGetFloat(L, 1);
+	float vertical = 0;
+	float frequency = 100;
+	float decay = 10;
+	if (argc > 1)
+	{
+		vertical = wi::lua::SGetFloat(L, 2);
+		if (argc > 2)
+		{
+			frequency = wi::lua::SGetFloat(L, 3);
+			if (argc > 3)
+			{
+				decay = wi::lua::SGetFloat(L, 4);
+			}
+		}
+	}
+	component->Shake(horizontal, vertical, frequency, decay);
+	return 0;
+}
 
 int CharacterComponent_BindLua::AddAnimation(lua_State* L)
 {
@@ -7837,6 +8418,11 @@ int CharacterComponent_BindLua::SetAnimationAmount(lua_State* L)
 int CharacterComponent_BindLua::GetAnimationAmount(lua_State* L)
 {
 	wi::lua::SSetFloat(L, component->GetAnimationAmount());
+	return 1;
+}
+int CharacterComponent_BindLua::GetAnimationTimer(lua_State* L)
+{
+	wi::lua::SSetFloat(L, component->GetAnimationTimer());
 	return 1;
 }
 int CharacterComponent_BindLua::IsAnimationEnded(lua_State* L)
@@ -8079,6 +8665,17 @@ int CharacterComponent_BindLua::SetCharacterToCharacterCollisionDisabled(lua_Sta
 	component->SetCharacterToCharacterCollisionDisabled(wi::lua::SGetBool(L, 1));
 	return 0;
 }
+int CharacterComponent_BindLua::SetDedicatedShadow(lua_State* L)
+{
+	int argc = wi::lua::SGetArgCount(L);
+	if (argc < 1)
+	{
+		wi::lua::SError(L, "SetDedicatedShadow(bool value) not enough arguments!");
+		return 0;
+	}
+	component->SetDedicatedShadow(wi::lua::SGetBool(L, 1));
+	return 0;
+}
 
 int CharacterComponent_BindLua::GetHealth(lua_State* L)
 {
@@ -8148,6 +8745,11 @@ int CharacterComponent_BindLua::IsFootPlacementEnabled(lua_State* L)
 int CharacterComponent_BindLua::IsCharacterToCharacterCollisionDisabled(lua_State* L)
 {
 	wi::lua::SSetBool(L, component->IsCharacterToCharacterCollisionDisabled());
+	return 1;
+}
+int CharacterComponent_BindLua::IsDedicatedShadow(lua_State* L)
+{
+	wi::lua::SSetBool(L, component->IsDedicatedShadow());
 	return 1;
 }
 int CharacterComponent_BindLua::GetCapsule(lua_State* L)

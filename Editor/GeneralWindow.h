@@ -12,6 +12,7 @@ public:
 	wi::gui::CheckBox otherinfoCheckBox;
 	wi::gui::Slider masterVolumeSlider;
 	wi::gui::ComboBox themeCombo;
+	wi::gui::Button themeEditorButton;
 	wi::gui::ComboBox saveModeComboBox;
 	wi::gui::CheckBox saveCompressionCheckBox;
 	wi::gui::ComboBox languageCombo;
@@ -35,6 +36,7 @@ public:
 	wi::gui::CheckBox forceDiffuseLightingCheckBox;
 	wi::gui::CheckBox focusModeCheckBox;
 
+	wi::gui::Slider outlineOpacitySlider;
 	wi::gui::Slider transformToolOpacitySlider;
 	wi::gui::Slider transformToolDarkenSlider;
 	wi::gui::Slider bonePickerOpacitySlider;
@@ -43,11 +45,15 @@ public:
 	wi::gui::Button localizationButton;
 	wi::gui::Button eliminateCoarseCascadesButton;
 	wi::gui::Button ddsConvButton;
-	wi::gui::Button ktxConvButton;
 	wi::gui::Button duplicateCollidersButton;
+
+	std::string currentTheme;
 
 	void ResizeLayout() override;
 
 	void RefreshLanguageSelectionAfterWholeGUIWasInitialized();
+
+	void RefreshTheme();
+	void ReloadThemes();
 };
 

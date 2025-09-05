@@ -49,14 +49,8 @@
 
 PUSHCONSTANT(push, ObjectPushConstants);
 
-inline ShaderGeometry GetMesh()
-{
-	return load_geometry(push.geometryIndex);
-}
-inline ShaderMaterial GetMaterial()
-{
-	return load_material(push.materialIndex);
-}
+#define GetMesh() (load_geometry(push.geometryIndex))
+#define GetMaterial() (load_material(push.materialIndex))
 
 #define sampler_objectshader bindless_samplers[descriptor_index(GetMaterial().sampler_descriptor)]
 
@@ -358,7 +352,7 @@ struct PixelInput
 	inline float3 GetPos3D()
 	{
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
-		ShaderCamera camera = GetCamera(GetCameraIndex());
+		ShaderCamera camera = GetCameraIndexed(GetCameraIndex());
 #else
 		ShaderCamera camera = GetCamera();
 #endif // OBJECTSHADER_USE_CAMERAINDEX
@@ -369,7 +363,7 @@ struct PixelInput
 	inline float3 GetViewVector()
 	{
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
-		ShaderCamera camera = GetCamera(GetCameraIndex());
+		ShaderCamera camera = GetCameraIndexed(GetCameraIndex());
 #else
 		ShaderCamera camera = GetCamera();
 #endif // OBJECTSHADER_USE_CAMERAINDEX
@@ -388,7 +382,7 @@ PixelInput vertex_to_pixel_export(VertexInput input)
 	Out.pos = surface.position;
 
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
-	ShaderCamera camera = GetCamera(input.GetInstancePointer().GetCameraIndex());
+	ShaderCamera camera = GetCameraIndexed(input.GetInstancePointer().GetCameraIndex());
 #else
 	ShaderCamera camera = GetCamera();
 #endif // OBJECTSHADER_USE_CAMERAINDEX
@@ -498,7 +492,7 @@ float4 main(PixelInput input, in bool is_frontface : SV_IsFrontFace APPEND_COVER
 // Pixel shader base:
 {
 #ifdef OBJECTSHADER_USE_CAMERAINDEX
-	ShaderCamera camera = GetCamera(input.GetCameraIndex());
+	ShaderCamera camera = GetCameraIndexed(input.GetCameraIndex());
 #else
 	ShaderCamera camera = GetCamera();
 #endif // OBJECTSHADER_USE_CAMERAINDEX
@@ -521,17 +515,6 @@ float4 main(PixelInput input, in bool is_frontface : SV_IsFrontFace APPEND_COVER
 	write_mipmap_feedback(push.materialIndex, ddx_coarse(uvsets), ddy_coarse(uvsets));
 #endif // TILEDFORWARD
 
-#ifndef DISABLE_ALPHATEST
-#ifndef TRANSPARENT
-#ifndef ENVMAPRENDERING
-#ifdef OBJECTSHADER_USE_DITHERING
-	// apply dithering:
-	clip(dither(pixel + GetTemporalAASampleRotation()) - input.GetDither());
-#endif // OBJECTSHADER_USE_DITHERING
-#endif // DISABLE_ALPHATEST
-#endif // TRANSPARENT
-#endif // ENVMAPRENDERING
-
 #ifdef OBJECTSHADER_USE_INSTANCEINDEX
 	ShaderMeshInstance meshinstance = load_instance(input.GetInstanceIndex());
 #endif // OBJECTSHADER_USE_INSTANCEINDEX
@@ -545,6 +528,7 @@ float4 main(PixelInput input, in bool is_frontface : SV_IsFrontFace APPEND_COVER
 		input.nor = -input.nor;
 	}
 	surface.N = normalize(input.nor);
+	surface.facenormal = surface.N;
 #endif // OBJECTSHADER_USE_NORMAL
 
 #ifdef OBJECTSHADER_USE_COMMON
@@ -1083,8 +1067,21 @@ float4 main(PixelInput input, in bool is_frontface : SV_IsFrontFace APPEND_COVER
 
 	color = saturateMediump(color);
 
+	half alphatest = material.GetAlphaTest() + meshinstance.GetAlphaTest();
+
+	half dithering = 0;
 #ifndef DISABLE_ALPHATEST
-	coverage = AlphaToCoverage(color.a, material.GetAlphaTest() + meshinstance.GetAlphaTest(), input.pos); // opaque soft alpha test (MSAA, temporal AA support)
+#ifndef TRANSPARENT
+#ifndef ENVMAPRENDERING
+#ifdef OBJECTSHADER_USE_DITHERING
+	dithering = input.GetDither();
+#endif // OBJECTSHADER_USE_DITHERING
+#endif // DISABLE_ALPHATEST
+#endif // TRANSPARENT
+#endif // ENVMAPRENDERING
+
+#ifndef DISABLE_ALPHATEST
+	coverage = AlphaToCoverage(color.a, alphatest, dithering, input.pos); // opaque soft alpha test (MSAA, temporal AA support)
 #endif // DISABLE_ALPHATEST
 	
 	// end point:

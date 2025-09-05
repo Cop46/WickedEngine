@@ -18,7 +18,7 @@ namespace wi::terrain
 		{
 			struct
 			{
-				int x, z;
+				int32_t x, z;
 			};
 			uint64_t raw = 0;
 		};
@@ -225,6 +225,7 @@ namespace wi::terrain
 		const XMFLOAT3* mesh_vertex_positions = nullptr;
 		wi::HairParticleSystem grass;
 		wi::vector<BlendmapLayer> blendmap_layers;
+		wi::vector<BlendmapLayer> spline_blendmap_layers;
 		wi::graphics::Texture blendmap;
 		wi::primitive::Sphere sphere;
 		XMFLOAT3 position = XMFLOAT3(0, 0, 0);
@@ -278,13 +279,14 @@ namespace wi::terrain
 		wi::ecs::Entity terrainEntity = wi::ecs::INVALID_ENTITY;
 		wi::ecs::Entity chunkGroupEntity = wi::ecs::INVALID_ENTITY;
 		wi::scene::Scene* scene = nullptr;
-		wi::vector<wi::ecs::Entity> materialEntities = {};
+		wi::vector<wi::ecs::Entity> materialEntities;
+		wi::vector<wi::ecs::Entity> splineMaterialEntities;
 		wi::ecs::Entity grassEntity = wi::ecs::INVALID_ENTITY;
 		wi::scene::WeatherComponent weather;
 		wi::HairParticleSystem grass_properties;
 		wi::scene::MaterialComponent grass_material;
 		wi::unordered_map<Chunk, ChunkData> chunks;
-		Chunk center_chunk = {};
+		Chunk center_chunk;
 		wi::noise::Perlin perlin_noise;
 		wi::vector<Prop> props;
 		int grass_chunk_dist = 1;
@@ -381,6 +383,10 @@ namespace wi::terrain
 		float weight = 0.5f;
 		float frequency = 0.0008f;
 
+		// helpers for more user friendly setup with scaling in world space:
+		constexpr void SetScale(float scale) { frequency = 1.0f / scale; }
+		constexpr float GetScale() const { return 1.0f / frequency; }
+
 		virtual void Seed(uint32_t seed) {}
 		virtual void Apply(const XMFLOAT2& world_pos, float& height) = 0;
 		constexpr void Blend(float& height, float value)
@@ -453,13 +459,13 @@ namespace wi::terrain
 	};
 	struct HeightmapModifier : public Modifier
 	{
-		float scale = 0.1f;
+		float amount = 0.1f; // multiplier for height values
 
 		wi::vector<uint8_t> data;
 		int width = 0;
 		int height = 0;
 
-		HeightmapModifier() { type = Type::Heightmap; }
+		HeightmapModifier() { type = Type::Heightmap; SetScale(1.0f); }
 		void Apply(const XMFLOAT2& world_pos, float& height) override
 		{
 			XMFLOAT2 p = world_pos;
@@ -478,7 +484,7 @@ namespace wi::terrain
 				{
 					value = ((float)((uint16_t*)data.data())[idx] / 65535.0f);
 				}
-				Blend(height, value * scale);
+				Blend(height, value * amount);
 			}
 		}
 	};

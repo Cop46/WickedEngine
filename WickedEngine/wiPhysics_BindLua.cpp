@@ -33,6 +33,15 @@ namespace wi::lua
 		lunamethod(Physics_BindLua, ActivateAllRigidBodies),
 		lunamethod(Physics_BindLua, ResetPhysicsObjects),
 		lunamethod(Physics_BindLua, GetVelocity),
+		lunamethod(Physics_BindLua, GetPosition),
+		lunamethod(Physics_BindLua, GetRotation),
+		lunamethod(Physics_BindLua, GetCharacterGroundPosition),
+		lunamethod(Physics_BindLua, GetCharacterGroundNormal),
+		lunamethod(Physics_BindLua, GetCharacterGroundVelocity),
+		lunamethod(Physics_BindLua, IsCharacterGroundSupported),
+		lunamethod(Physics_BindLua, GetCharacterGroundState),
+		lunamethod(Physics_BindLua, ChangeCharacterShape),
+		lunamethod(Physics_BindLua, MoveCharacter),
 		lunamethod(Physics_BindLua, SetGhostMode),
 		lunamethod(Physics_BindLua, SetRagdollGhostMode),
 		lunamethod(Physics_BindLua, Intersects),
@@ -538,6 +547,215 @@ namespace wi::lua
 			wi::lua::SError(L, "GetVelocity(RigidBodyPhysicsComponent component) not enough arguments!");
 		return 0;
 	}
+	int Physics_BindLua::GetPosition(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetPosition(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Luna<Vector_BindLua>::push(L, wi::physics::GetPosition(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetPosition(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::GetRotation(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetRotation(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Luna<Vector_BindLua>::push(L, wi::physics::GetRotation(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetRotation(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::GetCharacterGroundPosition(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetCharacterGroundPosition(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Luna<Vector_BindLua>::push(L, wi::physics::GetCharacterGroundPosition(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetCharacterGroundPosition(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::GetCharacterGroundNormal(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetCharacterGroundNormal(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Luna<Vector_BindLua>::push(L, wi::physics::GetCharacterGroundNormal(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetCharacterGroundNormal(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::GetCharacterGroundVelocity(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetCharacterGroundVelocity(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Luna<Vector_BindLua>::push(L, wi::physics::GetCharacterGroundVelocity(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetCharacterGroundVelocity(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::IsCharacterGroundSupported(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "IsCharacterGroundSupported(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			wi::lua::SSetBool(L, wi::physics::IsCharacterGroundSupported(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "IsCharacterGroundSupported(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::GetCharacterGroundState(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "GetCharacterGroundState(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			wi::lua::SSetInt(L, (int)wi::physics::GetCharacterGroundState(*component->component));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "GetCharacterGroundState(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::ChangeCharacterShape(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 0)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "ChangeCharacterShape(RigidBodyPhysicsComponent component) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			wi::scene::RigidBodyPhysicsComponent::CapsuleParams capsule;
+			if (argc > 1)
+			{
+				capsule.height = wi::lua::SGetFloat(L, 2);
+				if (argc > 2)
+				{
+					capsule.radius = wi::lua::SGetFloat(L, 3);
+				}
+			}
+			wi::lua::SSetBool(L, wi::physics::ChangeCharacterShape(*component->component, capsule));
+			return 1;
+		}
+		else
+			wi::lua::SError(L, "ChangeCharacterShape(RigidBodyPhysicsComponent component) not enough arguments!");
+		return 0;
+	}
+	int Physics_BindLua::MoveCharacter(lua_State* L)
+	{
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 1)
+		{
+			scene::RigidBodyPhysicsComponent_BindLua* component = Luna<scene::RigidBodyPhysicsComponent_BindLua>::lightcheck(L, 1);
+			if (component == nullptr)
+			{
+				wi::lua::SError(L, "MoveCharacter(RigidBodyPhysicsComponent component, Vector movement_direction, opt float movement_speed = 6, opt float jump = 0, opt bool controlMovementDuringJump = false) first argument is not a RigidBodyPhysicsComponent!");
+				return 0;
+			}
+
+			Vector_BindLua* vec = Luna<Vector_BindLua>::lightcheck(L, 2);
+			if (vec == nullptr)
+			{
+				wi::lua::SError(L, "MoveCharacter(RigidBodyPhysicsComponent component, Vector movement_direction, opt float movement_speed = 6, opt float jump = 0, opt bool controlMovementDuringJump = false) second argument is not a Vector!");
+				return 0;
+			}
+
+			float movement_speed = 6.0f;
+			float jump = 0;
+			bool controlMovementDuringJump = false;
+
+			if (argc > 2)
+			{
+				movement_speed = wi::lua::SGetFloat(L, 3);
+				if (argc > 3)
+				{
+					jump = wi::lua::SGetFloat(L, 4);
+					if (argc > 4)
+					{
+						controlMovementDuringJump = wi::lua::SGetBool(L, 5);
+					}
+				}
+			}
+
+			wi::physics::MoveCharacter(
+				*component->component,
+				vec->GetFloat3(),
+				movement_speed,
+				jump,
+				controlMovementDuringJump
+			);
+		}
+		else
+			wi::lua::SError(L, "MoveCharacter(RigidBodyPhysicsComponent component, Vector movement_direction, opt float movement_speed = 6, opt float jump = 0, opt bool controlMovementDuringJump = false) not enough arguments!");
+		return 0;
+	}
 	int Physics_BindLua::SetGhostMode(lua_State* L)
 	{
 		int argc = wi::lua::SGetArgCount(L);
@@ -621,26 +839,39 @@ namespace wi::lua
 			scene::Scene_BindLua* scene = Luna<scene::Scene_BindLua>::lightcheck(L, 1);
 			if (scene == nullptr)
 			{
-				wi::lua::SError(L, "Intersects(Scene, Ray, PickDragOperation) first argument is not a Scene!");
+				wi::lua::SError(L, "PickDrag(Scene, Ray, PickDragOperation) first argument is not a Scene!");
 				return 0;
 			}
 			primitive::Ray_BindLua* ray = Luna<primitive::Ray_BindLua>::lightcheck(L, 2);
 			if (ray == nullptr)
 			{
-				wi::lua::SError(L, "Intersects(Scene, Ray, PickDragOperation) second argument is not a Ray!");
+				wi::lua::SError(L, "PickDrag(Scene, Ray, PickDragOperation) second argument is not a Ray!");
 				return 0;
 			}
 			PickDragOperation_BindLua* op = Luna<PickDragOperation_BindLua>::lightcheck(L, 3);
 			if (op == nullptr)
 			{
-				wi::lua::SError(L, "Intersects(Scene, Ray, PickDragOperation) third argument is not a PickDragOperation!");
+				wi::lua::SError(L, "PickDrag(Scene, Ray, PickDragOperation) third argument is not a PickDragOperation!");
 				return 0;
 			}
 
-			wi::physics::PickDrag(*scene->scene, ray->ray, op->op);
+			wi::physics::ConstraintType type = wi::physics::ConstraintType::Fixed;
+			float break_distance = FLT_MAX;
+
+			if (argc > 3)
+			{
+				type = (wi::physics::ConstraintType)wi::lua::SGetInt(L, 4);
+
+				if (argc > 4)
+				{
+					break_distance = wi::lua::SGetFloat(L, 5);
+				}
+			}
+
+			wi::physics::PickDrag(*scene->scene, ray->ray, op->op, type, break_distance);
 			return 0;
 		}
-		wi::lua::SError(L, "Intersects(Scene, Ray, PickDragOperation) not enough arguments!");
+		wi::lua::SError(L, "PickDrag(Scene, Ray, PickDragOperation) not enough arguments!");
 		return 0;
 	}
 
@@ -729,6 +960,18 @@ namespace wi::lua
 			wi::lua::RunText(R"(
 ACTIVATION_STATE_ACTIVE = 0
 ACTIVATION_STATE_INACTIVE = 1
+
+ConstraintType = {
+	Fixed = 0,
+	Point = 1
+}
+
+CharacterGroundStates = {
+	OnGround = 0,
+	OnSteepGround = 1,
+	NotSupported = 2,
+	InAir = 3,
+}
 )");
 		}
 	}

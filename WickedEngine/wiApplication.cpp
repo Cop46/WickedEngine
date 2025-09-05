@@ -114,6 +114,11 @@ namespace wi
 				desc.height = swapChain.desc.height;
 				desc.format = Format::R11G11B10_FLOAT;
 				desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
+				// try to set background color for swapchain color as if it's using hdr scaling:
+				desc.clear.color[0] = swapChain.desc.clear_color[0] * 9;
+				desc.clear.color[1] = swapChain.desc.clear_color[1] * 9;
+				desc.clear.color[2] = swapChain.desc.clear_color[2] * 9;
+				desc.clear.color[3] = swapChain.desc.clear_color[3];
 				bool success = graphicsDevice->CreateTexture(&desc, nullptr, &rendertargetPreHDR10);
 				assert(success);
 				graphicsDevice->SetName(&rendertargetPreHDR10, "Application::rendertargetPreHDR10");
@@ -143,8 +148,56 @@ namespace wi
 			viewport.width = (float)swapChain.desc.width;
 			viewport.height = (float)swapChain.desc.height;
 			graphicsDevice->BindViewports(1, &viewport, cmd);
-			if (wi::initializer::IsInitializeFinished(wi::initializer::INITIALIZED_SYSTEM_FONT))
+			static bool splash_screen_check = false;
+			if (!splash_screen.IsValid() && !splash_screen_check)
 			{
+				splash_screen_check = true;
+				std::string splash_screen_path = wi::helper::GetCurrentPath() + "/splash_screen.png";
+				if (wi::helper::FileExists(splash_screen_path))
+				{
+					wi::Resource resource = wi::resourcemanager::Load(splash_screen_path);
+					if (resource.IsValid())
+					{
+						splash_screen = resource.GetTexture();
+						splash_screen_subresource = graphicsDevice->CreateSubresource(&splash_screen, SubresourceType::SRV, 0, 1, 0, 1); // only first mip! mipgen is not initialized at this point...
+					}
+				}
+			}
+			if (splash_screen.IsValid())
+			{
+				if (wi::initializer::IsInitializeFinished(wi::initializer::INITIALIZED_SYSTEM_IMAGE))
+				{
+					// Draw the splash screen while engine is initializing and image renderer is ready
+					wi::image::SetCanvas(canvas);
+					wi::image::Params fx;
+					const TextureDesc& desc = splash_screen.GetDesc();
+					const float canvas_aspect = canvas.GetLogicalWidth() / canvas.GetLogicalHeight();
+					const float image_aspect = float(desc.width) / float(desc.height);
+					if (canvas_aspect > image_aspect)
+					{
+						// display aspect is wider than image:
+						fx.siz.x = canvas.GetLogicalWidth();
+						fx.siz.y = canvas.GetLogicalHeight() / image_aspect * canvas_aspect;
+					}
+					else
+					{
+						// image aspect is wider or equal to display
+						fx.siz.x = canvas.GetLogicalWidth() / canvas_aspect * image_aspect;
+						fx.siz.y = canvas.GetLogicalHeight();
+					}
+					fx.pos = XMFLOAT3(canvas.GetLogicalWidth() * 0.5f, canvas.GetLogicalHeight() * 0.5f, 0);
+					fx.pivot = XMFLOAT2(0.5f, 0.5f);
+					if (colorspace != ColorSpace::SRGB)
+					{
+						fx.enableLinearOutputMapping(9);
+					}
+					fx.image_subresource = splash_screen_subresource;
+					wi::image::Draw(&splash_screen, fx, cmd);
+				}
+			}
+			else if (wi::initializer::IsInitializeFinished(wi::initializer::INITIALIZED_SYSTEM_FONT))
+			{
+				// If there is no splash screen, the log is rendered while engine is initializing
 				ColorSpace colorspace = graphicsDevice->GetSwapChainColorSpace(&swapChain);
 				wi::backlog::DrawOutputText(canvas, cmd, colorspace);
 			}
@@ -165,24 +218,38 @@ namespace wi
 			return;
 		}
 
+		splash_screen = {}; // splash screen no longer needed after initialization, it is deleted
+
 		static bool startup_script = false;
 		if (!startup_script)
 		{
 			startup_script = true;
-			std::string startup_lua_filename = wi::helper::GetCurrentPath() + "/startup.lua";
-			if (wi::helper::FileExists(startup_lua_filename))
+			const std::string workingdir = wi::helper::GetCurrentPath() + "/";
+			const std::string rewriteable_script_filename = workingdir + rewriteable_startup_script_text;
+			if (wi::helper::FileExists(rewriteable_script_filename))
 			{
-				if (wi::lua::RunFile(startup_lua_filename))
+				if (wi::lua::RunFile(rewriteable_script_filename))
 				{
-					wi::backlog::post("Executed startup file: " + startup_lua_filename);
+					wi::backlog::post("Executed startup file: " + rewriteable_script_filename);
 				}
 			}
-			std::string startup_luab_filename = wi::helper::GetCurrentPath() + "/startup.luab";
-			if (wi::helper::FileExists(startup_luab_filename))
+			else
 			{
-				if (wi::lua::RunBinaryFile(startup_luab_filename))
+				const std::string startup_lua_filename = workingdir + "startup.lua";
+				if (wi::helper::FileExists(startup_lua_filename))
 				{
-					wi::backlog::post("Executed startup file: " + startup_luab_filename);
+					if (wi::lua::RunFile(startup_lua_filename))
+					{
+						wi::backlog::post("Executed startup file: " + startup_lua_filename);
+					}
+				}
+				const std::string startup_luab_filename = workingdir + "startup.luab";
+				if (wi::helper::FileExists(startup_luab_filename))
+				{
+					if (wi::lua::RunBinaryFile(startup_luab_filename))
+					{
+						wi::backlog::post("Executed startup file: " + startup_luab_filename);
+					}
 				}
 			}
 		}
@@ -318,6 +385,7 @@ namespace wi
 		wi::input::ClearForNextFrame();
 		wi::profiler::EndFrame(cmd);
 		graphicsDevice->SubmitCommandLists();
+		wi::renderer::UpdateGPUSuballocator();
 	}
 
 	void Application::Update(float dt)
@@ -533,9 +601,14 @@ namespace wi
 				infodisplay_str += std::to_string(graphicsDevice->GetActivePipelineCount());
 				infodisplay_str += "\n";
 			}
-			if (infoDisplay.pipeline_creation && wi::renderer::IsPipelineCreationActive())
+
+			if (infoDisplay.pipeline_creation)
 			{
-				infodisplay_str += "Shader pipeline creation is running...\n";
+				int pipeline_creation = wi::renderer::IsPipelineCreationActive();
+				if (pipeline_creation > 0)
+				{
+					infodisplay_str += "Pending pipeline creations by graphics driver: " + std::to_string(pipeline_creation) + ". Some rendering will be skipped.\n";
+				}
 			}
 
 			wi::font::Params params = wi::font::Params(
@@ -719,13 +792,8 @@ namespace wi
 
 		canvas.init(window);
 
-		SwapChainDesc desc;
-		if (swapChain.IsValid())
-		{
-			// it will only resize, but keep format and other settings
-			desc = swapChain.desc;
-		}
-		else
+		SwapChainDesc desc = swapChain.desc;
+		if (!swapChain.IsValid())
 		{
 			// initialize for the first time
 			desc.buffer_count = 3;
@@ -794,6 +862,11 @@ namespace wi
 #elif defined(PLATFORM_LINUX)
 		SDL_SetWindowFullscreen(window, fullscreen ? SDL_WINDOW_FULLSCREEN_DESKTOP : 0);
 #endif // PLATFORM_WINDOWS_DESKTOP
+	}
+
+	bool Application::IsScriptReplacement() const
+	{
+		return wi::helper::FileExists(rewriteable_startup_script_text);
 	}
 
 }

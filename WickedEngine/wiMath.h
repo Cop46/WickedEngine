@@ -5,12 +5,15 @@
 #include <algorithm>
 #include <limits>
 
-#if __has_include("DirectXMath.h")
+#ifndef WICKED_CMAKE_BUILD
+  #define _XM_F16C_INTRINSICS_
+  #define _XM_FMA3_INTRINSICS_
+#endif
+
+#if __has_include(<DirectXMath.h>)
 // In this case, DirectXMath is coming from Windows SDK.
 //	It is better to use this on Windows as some Windows libraries could depend on the same
 //	DirectXMath headers
-#define _XM_F16C_INTRINSICS_
-#define _XM_FMA3_INTRINSICS_
 #include <DirectXMath.h>
 #include <DirectXPackedVector.h>
 #include <DirectXCollision.h>
@@ -18,12 +21,9 @@
 // In this case, DirectXMath is coming from supplied source code
 //	On platforms that don't have Windows SDK, the source code for DirectXMath is provided
 //	as part of the engine utilities
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wuninitialized"
-#include "Utility/DirectXMath.h"
-#include "Utility/DirectXPackedVector.h"
-#include "Utility/DirectXCollision.h"
-#pragma GCC diagnostic pop
+#include "Utility/DirectXMath/DirectXMath.h"
+#include "Utility/DirectXMath/DirectXPackedVector.h"
+#include "Utility/DirectXMath/DirectXCollision.h"
 #endif
 
 using namespace DirectX;

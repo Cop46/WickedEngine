@@ -120,7 +120,6 @@ namespace wi::graphics
 		wi::vector<VkQueueFamilyVideoPropertiesKHR> queueFamiliesVideo;
 		uint32_t graphicsFamily = VK_QUEUE_FAMILY_IGNORED;
 		uint32_t computeFamily = VK_QUEUE_FAMILY_IGNORED;
-		uint32_t computeFamilyCount = 0;
 		uint32_t copyFamily = VK_QUEUE_FAMILY_IGNORED;
 		uint32_t videoFamily = VK_QUEUE_FAMILY_IGNORED;
 		uint32_t initFamily = VK_QUEUE_FAMILY_IGNORED;
@@ -131,7 +130,6 @@ namespace wi::graphics
 		VkQueue copyQueue = VK_NULL_HANDLE;
 		VkQueue videoQueue = VK_NULL_HANDLE;
 		VkQueue initQueue = VK_NULL_HANDLE;
-		VkQueue transitionQueue = VK_NULL_HANDLE;
 		VkQueue sparseQueue = VK_NULL_HANDLE;
 		bool debugUtils = false;
 
@@ -161,15 +159,20 @@ namespace wi::graphics
 		VkPhysicalDeviceImageViewMinLodFeaturesEXT image_view_min_lod_features = {};
 		VkPhysicalDeviceMeshShaderFeaturesEXT mesh_shader_features = {};
 
-		VkVideoDecodeH264ProfileInfoKHR decode_h264_profile = {};
-		VkVideoDecodeH264CapabilitiesKHR decode_h264_capabilities = {};
 		struct VideoCapability
 		{
 			VkVideoProfileInfoKHR profile = {};
 			VkVideoDecodeCapabilitiesKHR decode_capabilities = {};
 			VkVideoCapabilitiesKHR video_capabilities = {};
 		};
+
+		VkVideoDecodeH264ProfileInfoKHR decode_h264_profile = {};
+		VkVideoDecodeH264CapabilitiesKHR decode_h264_capabilities = {};
 		VideoCapability video_capability_h264 = {};
+
+		VkVideoDecodeH265ProfileInfoKHR decode_h265_profile = {};
+		VkVideoDecodeH265CapabilitiesKHR decode_h265_capabilities = {};
+		VideoCapability video_capability_h265 = {};
 
 		wi::vector<VkDynamicState> pso_dynamicStates;
 		VkPipelineDynamicStateCreateInfo dynamicStateInfo = {};
@@ -198,16 +201,18 @@ namespace wi::graphics
 			VkQueue queue = VK_NULL_HANDLE;
 			VkSemaphore frame_semaphores[BUFFERCOUNT][QUEUE_COUNT] = {};
 			wi::vector<SwapChain> swapchain_updates;
-			wi::vector<VkSwapchainKHR> submit_swapchains;
-			wi::vector<uint32_t> submit_swapChainImageIndices;
 			wi::vector<VkSemaphoreSubmitInfo> submit_waitSemaphoreInfos;
-			wi::vector<VkSemaphore> submit_signalSemaphores;
 			wi::vector<VkSemaphoreSubmitInfo> submit_signalSemaphoreInfos;
 			wi::vector<VkCommandBufferSubmitInfo> submit_cmds;
+
+			wi::vector<VkSemaphore> swapchainWaitSemaphores;
+			wi::vector<VkSwapchainKHR> swapchains;
+			wi::vector<uint32_t> swapchainImageIndices;
 
 			bool sparse_binding_supported = false;
 			std::shared_ptr<std::mutex> locker;
 
+			void clear();
 			void signal(VkSemaphore semaphore);
 			void wait(VkSemaphore semaphore);
 			void submit(GraphicsDevice_Vulkan* device, VkFence fence);
@@ -215,7 +220,6 @@ namespace wi::graphics
 		} queues[QUEUE_COUNT];
 
 		CommandQueue queue_init;
-		CommandQueue queue_transition;
 		CommandQueue queue_sparse;
 
 		struct CopyAllocator
@@ -227,12 +231,7 @@ namespace wi::graphics
 			{
 				VkCommandPool transferCommandPool = VK_NULL_HANDLE;
 				VkCommandBuffer transferCommandBuffer = VK_NULL_HANDLE;
-				VkCommandPool transitionCommandPool = VK_NULL_HANDLE;
-				VkCommandBuffer transitionCommandBuffer = VK_NULL_HANDLE;
-				bool transfer = false;
-				bool transition = false;
 				VkFence fence = VK_NULL_HANDLE;
-				VkSemaphore semaphore = VK_NULL_HANDLE;
 				GPUBuffer uploadbuffer;
 				constexpr bool IsValid() const { return transferCommandBuffer != VK_NULL_HANDLE; }
 			};
@@ -240,10 +239,22 @@ namespace wi::graphics
 
 			void init(GraphicsDevice_Vulkan* device);
 			void destroy();
-			CopyCMD allocate(uint64_t staging_size, bool require_transfer, bool require_transition);
+			CopyCMD allocate(uint64_t staging_size);
 			void submit(CopyCMD cmd);
 		};
 		mutable CopyAllocator copyAllocator;
+
+		// Resource init transition helper:
+		mutable std::mutex transitionLocker;
+		mutable wi::vector<VkImageMemoryBarrier2> init_transitions;
+		struct TransitionHandler
+		{
+			VkCommandPool commandPool = VK_NULL_HANDLE;
+			VkCommandBuffer commandBuffer = VK_NULL_HANDLE;
+			VkSemaphore semaphores[QUEUE_COUNT - 1] = {}; // for each queue except graphics
+		};
+		TransitionHandler transition_handlers[BUFFERCOUNT];
+		inline TransitionHandler& GetTransitionHandler() { return transition_handlers[GetBufferIndex()]; }
 
 		VkFence frame_fence[BUFFERCOUNT][QUEUE_COUNT] = {};
 
@@ -385,16 +396,6 @@ namespace wi::graphics
 			return *(CommandList_Vulkan*)cmd.internal_state;
 		}
 
-		struct PSOLayout
-		{
-			VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
-			VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
-			wi::vector<VkDescriptorSet> bindlessSets;
-			uint32_t bindlessFirstSet = 0;
-		};
-		mutable wi::unordered_map<PSOLayoutHash, PSOLayout> pso_layout_cache;
-		mutable std::mutex pso_layout_cache_mutex;
-
 		VkPipelineCache pipelineCache = VK_NULL_HANDLE;
 		wi::unordered_map<PipelineHash, VkPipeline> pipelines_global;
 
@@ -467,6 +468,10 @@ namespace wi::graphics
 			if (desc->format != Format::UNKNOWN || has_flag(desc->misc_flags, ResourceMiscFlag::TYPED_FORMAT_CASTING))
 			{
 				alignment = std::max(alignment, properties2.properties.limits.minTexelBufferOffsetAlignment);
+			}
+			if (has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_BUFFER) || has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_TEXTURE_NON_RT_DS) || has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_TEXTURE_RT_DS))
+			{
+				alignment = std::max(alignment, uint64_t(64 * 1024)); // 64KB safety to match DX12, because cannot use vkGetBufferMemoryRequirements here
 			}
 			return alignment;
 		}
@@ -888,6 +893,28 @@ namespace wi::graphics
 			}
 		};
 		std::shared_ptr<AllocationHandler> allocationhandler;
+
+
+		struct PSOLayout
+		{
+			std::shared_ptr<AllocationHandler> allocationhandler;
+			VkPipelineLayout pipelineLayout = VK_NULL_HANDLE;
+			VkDescriptorSetLayout descriptorSetLayout = VK_NULL_HANDLE;
+			wi::vector<VkDescriptorSet> bindlessSets;
+			uint32_t bindlessFirstSet = 0;
+			~PSOLayout()
+			{
+				if (allocationhandler == nullptr)
+					return;
+				allocationhandler->destroylocker.lock();
+				uint64_t framecount = allocationhandler->framecount;
+				allocationhandler->destroyer_pipelineLayouts.push_back(std::make_pair(pipelineLayout, framecount));
+				allocationhandler->destroyer_descriptorSetLayouts.push_back(std::make_pair(descriptorSetLayout, framecount));
+				allocationhandler->destroylocker.unlock();
+			}
+		};
+		mutable wi::unordered_map<PSOLayoutHash, std::shared_ptr<PSOLayout>> pso_layout_cache;
+		mutable std::mutex pso_layout_cache_mutex;
 	};
 }
 

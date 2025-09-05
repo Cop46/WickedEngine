@@ -349,6 +349,10 @@ namespace wi::image
 		}
 		image.texMulAdd.z += params.texOffset.x * inv_width;	// texOffset.x: add
 		image.texMulAdd.w += params.texOffset.y * inv_height;	// texOffset.y: add
+		image.texMulAdd.x *= params.texMulAdd.x;
+		image.texMulAdd.y *= params.texMulAdd.y;
+		image.texMulAdd.z += params.texMulAdd.z;
+		image.texMulAdd.w += params.texMulAdd.w;
 
 		if (params.isDrawRect2Enabled())
 		{
@@ -363,6 +367,30 @@ namespace wi::image
 		}
 		image.texMulAdd2.z += params.texOffset2.x * inv_width;	// texOffset.x: add
 		image.texMulAdd2.w += params.texOffset2.y * inv_height;	// texOffset.y: add
+		image.texMulAdd2.x *= params.texMulAdd2.x;
+		image.texMulAdd2.y *= params.texMulAdd2.y;
+		image.texMulAdd2.z += params.texMulAdd2.z;
+		image.texMulAdd2.w += params.texMulAdd2.w;
+
+		if (params.gradient != Params::Gradient::None)
+		{
+			switch (params.gradient)
+			{
+			default:
+			case Params::Gradient::Linear:
+				image.flags |= IMAGE_FLAG_GRADIENT_LINEAR;
+				break;
+			case Params::Gradient::LinearReflected:
+				image.flags |= IMAGE_FLAG_GRADIENT_LINEAR_REFLECTED;
+				break;
+			case Params::Gradient::Circular:
+				image.flags |= IMAGE_FLAG_GRADIENT_CIRCULAR;
+				break;
+			}
+			image.gradient_color = wi::math::pack_half4(params.gradient_color);
+			image.gradient_uv_start = wi::math::pack_half2(params.gradient_uv_start);
+			image.gradient_uv_end = wi::math::pack_half2(params.gradient_uv_end);
+		}
 
 		device->EventBegin("Image", cmd);
 
@@ -577,8 +605,8 @@ namespace wi::image
 		blendStates[BLENDMODE_ADDITIVE] = bd;
 
 		bd.render_target[0].blend_enable = true;
-		bd.render_target[0].src_blend = Blend::ZERO;
-		bd.render_target[0].dest_blend = Blend::SRC_COLOR;
+		bd.render_target[0].src_blend = Blend::DEST_COLOR;
+		bd.render_target[0].dest_blend = Blend::ZERO;
 		bd.render_target[0].blend_op = BlendOp::ADD;
 		bd.render_target[0].src_blend_alpha = Blend::ZERO;
 		bd.render_target[0].dest_blend_alpha = Blend::SRC_ALPHA;
@@ -586,6 +614,17 @@ namespace wi::image
 		bd.render_target[0].render_target_write_mask = ColorWrite::ENABLE_ALL;
 		bd.independent_blend_enable = false;
 		blendStates[BLENDMODE_MULTIPLY] = bd;
+
+		bd.render_target[0].blend_enable = true;
+		bd.render_target[0].src_blend = Blend::INV_DEST_COLOR;
+		bd.render_target[0].dest_blend = Blend::ZERO;
+		bd.render_target[0].blend_op = BlendOp::ADD;
+		bd.render_target[0].src_blend_alpha = Blend::ZERO;
+		bd.render_target[0].dest_blend_alpha = Blend::SRC_ALPHA;
+		bd.render_target[0].blend_op_alpha = BlendOp::ADD;
+		bd.render_target[0].render_target_write_mask = ColorWrite::ENABLE_ALL;
+		bd.independent_blend_enable = false;
+		blendStates[BLENDMODE_INVERSE] = bd;
 
 		SamplerDesc samplerDesc;
 		samplerDesc.filter = Filter::MIN_MAG_MIP_LINEAR;

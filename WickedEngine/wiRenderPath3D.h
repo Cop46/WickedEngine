@@ -84,6 +84,7 @@ namespace wi
 		bool sceneUpdateEnabled = true;
 		bool fsrEnabled = false;
 		bool fsr2Enabled = false;
+		bool mesh_blend = true;
 
 		mutable bool first_frame = true;
 		mutable bool prerender_happened = false;
@@ -153,9 +154,9 @@ namespace wi
 		wi::renderer::VisibilityResources visibilityResources;
 		wi::renderer::FSR2Resources fsr2Resources;
 		wi::renderer::VXGIResources vxgiResources;
+		wi::renderer::MeshBlendResources meshblendResources;
 
 		wi::graphics::CommandList video_cmd;
-		wi::vector<wi::video::VideoInstance*> video_instances_tmp;
 
 		wi::graphics::Texture distortion_overlay; // optional full screen distortion from an asset
 
@@ -274,6 +275,7 @@ namespace wi
 		constexpr bool getFSREnabled() const { return fsrEnabled; }
 		constexpr bool getFSR2Enabled() const { return fsr2Enabled; }
 		constexpr bool getVisibilityComputeShadingEnabled() const { return visibility_shading_in_compute; }
+		constexpr bool getMeshBlendEnabled() const { return mesh_blend; }
 
 		constexpr void setExposure(float value) { exposure = value; }
 		constexpr void setHDRCalibration(float value) { hdr_calibration = value; }
@@ -327,6 +329,7 @@ namespace wi
 		constexpr void setDitherEnabled(bool value) { ditherEnabled = value; }
 		constexpr void setOcclusionCullingEnabled(bool value) { occlusionCullingEnabled = value; }
 		constexpr void setSceneUpdateEnabled(bool value) { sceneUpdateEnabled = value; }
+		constexpr void setMeshBlendEnabled(bool value) { mesh_blend = value; }
 		void setFSREnabled(bool value);
 		void setFSR2Enabled(bool value);
 		void setFSR2Preset(FSR2_Preset preset); // this will modify resolution scaling and sampler lod bias
@@ -353,6 +356,9 @@ namespace wi
 
 		void Stop() override;
 		void Start() override;
+
+		// Creates screenshot of the render result and replaces background (sky) pixels with transparency
+		wi::graphics::Texture CreateScreenshotWithAlphaBackground();
 	};
 
 }

@@ -49,6 +49,9 @@ wi::vector<ShaderEntry> shaders = {
 	{"temporalaaCS", wi::graphics::ShaderStage::CS},
 	{"tonemapCS", wi::graphics::ShaderStage::CS},
 	{"underwaterCS", wi::graphics::ShaderStage::CS},
+	{"mesh_blend_prepareCS", wi::graphics::ShaderStage::CS},
+	{"mesh_blend_expandCS", wi::graphics::ShaderStage::CS},
+	{"mesh_blendPS", wi::graphics::ShaderStage::PS},
 	{"fsr_upscalingCS", wi::graphics::ShaderStage::CS},
 	{"fsr_sharpenCS", wi::graphics::ShaderStage::CS},
 	{"ffx-fsr2/ffx_fsr2_autogen_reactive_pass", wi::graphics::ShaderStage::CS},
@@ -226,6 +229,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"volumetricLight_SpotPS", wi::graphics::ShaderStage::PS },
 	{"volumetricLight_PointPS", wi::graphics::ShaderStage::PS },
 	{"volumetricLight_DirectionalPS", wi::graphics::ShaderStage::PS },
+	{"volumetriclight_rectanglePS", wi::graphics::ShaderStage::PS },
 	{"voxelPS", wi::graphics::ShaderStage::PS },
 	{"vertexcolorPS", wi::graphics::ShaderStage::PS },
 	{"upsample_bilateralPS", wi::graphics::ShaderStage::PS },
@@ -250,6 +254,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"objectPS_prepass_alphatest", wi::graphics::ShaderStage::PS },
 	{"objectPS_prepass_depthonly_alphatest", wi::graphics::ShaderStage::PS },
 	{"lightVisualizerPS", wi::graphics::ShaderStage::PS },
+	{"vRectLightPS", wi::graphics::ShaderStage::PS },
 	{"lensFlarePS", wi::graphics::ShaderStage::PS },
 	{"impostorPS", wi::graphics::ShaderStage::PS },
 	{"impostorPS_simple", wi::graphics::ShaderStage::PS },
@@ -271,6 +276,7 @@ wi::vector<ShaderEntry> shaders = {
 	{"copyStencilBitPS", wi::graphics::ShaderStage::PS },
 	{"extractStencilBitPS", wi::graphics::ShaderStage::PS },
 	{"trailPS", wi::graphics::ShaderStage::PS },
+	{"waveeffectPS", wi::graphics::ShaderStage::PS },
 
 
 	{"hairparticleVS", wi::graphics::ShaderStage::VS },
@@ -282,8 +288,10 @@ wi::vector<ShaderEntry> shaders = {
 	{"volumetriclight_directionalVS", wi::graphics::ShaderStage::VS },
 	{"volumetriclight_pointVS", wi::graphics::ShaderStage::VS },
 	{"volumetriclight_spotVS", wi::graphics::ShaderStage::VS },
+	{"volumetriclight_rectangleVS", wi::graphics::ShaderStage::VS },
 	{"vSpotLightVS", wi::graphics::ShaderStage::VS },
 	{"vPointLightVS", wi::graphics::ShaderStage::VS },
+	{"vRectLightVS", wi::graphics::ShaderStage::VS },
 	{"sphereVS", wi::graphics::ShaderStage::VS },
 	{"skyVS", wi::graphics::ShaderStage::VS },
 	{"postprocessVS", wi::graphics::ShaderStage::VS },
@@ -484,6 +492,10 @@ int main(int argc, char* argv[])
 	// permutations for copyStencilBitPS:
 	shaders.push_back({ "copyStencilBitPS", wi::graphics::ShaderStage::PS });
 	shaders.back().permutations.emplace_back().defines = { "MSAA" };
+
+	// permutations for yuv_to_rgbCS:
+	shaders.push_back({ "yuv_to_rgbCS", wi::graphics::ShaderStage::CS });
+	shaders.back().permutations.emplace_back().defines = { "ARRAY" };
 
 	wi::jobsystem::Initialize();
 	wi::jobsystem::context ctx;

@@ -15,12 +15,15 @@ file(GLOB_RECURSE SOURCE_FILES CONFIGURE_DEPENDS
 	*.cpp
 )
 
+# workaround for source dir containing regex meta characters
+string(REGEX REPLACE "([.+?*])" "\\\\\\1" SDIR "${CMAKE_CURRENT_SOURCE_DIR}")
+
 # FAudio has their own CMakeLists
 list(FILTER HEADER_FILES
-	EXCLUDE REGEX ${CMAKE_CURRENT_SOURCE_DIR}/FAudio/.*
+	EXCLUDE REGEX "${SDIR}/FAudio/.*"
 )
 list(FILTER SOURCE_FILES
-	EXCLUDE REGEX ${CMAKE_CURRENT_SOURCE_DIR}/FAudio/.*
+	EXCLUDE REGEX "${SDIR}/FAudio/.*"
 )
 
 install(FILES ${HEADER_FILES}
@@ -31,9 +34,8 @@ install(FILES ${HEADER_FILES}
 # compiled on their own; hence we mark them as header files
 file(GLOB_RECURSE DIRECTLY_INCLUDED_FILES CONFIGURE_DEPENDS
 	# included by utility_common.cpp
-	basis_universal/*.cpp
-	basis_universal/*.c
 	mikktspace.c
+	zstd.c
 
 	# included by volk.h
 	volk.c
@@ -43,11 +45,11 @@ set_property(
 	PROPERTY HEADER_FILE_ONLY ON
 )
 
-if (NOT WIN32)
-	list(REMOVE_ITEM SOURCE_FILES
-		${CMAKE_CURRENT_SOURCE_DIR}/D3D12MemAlloc.cpp
-	)
-endif()
+# linux doesn't support it, and windows includes
+# it directly in wiGraphicsDevice_DX12.cpp
+list(REMOVE_ITEM SOURCE_FILES
+	${CMAKE_CURRENT_SOURCE_DIR}/D3D12MemAlloc.cpp
+)
 add_library(Utility STATIC
 	${SOURCE_FILES}
 	${HEADER_FILES}

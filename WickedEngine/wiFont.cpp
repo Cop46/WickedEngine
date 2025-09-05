@@ -302,7 +302,9 @@ namespace wi::font
 		// add default font if there is none yet:
 		if (fontStyles.empty())
 		{
-			AddFontStyle("Liberation Sans", liberation_sans, sizeof(liberation_sans));
+			wi::vector<uint8_t> data;
+			helper::Decompress(liberation_sans_zstd, sizeof(liberation_sans_zstd), data);
+			AddFontStyle("Liberation Sans", data.data(), data.size(), true);
 		}
 
 		RasterizerState rs;
@@ -319,7 +321,7 @@ namespace wi::font
 
 		BlendState bd;
 		bd.render_target[0].blend_enable = true;
-		bd.render_target[0].src_blend = Blend::SRC_ALPHA;
+		bd.render_target[0].src_blend = Blend::ONE; // premultiplied blending
 		bd.render_target[0].dest_blend = Blend::INV_SRC_ALPHA;
 		bd.render_target[0].blend_op = BlendOp::ADD;
 		bd.render_target[0].src_blend_alpha = Blend::ONE;

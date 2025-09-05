@@ -49,6 +49,7 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)GraphicsWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ConstraintWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ProfilerWindow.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ProjectCreatorWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)RigidBodyWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)ScriptWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)SoftBodyWindow.cpp" />
@@ -69,6 +70,7 @@
     </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)TerrainWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)FontWindow.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)ThemeEditorWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)TransformWindow.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)Translator.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)VideoWindow.cpp" />
@@ -122,6 +124,7 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)GraphicsWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ConstraintWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ProfilerWindow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)ProjectCreatorWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)RigidBodyWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ScriptWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)SoftBodyWindow.h" />
@@ -133,6 +136,7 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)stdafx.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)TerrainWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)FontWindow.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)ThemeEditorWindow.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)tiny_gltf.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)tiny_obj_loader.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)TransformWindow.h" />

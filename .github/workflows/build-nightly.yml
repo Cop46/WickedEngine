@@ -47,6 +47,7 @@ jobs:
 
     
   linux:
+    name: linux (gcc)
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
@@ -72,14 +73,13 @@ jobs:
     - name: Recompile with shader dump
       run: |
         cd build
-        make -B -j $(nproc)
+        make -j $(nproc)
         
     - name: Move files
       run: |
-        mv build/Editor/WickedEngineEditor ./Editor_Linux
+        mv build/Editor/Editor ./Editor_Linux
         mv Editor/config.ini ./
         mv Editor/startup.lua ./
-        mv Editor/languages ./
         mv Editor/fonts ./
 
     - name: Package Editor
@@ -87,7 +87,6 @@ jobs:
       with:
         name: Editor (Linux)
         path: |
-          languages/
           fonts/
           config.ini
           startup.lua

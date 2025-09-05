@@ -57,7 +57,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	txInput.SetDescription("Position: ");
 	txInput.SetPos(XMFLOAT2(x, y += step));
 	txInput.SetSize(XMFLOAT2(siz, hei));
-	txInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	txInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -71,7 +71,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	tyInput.SetValue(0);
 	tyInput.SetPos(XMFLOAT2(x, y += step));
 	tyInput.SetSize(XMFLOAT2(siz, hei));
-	tyInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	tyInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -85,7 +85,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	tzInput.SetValue(0);
 	tzInput.SetPos(XMFLOAT2(x, y += step));
 	tzInput.SetSize(XMFLOAT2(siz, hei));
-	tzInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	tzInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -103,7 +103,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	sxInput.SetDescription("Scale: ");
 	sxInput.SetPos(XMFLOAT2(x, y));
 	sxInput.SetSize(XMFLOAT2(siz, hei));
-	sxInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	sxInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -117,7 +117,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	syInput.SetValue(1);
 	syInput.SetPos(XMFLOAT2(x, y += step));
 	syInput.SetSize(XMFLOAT2(siz, hei));
-	syInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	syInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -131,7 +131,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	szInput.SetValue(1);
 	szInput.SetPos(XMFLOAT2(x, y += step));
 	szInput.SetSize(XMFLOAT2(siz, hei));
-	szInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	szInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -146,7 +146,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	suInput.SetValue(1);
 	suInput.SetPos(XMFLOAT2(x, y += step));
 	suInput.SetSize(XMFLOAT2(siz, hei));
-	suInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	suInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -168,7 +168,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	rollInput.SetTooltip("Roll (in degrees)\n Note: Euler angle rotations can result in precision loss from quaternion conversion!");
 	rollInput.SetPos(XMFLOAT2(x, y += step));
 	rollInput.SetSize(XMFLOAT2(siz, hei));
-	rollInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	rollInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -188,7 +188,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	pitchInput.SetTooltip("Pitch (in degrees)\n Note: Euler angle rotations can result in precision loss from quaternion conversion!");
 	pitchInput.SetPos(XMFLOAT2(x, y += step));
 	pitchInput.SetSize(XMFLOAT2(siz, hei));
-	pitchInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	pitchInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -208,7 +208,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	yawInput.SetTooltip("Yaw (in degrees)\n Note: Euler angle rotations can result in precision loss from quaternion conversion!");
 	yawInput.SetPos(XMFLOAT2(x, y += step));
 	yawInput.SetSize(XMFLOAT2(siz, hei));
-	yawInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	yawInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -232,7 +232,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	rxInput.SetTooltip("Rotation Quaternion.X");
 	rxInput.SetPos(XMFLOAT2(x, y += step));
 	rxInput.SetSize(XMFLOAT2(siz, hei));
-	rxInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	rxInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -248,7 +248,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	ryInput.SetTooltip("Rotation Quaternion.Y");
 	ryInput.SetPos(XMFLOAT2(x, y += step));
 	ryInput.SetSize(XMFLOAT2(siz, hei));
-	ryInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	ryInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -264,7 +264,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	rzInput.SetTooltip("Rotation Quaternion.Z");
 	rzInput.SetPos(XMFLOAT2(x, y += step));
 	rzInput.SetSize(XMFLOAT2(siz, hei));
-	rzInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	rzInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -280,7 +280,7 @@ void TransformWindow::Create(EditorComponent* _editor)
 	rwInput.SetTooltip("Rotation Quaternion.W");
 	rwInput.SetPos(XMFLOAT2(x, y += step));
 	rwInput.SetSize(XMFLOAT2(siz, hei));
-	rwInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	rwInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		TransformComponent* transform = editor->GetCurrentScene().transforms.GetComponent(entity);
 		if (transform != nullptr)
 		{
@@ -433,85 +433,53 @@ void TransformWindow::SetEntity(Entity entity)
 void TransformWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 80;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = 80;
-		const float margin_right = 4;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_right = 4;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add_fullwidth(clearButton);
 
-	add_fullwidth(clearButton);
+	float safe_width = layout.width - 100 - 20 - layout.padding;
+	txInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	tyInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	tzInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
 
-	float safe_width = width - 100 - 20 - padding;
-	txInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	tyInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	tzInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
+	sxInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	syInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	szInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	suInput.SetSize(XMFLOAT2(safe_width - layout.padding, txInput.GetSize().y));
 
-	sxInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	syInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	szInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	suInput.SetSize(XMFLOAT2(safe_width - padding, txInput.GetSize().y));
+	rollInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	pitchInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
+	yawInput.SetSize(XMFLOAT2(safe_width / 3.0f - layout.padding, txInput.GetSize().y));
 
-	rollInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	pitchInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
-	yawInput.SetSize(XMFLOAT2(safe_width / 3.0f - padding, txInput.GetSize().y));
+	safe_width = layout.width - 100;
+	rxInput.SetSize(XMFLOAT2(safe_width / 4.0f - layout.padding, txInput.GetSize().y));
+	ryInput.SetSize(XMFLOAT2(safe_width / 4.0f - layout.padding, txInput.GetSize().y));
+	rzInput.SetSize(XMFLOAT2(safe_width / 4.0f - layout.padding, txInput.GetSize().y));
+	rwInput.SetSize(XMFLOAT2(safe_width / 4.0f - layout.padding, txInput.GetSize().y));
 
-	safe_width = width - 100;
-	rxInput.SetSize(XMFLOAT2(safe_width / 4.0f - padding, txInput.GetSize().y));
-	ryInput.SetSize(XMFLOAT2(safe_width / 4.0f - padding, txInput.GetSize().y));
-	rzInput.SetSize(XMFLOAT2(safe_width / 4.0f - padding, txInput.GetSize().y));
-	rwInput.SetSize(XMFLOAT2(safe_width / 4.0f - padding, txInput.GetSize().y));
+	layout.add_right(resetTranslationButton);
+	tzInput.SetPos(XMFLOAT2(resetTranslationButton.GetPos().x - tzInput.GetSize().x - layout.padding, resetTranslationButton.GetPos().y));
+	tyInput.SetPos(XMFLOAT2(tzInput.GetPos().x - tyInput.GetSize().x - layout.padding, tzInput.GetPos().y));
+	txInput.SetPos(XMFLOAT2(tyInput.GetPos().x - txInput.GetSize().x - layout.padding, tyInput.GetPos().y));
+	layout.add_right(resetScaleButton);
+	szInput.SetPos(XMFLOAT2(resetScaleButton.GetPos().x - szInput.GetSize().x - layout.padding, resetScaleButton.GetPos().y));
+	syInput.SetPos(XMFLOAT2(szInput.GetPos().x - syInput.GetSize().x - layout.padding, szInput.GetPos().y));
+	sxInput.SetPos(XMFLOAT2(syInput.GetPos().x - sxInput.GetSize().x - layout.padding, syInput.GetPos().y));
+	layout.add_right(resetScaleUniformButton);
+	suInput.SetPos(XMFLOAT2(resetScaleUniformButton.GetPos().x - suInput.GetSize().x - layout.padding, resetScaleUniformButton.GetPos().y));
+	layout.add_right(resetRotationButton);
+	yawInput.SetPos(XMFLOAT2(resetRotationButton.GetPos().x - yawInput.GetSize().x - layout.padding, resetRotationButton.GetPos().y));
+	pitchInput.SetPos(XMFLOAT2(yawInput.GetPos().x - pitchInput.GetSize().x - layout.padding, yawInput.GetPos().y));
+	rollInput.SetPos(XMFLOAT2(pitchInput.GetPos().x - rollInput.GetSize().x - layout.padding, pitchInput.GetPos().y));
+	layout.add_right(rwInput);
+	rzInput.SetPos(XMFLOAT2(rwInput.GetPos().x - rzInput.GetSize().x - layout.padding, rwInput.GetPos().y));
+	ryInput.SetPos(XMFLOAT2(rzInput.GetPos().x - ryInput.GetSize().x - layout.padding, rzInput.GetPos().y));
+	rxInput.SetPos(XMFLOAT2(ryInput.GetPos().x - rxInput.GetSize().x - layout.padding, ryInput.GetPos().y));
 
-	add_right(resetTranslationButton);
-	tzInput.SetPos(XMFLOAT2(resetTranslationButton.GetPos().x - tzInput.GetSize().x - padding, resetTranslationButton.GetPos().y));
-	tyInput.SetPos(XMFLOAT2(tzInput.GetPos().x - tyInput.GetSize().x - padding, tzInput.GetPos().y));
-	txInput.SetPos(XMFLOAT2(tyInput.GetPos().x - txInput.GetSize().x - padding, tyInput.GetPos().y));
-	add_right(resetScaleButton);
-	szInput.SetPos(XMFLOAT2(resetScaleButton.GetPos().x - szInput.GetSize().x - padding, resetScaleButton.GetPos().y));
-	syInput.SetPos(XMFLOAT2(szInput.GetPos().x - syInput.GetSize().x - padding, szInput.GetPos().y));
-	sxInput.SetPos(XMFLOAT2(syInput.GetPos().x - sxInput.GetSize().x - padding, syInput.GetPos().y));
-	add_right(resetScaleUniformButton);
-	suInput.SetPos(XMFLOAT2(resetScaleUniformButton.GetPos().x - suInput.GetSize().x - padding, resetScaleUniformButton.GetPos().y));
-	add_right(resetRotationButton);
-	yawInput.SetPos(XMFLOAT2(resetRotationButton.GetPos().x - yawInput.GetSize().x - padding, resetRotationButton.GetPos().y));
-	pitchInput.SetPos(XMFLOAT2(yawInput.GetPos().x - pitchInput.GetSize().x - padding, yawInput.GetPos().y));
-	rollInput.SetPos(XMFLOAT2(pitchInput.GetPos().x - rollInput.GetSize().x - padding, pitchInput.GetPos().y));
-	add_right(rwInput);
-	rzInput.SetPos(XMFLOAT2(rwInput.GetPos().x - rzInput.GetSize().x - padding, rwInput.GetPos().y));
-	ryInput.SetPos(XMFLOAT2(rzInput.GetPos().x - ryInput.GetSize().x - padding, rzInput.GetPos().y));
-	rxInput.SetPos(XMFLOAT2(ryInput.GetPos().x - rxInput.GetSize().x - padding, ryInput.GetPos().y));
+	layout.jump();
 
-	y += jump;
-
-	add_right(snapScaleInput);
-	add_right(snapRotateInput);
-	add_right(snapTranslateInput);
+	layout.add_right(snapScaleInput);
+	layout.add_right(snapRotateInput);
+	layout.add_right(snapTranslateInput);
 
 }

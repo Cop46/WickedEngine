@@ -12,18 +12,19 @@
 #define SHADERCOMPILER_ENABLED_DXCOMPILER
 #define SHADERCOMPILER_ENABLED_D3DCOMPILER
 #include <wrl/client.h>
-#define CComPtr Microsoft::WRL::ComPtr
+using namespace Microsoft::WRL;
 #endif // _WIN32
 
 #ifdef PLATFORM_LINUX
 #define SHADERCOMPILER_ENABLED
 #define SHADERCOMPILER_ENABLED_DXCOMPILER
 #define __RPC_FAR
-#include "Utility/WinAdapter.h"
+#define ComPtr CComPtr
+#include "Utility/dxc/WinAdapter.h"
 #endif // PLATFORM_LINUX
 
 #ifdef SHADERCOMPILER_ENABLED_DXCOMPILER
-#include "Utility/dxcapi.h"
+#include "Utility/dxc/dxcapi.h"
 #endif // SHADERCOMPILER_ENABLED_DXCOMPILER
 
 #ifdef SHADERCOMPILER_ENABLED_D3DCOMPILER
@@ -64,10 +65,10 @@ namespace wi::shadercompiler
 				DxcCreateInstance = (DxcCreateInstanceProc)wiGetProcAddress(dxcompiler, "DxcCreateInstance");
 				if (DxcCreateInstance != nullptr)
 				{
-					CComPtr<IDxcCompiler3> dxcCompiler;
+					ComPtr<IDxcCompiler3> dxcCompiler;
 					HRESULT hr = DxcCreateInstance(CLSID_DxcCompiler, IID_PPV_ARGS(&dxcCompiler));
 					assert(SUCCEEDED(hr));
-					CComPtr<IDxcVersionInfo> info;
+					ComPtr<IDxcVersionInfo> info;
 					hr = dxcCompiler->QueryInterface(IID_PPV_ARGS(&info));
 					assert(SUCCEEDED(hr));
 					uint32_t minor = 0;
@@ -106,8 +107,8 @@ namespace wi::shadercompiler
 			return;
 		}
 
-		CComPtr<IDxcUtils> dxcUtils;
-		CComPtr<IDxcCompiler3> dxcCompiler;
+		ComPtr<IDxcUtils> dxcUtils;
+		ComPtr<IDxcCompiler3> dxcCompiler;
 
 		HRESULT hr = compiler_internal.DxcCreateInstance(CLSID_DxcUtils, IID_PPV_ARGS(&dxcUtils));
 		assert(SUCCEEDED(hr));
@@ -128,7 +129,7 @@ namespace wi::shadercompiler
 		// https://github.com/microsoft/DirectXShaderCompiler/wiki/Using-dxc.exe-and-dxcompiler.dll#dxcompiler-dll-interface
 
 		wi::vector<std::wstring> args = {
-			L"-res-may-alias",
+			//L"-res-may-alias",
 			//L"-flegacy-macro-expansion",
 			//L"-no-legacy-cbuf-layout",
 			//L"-pack-optimized", // this has problem with tessellation shaders: https://github.com/microsoft/DirectXShaderCompiler/issues/3362
@@ -158,8 +159,7 @@ namespace wi::shadercompiler
 			break;
 		case ShaderFormat::SPIRV:
 			args.push_back(L"-spirv");
-			args.push_back(L"-fspv-target-env=vulkan1.2");
-			//args.push_back(L"-fspv-target-env=vulkan1.3"); // this has some problem with RenderDoc AMD disassembly so it's not enabled for now
+			args.push_back(L"-fspv-target-env=vulkan1.3");
 			args.push_back(L"-fvk-use-dx-layout");
 			args.push_back(L"-fvk-use-dx-position-w");
 			//args.push_back(L"-fvk-b-shift"); args.push_back(L"0"); args.push_back(L"0");
@@ -445,7 +445,7 @@ namespace wi::shadercompiler
 		{
 			const CompilerInput* input = nullptr;
 			CompilerOutput* output = nullptr;
-			CComPtr<IDxcIncludeHandler> dxcIncludeHandler;
+			ComPtr<IDxcIncludeHandler> dxcIncludeHandler;
 
 			HRESULT STDMETHODCALLTYPE LoadSource(
 				_In_z_ LPCWSTR pFilename,                                 // Candidate filename.
@@ -489,7 +489,7 @@ namespace wi::shadercompiler
 			args_raw.push_back(x.c_str());
 		}
 
-		CComPtr<IDxcResult> pResults;
+		ComPtr<IDxcResult> pResults;
 		hr = dxcCompiler->Compile(
 			&Source,						// Source buffer.
 			args_raw.data(),			// Array of pointers to arguments.
@@ -499,7 +499,7 @@ namespace wi::shadercompiler
 		);
 		assert(SUCCEEDED(hr));
 
-		CComPtr<IDxcBlobUtf8> pErrors = nullptr;
+		ComPtr<IDxcBlobUtf8> pErrors = nullptr;
 		hr = pResults->GetOutput(DXC_OUT_ERRORS, IID_PPV_ARGS(&pErrors), nullptr);
 		assert(SUCCEEDED(hr));
 		if (pErrors != nullptr && pErrors->GetStringLength() != 0)
@@ -515,7 +515,7 @@ namespace wi::shadercompiler
 			return;
 		}
 
-		CComPtr<IDxcBlob> pShader = nullptr;
+		ComPtr<IDxcBlob> pShader = nullptr;
 		hr = pResults->GetOutput(DXC_OUT_OBJECT, IID_PPV_ARGS(&pShader), nullptr);
 		assert(SUCCEEDED(hr));
 		if (pShader != nullptr)
@@ -525,14 +525,14 @@ namespace wi::shadercompiler
 			output.shadersize = pShader->GetBufferSize();
 
 			// keep the blob alive == keep shader pointer valid!
-			auto internal_state = std::make_shared<CComPtr<IDxcBlob>>();
+			auto internal_state = std::make_shared<ComPtr<IDxcBlob>>();
 			*internal_state = pShader;
 			output.internal_state = internal_state;
 		}
 
 		if (input.format == ShaderFormat::HLSL6)
 		{
-			CComPtr<IDxcBlob> pHash = nullptr;
+			ComPtr<IDxcBlob> pHash = nullptr;
 			hr = pResults->GetOutput(DXC_OUT_SHADER_HASH, IID_PPV_ARGS(&pHash), nullptr);
 			assert(SUCCEEDED(hr));
 			if (pHash != nullptr)
@@ -672,8 +672,8 @@ namespace wi::shadercompiler
 		}
 
 
-		CComPtr<ID3DBlob> code;
-		CComPtr<ID3DBlob> errors;
+		ComPtr<ID3DBlob> code;
+		ComPtr<ID3DBlob> errors;
 		HRESULT hr = d3d_compiler().D3DCompile(
 			shadersourcedata.data(),
 			shadersourcedata.size(),
@@ -700,7 +700,7 @@ namespace wi::shadercompiler
 			output.shadersize = code->GetBufferSize();
 
 			// keep the blob alive == keep shader pointer valid!
-			auto internal_state = std::make_shared<CComPtr<ID3D10Blob>>();
+			auto internal_state = std::make_shared<ComPtr<ID3D10Blob>>();
 			*internal_state = code;
 			output.internal_state = internal_state;
 		}

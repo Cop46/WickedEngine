@@ -4,7 +4,7 @@
 #include "sdl2.h"
 #include <fstream>
 
-#include "icon.c"
+#include "icon.h"
 
 #ifdef __linux__
 #  include <execinfo.h>
@@ -15,7 +15,19 @@
 
 using namespace std;
 
-Editor editor;
+class EditorWithDevInfo : public Editor
+{
+public:
+	const char* GetAdapterName() const
+	{
+		return graphicsDevice == nullptr ? "(no device)" : graphicsDevice->GetAdapterName().c_str();
+	}
+
+	const char* GetDriverDescription() const
+	{
+		return graphicsDevice == nullptr ? "(no device)" : graphicsDevice->GetDriverDescription().c_str();
+	}
+} editor;
 
 int sdl_loop()
 {
@@ -83,7 +95,7 @@ void set_window_icon(SDL_Window *window) {
     // to assume the data it gets is byte-wise RGB(A) data
     Uint32 rmask, gmask, bmask, amask;
 #if SDL_BYTEORDER == SDL_BIG_ENDIAN
-    int shift = (gimp_image.bytes_per_pixel == 3) ? 8 : 0;
+    int shift = (embedded_image.bytes_per_pixel == 3) ? 8 : 0;
     rmask = 0xff000000 >> shift;
     gmask = 0x00ff0000 >> shift;
     bmask = 0x0000ff00 >> shift;
@@ -92,10 +104,10 @@ void set_window_icon(SDL_Window *window) {
     rmask = 0x000000ff;
     gmask = 0x0000ff00;
     bmask = 0x00ff0000;
-    amask = (gimp_image.bytes_per_pixel == 3) ? 0 : 0xff000000;
+    amask = (embedded_image.bytes_per_pixel == 3) ? 0 : 0xff000000;
 #endif
-    SDL_Surface* icon = SDL_CreateRGBSurfaceFrom((void*)gimp_image.pixel_data, gimp_image.width,
-        gimp_image.height, gimp_image.bytes_per_pixel*8, gimp_image.bytes_per_pixel*gimp_image.width,
+    SDL_Surface* icon = SDL_CreateRGBSurfaceFrom((void*)embedded_image.pixel_data, embedded_image.width,
+		embedded_image.height, embedded_image.bytes_per_pixel*8, embedded_image.bytes_per_pixel* embedded_image.width,
         rmask, gmask, bmask, amask);
 
     SDL_SetWindowIcon(window, icon);
@@ -107,18 +119,29 @@ void set_window_icon(SDL_Window *window) {
 
 void crash_handler(int sig)
 {
+	static bool already_handled = false;
+
 	void* btbuf[100];
 
-	char outbuf[256];
+	char outbuf[512];
+
+	if (already_handled) return;
+
+	already_handled = true;
 
 	size_t size = backtrace(btbuf, 100);
+
 	snprintf(
 		outbuf, sizeof(outbuf),
 		"Signal: %i (%s)\n"
-		"Version: %s\nStacktrace:\n",
-		sig,
-		sigdescr_np(sig),
-		wi::version::GetVersionString()
+		"Version: %s\n"
+		"Adapter: %s\n"
+		"Driver: %s\n"
+		"Stacktrace:\n",
+		sig, sigdescr_np(sig),
+		wi::version::GetVersionString(),
+		editor.GetAdapterName(),
+		editor.GetDriverDescription()
 	);
 
 	fprintf(
@@ -144,11 +167,16 @@ void crash_handler(int sig)
 		fputs(outbuf, logfile);
 		fflush(logfile);
 		backtrace_symbols_fd(btbuf, size, fileno(logfile));
+		fputs("\nBacklog:\n", logfile);
+		wi::backlog::_forEachLogEntry_unsafe([&logfile] (auto&& entry) {
+			fputs(entry.text.c_str(), logfile);
+			fflush(logfile);
+		});
 		fclose(logfile);
 		char cwdbuf[200];
 		fprintf(stderr, "\e[1mcrash log written to %s/%s\e[m\n", getcwd(cwdbuf, sizeof(cwdbuf)), filename);
 	}
-	exit(1);
+	abort();
 }
 
 #endif
@@ -168,7 +196,7 @@ int main(int argc, char *argv[])
 	}
 #endif
 
-    wi::arguments::Parse(argc, argv);
+	wi::arguments::Parse(argc, argv);
 
     sdl2::sdlsystem_ptr_t system = sdl2::make_sdlsystem(SDL_INIT_EVERYTHING | SDL_INIT_EVENTS);
     if (*system) {
@@ -190,14 +218,14 @@ int main(int argc, char *argv[])
 		fullscreen = editor.config.GetBool("fullscreen");
 		editor.allow_hdr = editor.config.GetBool("allow_hdr");
 
-		wi::backlog::post("config.ini loaded in " + std::to_string(timer.elapsed_milliseconds()) + " milliseconds\n");
+		wilog("config.ini loaded in %.2f milliseconds\n", (float)timer.elapsed_milliseconds());
 	}
 
 	width = std::max(100, width);
 	height = std::max(100, height);
 
     sdl2::window_ptr_t window = sdl2::make_window(
-            "Wicked Editor",
+			wi::helper::StringRemoveTrailingWhitespaces(exe_customization.name_padded).c_str(),
             SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
             width, height,
             SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);

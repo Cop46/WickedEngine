@@ -347,6 +347,7 @@ namespace wi::graphics
 	enum class VideoProfile : uint8_t
 	{
 		H264,	// AVC
+		H265,	// HEVC
 	};
 
 	enum class ComponentSwizzle : uint8_t
@@ -408,10 +409,15 @@ namespace wi::graphics
 		ALIASING = ALIASING_BUFFER | ALIASING_TEXTURE_NON_RT_DS | ALIASING_TEXTURE_RT_DS, // memory allocation will be suitable for all kinds of resources. Requires GraphicsDeviceCapability::ALIASING_GENERIC to be supported
 		TYPED_FORMAT_CASTING = 1 << 11,	// enable casting formats between same type and different modifiers: eg. UNORM -> SRGB
 		TYPELESS_FORMAT_CASTING = 1 << 12,	// enable casting formats to other formats that have the same bit-width and channel layout: eg. R32_FLOAT -> R32_UINT
-		VIDEO_DECODE = 1 << 13,	// resource is usabe in video decoding operations
-		NO_DEFAULT_DESCRIPTORS = 1 << 14, // skips creation of default descriptors for resources
-		TEXTURE_COMPATIBLE_COMPRESSION = 1 << 15, // optimization that can enable sampling from compressed textures
-		SHARED = 1 << 16, // shared texture
+		VIDEO_DECODE = 1 << 13,	// resource is usabe in video decoding operations (for buffers it is indicating a bitstream buffer, for textures it is a DPB and output texture if DPB_AND_OUTPUT_COINCIDE is supported)
+		VIDEO_DECODE_OUTPUT_ONLY = 1 << 14,	// resource is usabe in video decoding operations but as output only and not as DPB (used for DPB textures when DPB_AND_OUTPUT_COINCIDE is NOT supported)
+		VIDEO_DECODE_DPB_ONLY = 1 << 15,	// resource is usabe in video decoding operations but as strictly DPB only (used for output textures when DPB_AND_OUTPUT_COINCIDE is NOT supported)
+		NO_DEFAULT_DESCRIPTORS = 1 << 16, // skips creation of default descriptors for resources
+		TEXTURE_COMPATIBLE_COMPRESSION = 1 << 17, // optimization that can enable sampling from compressed textures (console only)
+		SHARED = 1 << 18, // shared texture
+
+		VIDEO_COMPATIBILITY_H264 = 1 << 19,	// required for vulkan resource creation for every resource (biotstream buffer, DPB, output) that will be used in a H264 decode session
+		VIDEO_COMPATIBILITY_H265 = 1 << 20,	// required for vulkan resource creation for every resource (biotstream buffer, DPB, output) that will be used in a H265 decode session
 
 		// Compat:
 		SPARSE_TILE_POOL_BUFFER = ALIASING_BUFFER,
@@ -445,8 +451,9 @@ namespace wi::graphics
 		STENCIL_RESOLVE_MIN_MAX = 1 << 19,
 		CACHE_COHERENT_UMA = 1 << 20,	// https://learn.microsoft.com/en-us/windows/win32/api/d3d12/ns-d3d12-d3d12_feature_data_architecture
 		VIDEO_DECODE_H264 = 1 << 21,
-		R9G9B9E5_SHAREDEXP_RENDERABLE = 1 << 22, // indicates supporting R9G9B9E5_SHAREDEXP format for rendering to
-		COPY_BETWEEN_DIFFERENT_IMAGE_ASPECTS_NOT_SUPPORTED = 1 << 23, // indicates that CopyTexture src and dst ImageAspect must match
+		VIDEO_DECODE_H265 = 1 << 22,
+		R9G9B9E5_SHAREDEXP_RENDERABLE = 1 << 23, // indicates supporting R9G9B9E5_SHAREDEXP format for rendering to
+		COPY_BETWEEN_DIFFERENT_IMAGE_ASPECTS_NOT_SUPPORTED = 1 << 24, // indicates that CopyTexture src and dst ImageAspect must match
 
 		// Compat:
 		GENERIC_SPARSE_TILE_POOL = ALIASING_GENERIC,
@@ -478,16 +485,25 @@ namespace wi::graphics
 
 		// Other:
 		VIDEO_DECODE_SRC = 1 << 15,			// video decode operation source (bitstream buffer or DPB texture)
-		VIDEO_DECODE_DST = 1 << 16,			// video decode operation destination DPB texture
-		SWAPCHAIN = 1 << 17,				// resource state of swap chain's back buffer texture when it's not rendering
+		VIDEO_DECODE_DST = 1 << 16,			// video decode operation destination output texture
+		VIDEO_DECODE_DPB = 1 << 17,			// video decode operation destination DPB texture
+		SWAPCHAIN = 1 << 18,				// resource state of swap chain's back buffer texture when it's not rendering
 	};
 
 	enum class RenderPassFlags
 	{
 		NONE = 0,
-		ALLOW_UAV_WRITES = 1 << 0,
-		SUSPENDING = 1 << 1,
-		RESUMING = 1 << 2,
+		ALLOW_UAV_WRITES = 1 << 0,			// allows UAV writes to happen within render pass
+		SUSPENDING = 1 << 1,				// suspends the renderpass to be continued in the next submitted command list
+		RESUMING = 1 << 2,					// resumes the renderpass that was suspended in the previously submitted command list
+	};
+
+	enum class VideoDecoderSupportFlags
+	{
+		NONE = 0,
+		DPB_AND_OUTPUT_COINCIDE = 1 << 0,				// the video decoder supports using the DPB texture as output shader resource. If not supported, then DPB_AND_OUTPUT_DISTINCT must be supported.
+		DPB_AND_OUTPUT_DISTINCT = 1 << 1,				// the video decoder supports outputting to a texture that is not part of the DPB as part of the decode operation. If not supported, then DPB_AND_OUTPUT_COINCIDE must be supported.
+		DPB_INDIVIDUAL_TEXTURES_SUPPORTED = 1 << 2,		// the video decoder supports using a DPB that is not an array texture, so each slot can be an individually allocated texture
 	};
 
 
@@ -890,6 +906,7 @@ namespace wi::graphics
 	{
 		VideoDesc desc;
 		constexpr const VideoDesc& GetDesc() const { return desc; }
+		VideoDecoderSupportFlags support = VideoDecoderSupportFlags::NONE;
 	};
 
 	struct VideoDecodeOperation
@@ -916,6 +933,7 @@ namespace wi::graphics
 		const int* dpb_poc = nullptr; // for each DPB reference slot, indicate the PictureOrderCount
 		const int* dpb_framenum = nullptr; // for each DPB reference slot, indicate the framenum value
 		const Texture* DPB = nullptr; // DPB texture with arraysize = num_references + 1
+		const Texture* output = nullptr; // output of the operation, it should be nullptr if DPB_AND_OUTPUT_COINCIDE is used (because in that case the DPB will be used as output instead of a separate output)
 	};
 
 	struct RenderPassImage
@@ -1802,18 +1820,26 @@ namespace wi::graphics
 			{
 			case 'r':
 			case 'R':
+			case 'x':
+			case 'X':
 				*comp = ComponentSwizzle::R;
 				break;
 			case 'g':
 			case 'G':
+			case 'y':
+			case 'Y':
 				*comp = ComponentSwizzle::G;
 				break;
 			case 'b':
 			case 'B':
+			case 'z':
+			case 'Z':
 				*comp = ComponentSwizzle::B;
 				break;
 			case 'a':
 			case 'A':
+			case 'w':
+			case 'W':
 				*comp = ComponentSwizzle::A;
 				break;
 			case '0':
@@ -1843,9 +1869,8 @@ namespace wi::graphics
 
 	// Get mipmap count for a given texture dimension.
 	//	width, height, depth: dimensions of the texture
-	//	min_dimension: constrain all dimensions to a specific resolution (optional, default: 1x1x1)
-	//	required_alignment: make sure to only return so many levels so that dimensions remain aligned to a value (optional)
-	constexpr uint32_t GetMipCount(uint32_t width, uint32_t height, uint32_t depth = 1u, uint32_t min_dimension = 1u, uint32_t required_alignment = 1u)
+	//	min_dimension: break when all dimensions go below a specified dimension (optional, default: 1x1x1)
+	constexpr uint32_t GetMipCount(uint32_t width, uint32_t height, uint32_t depth = 1u, uint32_t min_dimension = 1u)
 	{
 		uint32_t mips = 1;
 		while (width > min_dimension || height > min_dimension || depth > min_dimension)
@@ -1853,12 +1878,6 @@ namespace wi::graphics
 			width = std::max(min_dimension, width >> 1u);
 			height = std::max(min_dimension, height >> 1u);
 			depth = std::max(min_dimension, depth >> 1u);
-			if (
-				AlignTo(width, required_alignment) != width ||
-				AlignTo(height, required_alignment) != height ||
-				AlignTo(depth, required_alignment) != depth
-				)
-				break;
 			mips++;
 		}
 		return mips;
@@ -1871,17 +1890,17 @@ namespace wi::graphics
 		size_t size = 0;
 		const uint32_t bytes_per_block = GetFormatStride(desc.format);
 		const uint32_t pixels_per_block = GetFormatBlockSize(desc.format);
-		const uint32_t num_blocks_x = desc.width / pixels_per_block;
-		const uint32_t num_blocks_y = desc.height / pixels_per_block;
 		const uint32_t mips = desc.mip_levels == 0 ? GetMipCount(desc.width, desc.height, desc.depth) : desc.mip_levels;
 		for (uint32_t layer = 0; layer < desc.array_size; ++layer)
 		{
 			for (uint32_t mip = 0; mip < mips; ++mip)
 			{
-				const uint32_t width = std::max(1u, num_blocks_x >> mip);
-				const uint32_t height = std::max(1u, num_blocks_y >> mip);
-				const uint32_t depth = std::max(1u, desc.depth >> mip);
-				size += width * height * depth * bytes_per_block;
+				const uint32_t mip_width = std::max(1u, desc.width >> mip);
+				const uint32_t mip_height = std::max(1u, desc.height >> mip);
+				const uint32_t mip_depth = std::max(1u, desc.depth >> mip);
+				const uint32_t num_blocks_x = (mip_width + pixels_per_block - 1) / pixels_per_block;
+				const uint32_t num_blocks_y = (mip_height + pixels_per_block - 1) / pixels_per_block;
+				size += num_blocks_x * num_blocks_y * mip_depth * bytes_per_block;
 			}
 		}
 		size *= desc.sample_count;
@@ -2128,6 +2147,10 @@ struct enable_bitmask_operators<wi::graphics::RenderPassDesc::Flags> {
 };
 template<>
 struct enable_bitmask_operators<wi::graphics::RenderPassFlags> {
+	static const bool enable = true;
+};
+template<>
+struct enable_bitmask_operators<wi::graphics::VideoDecoderSupportFlags> {
 	static const bool enable = true;
 };
 

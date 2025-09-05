@@ -41,6 +41,7 @@ namespace wi::lua::scene
 		int UpdateHierarchy(lua_State* L);
 
 		int Intersects(lua_State* L);
+		int IntersectsAll(lua_State* L);
 		int IntersectsFirst(lua_State* L);
 
 		int FindAllEntities(lua_State* L);
@@ -67,6 +68,7 @@ namespace wi::lua::scene
 		int Component_CreateForceField(lua_State* L);
 		int Component_CreateWeather(lua_State* L);
 		int Component_CreateSound(lua_State* L);
+		int Component_CreateVideo(lua_State* L);
 		int Component_CreateCollider(lua_State* L);
 		int Component_CreateExpression(lua_State* L);
 		int Component_CreateHumanoid(lua_State* L);
@@ -96,6 +98,7 @@ namespace wi::lua::scene
 		int Component_GetForceField(lua_State* L);
 		int Component_GetWeather(lua_State* L);
 		int Component_GetSound(lua_State* L);
+		int Component_GetVideo(lua_State* L);
 		int Component_GetCollider(lua_State* L);
 		int Component_GetExpression(lua_State* L);
 		int Component_GetHumanoid(lua_State* L);
@@ -125,6 +128,7 @@ namespace wi::lua::scene
 		int Component_GetForceFieldArray(lua_State* L);
 		int Component_GetWeatherArray(lua_State* L);
 		int Component_GetSoundArray(lua_State* L);
+		int Component_GetVideoArray(lua_State* L);
 		int Component_GetColliderArray(lua_State* L);
 		int Component_GetExpressionArray(lua_State* L);
 		int Component_GetHumanoidArray(lua_State* L);
@@ -155,6 +159,7 @@ namespace wi::lua::scene
 		int Entity_GetForceFieldArray(lua_State* L);
 		int Entity_GetWeatherArray(lua_State* L);
 		int Entity_GetSoundArray(lua_State* L);
+		int Entity_GetVideoArray(lua_State* L);
 		int Entity_GetColliderArray(lua_State* L);
 		int Entity_GetExpressionArray(lua_State* L);
 		int Entity_GetHumanoidArray(lua_State* L);
@@ -185,6 +190,7 @@ namespace wi::lua::scene
 		int Component_RemoveForceField(lua_State* L);
 		int Component_RemoveWeather(lua_State* L);
 		int Component_RemoveSound(lua_State* L);
+		int Component_RemoveVideo(lua_State* L);
 		int Component_RemoveCollider(lua_State* L);
 		int Component_RemoveExpression(lua_State* L);
 		int Component_RemoveHumanoid(lua_State* L);
@@ -212,6 +218,59 @@ namespace wi::lua::scene
 		int VoxelizeScene(lua_State* L);
 
 		int FixupNans(lua_State* L);
+	};
+
+	class RayIntersectionResult_BindLua
+	{
+	public:
+		inline static constexpr char className[] = "RayIntersectionResult";
+		static Luna<RayIntersectionResult_BindLua>::FunctionType methods[];
+		static Luna<RayIntersectionResult_BindLua>::PropertyType properties[];
+
+		wi::scene::Scene::RayIntersectionResult result;
+
+		RayIntersectionResult_BindLua() = default;
+		RayIntersectionResult_BindLua(lua_State* L) {}
+		RayIntersectionResult_BindLua(const wi::scene::Scene::RayIntersectionResult& result) : result(result) {}
+		RayIntersectionResult_BindLua(wi::scene::Scene::RayIntersectionResult&& result) : result(std::move(result)) {}
+
+		int GetEntity(lua_State* L);
+		int GetPosition(lua_State* L);
+		int GetNormal(lua_State* L);
+		int GetUV(lua_State* L);
+		int GetVelocity(lua_State* L);
+		int GetDistance(lua_State* L);
+		int GetSubsetIndex(lua_State* L);
+		int GetVertexID0(lua_State* L);
+		int GetVertexID1(lua_State* L);
+		int GetVertexID2(lua_State* L);
+		int GetBarycentrics(lua_State* L);
+		int GetOrientation(lua_State* L);
+		int GetHumanoidBone(lua_State* L);
+	};
+
+	class SphereIntersectionResult_BindLua
+	{
+	public:
+		inline static constexpr char className[] = "SphereIntersectionResult";
+		static Luna<SphereIntersectionResult_BindLua>::FunctionType methods[];
+		static Luna<SphereIntersectionResult_BindLua>::PropertyType properties[];
+
+		wi::scene::Scene::SphereIntersectionResult result;
+
+		SphereIntersectionResult_BindLua() = default;
+		SphereIntersectionResult_BindLua(lua_State* L) {}
+		SphereIntersectionResult_BindLua(const wi::scene::Scene::SphereIntersectionResult& result) : result(result) {}
+		SphereIntersectionResult_BindLua(wi::scene::Scene::SphereIntersectionResult&& result) : result(std::move(result)) {}
+
+		int GetEntity(lua_State* L);
+		int GetPosition(lua_State* L);
+		int GetNormal(lua_State* L);
+		int GetVelocity(lua_State* L);
+		int GetDepth(lua_State* L);
+		int GetSubsetIndex(lua_State* L);
+		int GetOrientation(lua_State* L);
+		int GetHumanoidBone(lua_State* L);
 	};
 
 	class NameComponent_BindLua
@@ -353,6 +412,7 @@ namespace wi::lua::scene
 		int SetUpDirection(lua_State* L);
 		int SetOrtho(lua_State* L);
 		int IsOrtho(lua_State* L);
+		int ProjectToScreen(lua_State* L);
 	};
 
 	class AnimationComponent_BindLua
@@ -952,6 +1012,8 @@ namespace wi::lua::scene
 			CapsuleParams_Radius = FloatProperty(&component->capsule.radius);
 			CapsuleParams_Height = FloatProperty(&component->capsule.height);
 			TargetMeshLOD = LongLongProperty(reinterpret_cast<long long*>(&component->mesh_lod));
+			MaxSlopeAngle = FloatProperty(&component->character.maxSlopeAngle);
+			GravityFactor = FloatProperty(&component->character.gravityFactor);
 		}
 
 		RigidBodyPhysicsComponent_BindLua(wi::scene::RigidBodyPhysicsComponent* component) :component(component)
@@ -975,7 +1037,9 @@ namespace wi::lua::scene
 		FloatProperty CapsuleParams_Radius;
 		FloatProperty CapsuleParams_Height;
 		LongLongProperty TargetMeshLOD;
-		
+		FloatProperty MaxSlopeAngle;
+		FloatProperty GravityFactor;
+
 		PropertyFunction(Shape)
 		PropertyFunction(Mass)
 		PropertyFunction(Friction)
@@ -988,10 +1052,13 @@ namespace wi::lua::scene
 		PropertyFunction(CapsuleParams_Radius)
 		PropertyFunction(CapsuleParams_Height)
 		PropertyFunction(TargetMeshLOD)
+		PropertyFunction(MaxSlopeAngle)
+		PropertyFunction(GravityFactor)
 
 		int SetDisableDeactivation(lua_State* L);
 		int SetKinematic(lua_State* L);
 		int SetStartDeactivated(lua_State* L);
+		int SetCharacterPhysics(lua_State* L);
 
 		int IsVehicle(lua_State* L);
 		int IsCar(lua_State* L);
@@ -999,6 +1066,7 @@ namespace wi::lua::scene
 		int IsDisableDeactivation(lua_State* L);
 		int IsKinematic(lua_State* L);
 		int IsStartDeactivated(lua_State* L);
+		int IsCharacterPhysics(lua_State* L);
 	};
 
 	class SoftBodyPhysicsComponent_BindLua
@@ -1713,6 +1781,50 @@ namespace wi::lua::scene
 		int GetSoundInstance(lua_State* L);
 	};
 
+	class VideoComponent_BindLua
+	{
+	private:
+		wi::scene::VideoComponent owning;
+	public:
+		wi::scene::VideoComponent* component = nullptr;
+
+		inline static constexpr char className[] = "VideoComponent";
+		static Luna<VideoComponent_BindLua>::FunctionType methods[];
+		static Luna<VideoComponent_BindLua>::PropertyType properties[];
+
+		inline void BuildBindings()
+		{
+			Filename = StringProperty(&component->filename);
+		}
+
+		VideoComponent_BindLua(wi::scene::VideoComponent* component) :component(component)
+		{
+			BuildBindings();
+		}
+		VideoComponent_BindLua(lua_State* L) : component(&owning)
+		{
+			BuildBindings();
+		}
+
+		StringProperty Filename;
+
+		PropertyFunction(Filename)
+
+		int IsPlaying(lua_State* L);
+		int IsLooped(lua_State* L);
+
+		int Play(lua_State* L);
+		int Stop(lua_State* L);
+		int SetLooped(lua_State* L);
+		int GetLength(lua_State* L);
+		int GetCurrentTimer(lua_State* L);
+		int Seek(lua_State* L);
+		int SetVideo(lua_State* L);
+		int SetVideoInstance(lua_State* L);
+		int GetVideo(lua_State* L);
+		int GetVideoInstance(lua_State* L);
+	};
+
 	class ColliderComponent_BindLua
 	{
 	private:
@@ -1813,6 +1925,10 @@ namespace wi::lua::scene
 		int SetRagdollHeadSize(lua_State* L);
 		int GetRagdollFatness(lua_State* L);
 		int GetRagdollHeadSize(lua_State* L);
+		int SetArmSpacing(lua_State* L);
+		int GetArmSpacing(lua_State* L);
+		int SetLegSpacing(lua_State* L);
+		int GetLegSpacing(lua_State* L);
 	};
 
 	class DecalComponent_BindLua
@@ -1886,12 +2002,14 @@ namespace wi::lua::scene
 		int Jump(lua_State* L);
 		int Turn(lua_State* L);
 		int Lean(lua_State* L);
+		int Shake(lua_State* L);
 
 		int AddAnimation(lua_State* L);
 		int PlayAnimation(lua_State* L);
 		int StopAnimation(lua_State* L);
 		int SetAnimationAmount(lua_State* L);
 		int GetAnimationAmount(lua_State* L);
+		int GetAnimationTimer(lua_State* L);
 		int IsAnimationEnded(lua_State* L);
 
 		int SetGroundFriction(lua_State* L);
@@ -1914,6 +2032,7 @@ namespace wi::lua::scene
 		int SetRelativeOffset(lua_State* L);
 		int SetFootPlacementEnabled(lua_State* L);
 		int SetCharacterToCharacterCollisionDisabled(lua_State* L);
+		int SetDedicatedShadow(lua_State* L);
 
 		int GetHealth(lua_State* L);
 		int GetWidth(lua_State* L);
@@ -1933,6 +2052,7 @@ namespace wi::lua::scene
 		int GetRelativeOffset(lua_State* L);
 		int IsFootPlacementEnabled(lua_State* L);
 		int IsCharacterToCharacterCollisionDisabled(lua_State* L);
+		int IsDedicatedShadow(lua_State* L);
 		int GetLeaning(lua_State* L);
 		int GetLeaningSmoothed(lua_State* L);
 		int GetFootOffset(lua_State* L);

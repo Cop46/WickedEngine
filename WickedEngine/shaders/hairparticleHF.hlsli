@@ -3,18 +3,9 @@
 #include "globals.hlsli"
 #include "ShaderInterop_HairParticle.h"
 
-ShaderMeshInstance HairGetInstance()
-{
-	return load_instance(xHairInstanceIndex);
-}
-ShaderGeometry HairGetGeometry()
-{
-	return load_geometry(HairGetInstance().geometryOffset);
-}
-ShaderMaterial HairGetMaterial()
-{
-	return load_material(HairGetGeometry().materialIndex);
-}
+#define HairGetInstance() (load_instance(xHairInstanceIndex))
+#define HairGetGeometry() (load_geometry(HairGetInstance().geometryOffset))
+#define HairGetMaterial() (load_material(HairGetGeometry().materialIndex))
 
 struct VertexToPixel
 {
@@ -33,6 +24,11 @@ struct VertexToPixel
 	inline float3 GetViewVector()
 	{
 		return GetCamera().screen_to_nearplane(pos) - GetPos3D(); // ortho support, cannot use cameraPos!
+	}
+
+	inline half GetDither()
+	{
+		return fade;
 	}
 };
 

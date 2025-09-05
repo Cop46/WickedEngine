@@ -61,7 +61,7 @@ public:
 	wi::gui::Button revealTextureButton;
 	wi::gui::ComboBox axisCombo;
 
-	void Update(float dt);
+	void UpdateData(float dt);
 	void DrawBrush(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const;
 
 	XMFLOAT2 pos = XMFLOAT2(0, 0);
@@ -92,7 +92,7 @@ public:
 		Z
 	};
 
-	wi::vector<wi::gui::Button> terrain_material_buttons;
+	std::deque<wi::gui::Button> terrain_material_buttons;
 	size_t terrain_material_layer = 0;
 
 	float texture_paint_radius = 50;

@@ -34,245 +34,134 @@ void LightWindow::Create(EditorComponent* _editor)
 
 	float mod_x = 10;
 
+	auto forEachSelected = [this] (auto func) {
+		return [this, func] (auto args) {
+			wi::scene::Scene& scene = editor->GetCurrentScene();
+			for (auto& x : editor->translator.selected)
+			{
+				LightComponent* light = scene.lights.GetComponent(x.entity);
+				if (light != nullptr) func(light, args);
+			}
+		};
+	};
+
 	colorPicker.Create("Light Color", wi::gui::Window::WindowControls::NONE);
 	colorPicker.SetPos(XMFLOAT2(mod_x, y));
 	colorPicker.SetVisible(true);
 	colorPicker.SetEnabled(false);
-	colorPicker.OnColorChanged([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->color = args.color.toFloat3();
-			}
-		}
-	});
+	colorPicker.OnColorChanged(forEachSelected([] (auto light, auto args) {
+		light->color = args.color.toFloat3();
+	}));
 	AddWidget(&colorPicker);
 
 	float mod_wid = colorPicker.GetScale().x;
 	y += colorPicker.GetScale().y + 5;
 
 	intensitySlider.Create(0, 1000, 0, 100000, "Intensity: ");
-	intensitySlider.SetSize(XMFLOAT2(wid, hei));
-	intensitySlider.SetPos(XMFLOAT2(x, y));
-	intensitySlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->intensity = args.fValue;
-			}
-		}
-	});
+	intensitySlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->intensity = args.fValue;
+	}));
 	intensitySlider.SetEnabled(false);
 	intensitySlider.SetTooltip("Brightness of light in. The units that this is defined in depend on the type of light. \nPoint and spot lights use luminous intensity in candela (lm/sr) while directional lights use illuminance in lux (lm/m2).");
 	AddWidget(&intensitySlider);
 
 	rangeSlider.Create(1, 1000, 0, 100000, "Range: ");
-	rangeSlider.SetSize(XMFLOAT2(wid, hei));
-	rangeSlider.SetPos(XMFLOAT2(x, y += step));
-	rangeSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->range = args.fValue;
-			}
-		}
-	});
+	rangeSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->range = args.fValue;
+	}));
 	rangeSlider.SetEnabled(false);
 	rangeSlider.SetTooltip("Adjust the maximum range the light can affect.");
 	AddWidget(&rangeSlider);
 
 	radiusSlider.Create(0, 10, 0, 100000, "Radius: ");
-	radiusSlider.SetSize(XMFLOAT2(wid, hei));
-	radiusSlider.SetPos(XMFLOAT2(x, y += step));
-	radiusSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->radius = args.fValue;
-			}
-		}
-	});
+	radiusSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->radius = args.fValue;
+	}));
 	radiusSlider.SetEnabled(false);
 	radiusSlider.SetTooltip("[Experimental] Adjust the radius of the light source.\nFor directional light, this will only affect ray traced shadow softness.");
 	AddWidget(&radiusSlider);
 
 	lengthSlider.Create(0, 10, 0, 100000, "Length: ");
-	lengthSlider.SetSize(XMFLOAT2(wid, hei));
-	lengthSlider.SetPos(XMFLOAT2(x, y += step));
-	lengthSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->length = args.fValue;
-			}
-		}
-	});
+	lengthSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->length = args.fValue;
+	}));
 	lengthSlider.SetEnabled(false);
-	lengthSlider.SetTooltip("[Experimental] Adjust the length of the light source.\nWith this you can make capsule light out of a point light.");
+	lengthSlider.SetTooltip("Adjust the length of the light source.\nWith this you can make capsule light out of a point light.");
 	AddWidget(&lengthSlider);
 
+	heightSlider.Create(0, 10, 0, 100000, "Height: ");
+	heightSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->height = args.fValue;
+	}));
+	heightSlider.SetEnabled(false);
+	heightSlider.SetTooltip("Adjust the height of the rectangle light source.\n");
+	AddWidget(&heightSlider);
+
 	outerConeAngleSlider.Create(0.1f, XM_PIDIV2 - 0.01f, 0, 100000, "Outer Cone Angle: ");
-	outerConeAngleSlider.SetSize(XMFLOAT2(wid, hei));
-	outerConeAngleSlider.SetPos(XMFLOAT2(x, y += step));
-	outerConeAngleSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->outerConeAngle = args.fValue;
-			}
-		}
-	});
+	outerConeAngleSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->outerConeAngle = args.fValue;
+	}));
 	outerConeAngleSlider.SetEnabled(false);
 	outerConeAngleSlider.SetTooltip("Adjust the main cone aperture for spotlight.");
 	AddWidget(&outerConeAngleSlider);
 
 	innerConeAngleSlider.Create(0, XM_PI - 0.01f, 0, 100000, "Inner Cone Angle: ");
-	innerConeAngleSlider.SetSize(XMFLOAT2(wid, hei));
-	innerConeAngleSlider.SetPos(XMFLOAT2(x, y += step));
-	innerConeAngleSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->innerConeAngle = args.fValue;
-			}
-		}
-	});
+	innerConeAngleSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->innerConeAngle = args.fValue;
+	}));
 	innerConeAngleSlider.SetEnabled(false);
 	innerConeAngleSlider.SetTooltip("Adjust the inner cone aperture for spotlight.\n(The inner cone will always be inside the outer cone)");
 	AddWidget(&innerConeAngleSlider);
 
 	volumetricBoostSlider.Create(0, 10, 0, 1000, "Volumetric boost: ");
-	volumetricBoostSlider.SetSize(XMFLOAT2(wid, hei));
-	volumetricBoostSlider.SetPos(XMFLOAT2(x, y += step));
-	volumetricBoostSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->volumetric_boost = args.fValue;
-			}
-		}
-		});
+	volumetricBoostSlider.OnSlide(forEachSelected([] (auto light, auto args) {
+		light->volumetric_boost = args.fValue;
+	}));
 	volumetricBoostSlider.SetTooltip("Adjust the volumetric fog effect's strength just for this light");
 	AddWidget(&volumetricBoostSlider);
 
 	shadowCheckBox.Create("Shadow: ");
-	shadowCheckBox.SetSize(XMFLOAT2(hei, hei));
-	shadowCheckBox.SetPos(XMFLOAT2(x, y += step));
-	shadowCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->SetCastShadow(args.bValue);
-			}
-		}
-	});
+	shadowCheckBox.OnClick(forEachSelected([] (auto light, auto args) {
+		light->SetCastShadow(args.bValue);
+	}));
 	shadowCheckBox.SetEnabled(false);
 	shadowCheckBox.SetTooltip("Set light as shadow caster. Many shadow casters can affect performance!");
 	AddWidget(&shadowCheckBox);
 
 	volumetricsCheckBox.Create("Volumetric: ");
-	volumetricsCheckBox.SetSize(XMFLOAT2(hei, hei));
-	volumetricsCheckBox.SetPos(XMFLOAT2(x, y += step));
-	volumetricsCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->SetVolumetricsEnabled(args.bValue);
-			}
-		}
-	});
+	volumetricsCheckBox.OnClick(forEachSelected([] (auto light, auto args) {
+		light->SetVolumetricsEnabled(args.bValue);
+	}));
 	volumetricsCheckBox.SetEnabled(false);
 	volumetricsCheckBox.SetTooltip("Compute volumetric light scattering effect. \nThe fog settings affect scattering (see Weather window). If there is no fog, there is no scattering.");
 	AddWidget(&volumetricsCheckBox);
 
 	haloCheckBox.Create("Visualizer: ");
-	haloCheckBox.SetSize(XMFLOAT2(hei, hei));
-	haloCheckBox.SetPos(XMFLOAT2(x, y += step));
-	haloCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->SetVisualizerEnabled(args.bValue);
-			}
-		}
-	});
+	haloCheckBox.OnClick(forEachSelected([] (auto light, auto args) {
+		light->SetVisualizerEnabled(args.bValue);
+	}));
 	haloCheckBox.SetEnabled(false);
 	haloCheckBox.SetTooltip("Visualize light source emission");
 	AddWidget(&haloCheckBox);
 
 	staticCheckBox.Create("Static: ");
-	staticCheckBox.SetSize(XMFLOAT2(hei, hei));
-	staticCheckBox.SetPos(XMFLOAT2(x, y += step));
-	staticCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->SetStatic(args.bValue);
-			}
-		}
-	});
+	staticCheckBox.OnClick(forEachSelected([] (auto light, auto args) {
+		light->SetStatic(args.bValue);
+	}));
 	staticCheckBox.SetEnabled(false);
 	staticCheckBox.SetTooltip("Static lights will only be used for baking into lightmaps, DDGI and Surfel GI.");
 	AddWidget(&staticCheckBox);
 
 	volumetricCloudsCheckBox.Create("Volumetric Clouds: ");
-	volumetricCloudsCheckBox.SetSize(XMFLOAT2(hei, hei));
-	volumetricCloudsCheckBox.SetPos(XMFLOAT2(x, y += step));
-	volumetricCloudsCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->SetVolumetricCloudsEnabled(args.bValue);
-			}
-		}
-	});
+	volumetricCloudsCheckBox.OnClick(forEachSelected([] (auto light, auto args) {
+		light->SetVolumetricCloudsEnabled(args.bValue);
+	}));
 	volumetricCloudsCheckBox.SetEnabled(false);
 	volumetricCloudsCheckBox.SetTooltip("When enabled light emission will affect volumetric clouds.");
 	AddWidget(&volumetricCloudsCheckBox);
 
 	typeSelectorComboBox.Create("Type: ");
-	typeSelectorComboBox.SetSize(XMFLOAT2(wid, hei));
-	typeSelectorComboBox.SetPos(XMFLOAT2(x, y += step));
-	typeSelectorComboBox.OnSelect([&](wi::gui::EventArgs args) {
+	typeSelectorComboBox.OnSelect([=](wi::gui::EventArgs args) {
 		if (args.iValue < 0)
 			return;
 		wi::scene::Scene& scene = editor->GetCurrentScene();
@@ -281,7 +170,7 @@ void LightWindow::Create(EditorComponent* _editor)
 			LightComponent* light = scene.lights.GetComponent(x.entity);
 			if (light != nullptr)
 			{
-				light->SetType((LightComponent::LightType)args.iValue);
+			light->SetType((LightComponent::LightType)args.iValue);
 				SetLightType(light->GetType());
 			}
 		}
@@ -289,14 +178,13 @@ void LightWindow::Create(EditorComponent* _editor)
 	typeSelectorComboBox.AddItem("Directional");
 	typeSelectorComboBox.AddItem("Point");
 	typeSelectorComboBox.AddItem("Spot");
+	typeSelectorComboBox.AddItem("Rectangle");
 	typeSelectorComboBox.SetTooltip("Choose the light source type...");
 	typeSelectorComboBox.SetSelected((int)LightComponent::POINT);
 	AddWidget(&typeSelectorComboBox);
 
 	shadowResolutionComboBox.Create("Shadow resolution: ");
 	shadowResolutionComboBox.SetTooltip("You can force a fixed resolution for this light's shadow map to avoid dynamic scaling.\nIf you leave it as dynamic, the resolution will be scaled between 0 and the max shadow resolution in the renderer for this light type, based on light's distance and size.");
-	shadowResolutionComboBox.SetSize(XMFLOAT2(wid, hei));
-	shadowResolutionComboBox.SetPos(XMFLOAT2(x, y += step));
 	shadowResolutionComboBox.AddItem("Dynamic", uint64_t(-1));
 	shadowResolutionComboBox.AddItem("32", 32);
 	shadowResolutionComboBox.AddItem("64", 64);
@@ -305,30 +193,37 @@ void LightWindow::Create(EditorComponent* _editor)
 	shadowResolutionComboBox.AddItem("512", 512);
 	shadowResolutionComboBox.AddItem("1024", 1024);
 	shadowResolutionComboBox.AddItem("2048", 2048);
-	shadowResolutionComboBox.OnSelect([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			LightComponent* light = scene.lights.GetComponent(x.entity);
-			if (light != nullptr)
-			{
-				light->forced_shadow_resolution = int(args.userdata);
-			}
-		}
-	});
+	shadowResolutionComboBox.AddItem("4096", 4096);
+	shadowResolutionComboBox.AddItem("8192", 8192);
+	shadowResolutionComboBox.OnSelect(forEachSelected([] (auto light, auto args) {
+		light->forced_shadow_resolution = int(args.userdata);
+	}));
 	shadowResolutionComboBox.SetSelected(0);
 	AddWidget(&shadowResolutionComboBox);
 
 
+	cameraComboBox.Create("Camera source: ");
+	cameraComboBox.SetTooltip("Select a camera to use as texture");
+	cameraComboBox.OnSelect([=] (auto args) {
+		forEachSelected([] (auto light, auto args) {
+			light->cameraSource = int(args.userdata);
+		})(args);
+		auto& scene = editor->GetCurrentScene();
+		CameraComponent* camera = scene.cameras.GetComponent((Entity)args.userdata);
+		if (camera != nullptr)
+		{
+		 	camera->render_to_texture.resolution = XMUINT2(256, 256);
+		}
+	});
+	AddWidget(&cameraComboBox);
+
+
 	tipLabel.Create("TipLabel");
-	tipLabel.SetText("Tip: you can add a material to this entity, and the base color texture of it will be used to tint the light color.");
-	tipLabel.SetPos(XMFLOAT2(mod_x, y += step));
-	tipLabel.SetSize(XMFLOAT2(100, 50));
+	tipLabel.SetText("Tip: you can add a material to this entity, and the base color texture of it will be used to tint the light color (point light needs a cubemap, spotlight needs a texture2D). You can also add a video to this entity and the video will be used as light color multiplier (only for spotlight and rectangle light).");
+	tipLabel.SetFitTextEnabled(true);
 	AddWidget(&tipLabel);
 
 	lensflare_Label.Create("Lens flare textures: ");
-	lensflare_Label.SetPos(XMFLOAT2(mod_x, y += step));
-	lensflare_Label.SetSize(XMFLOAT2(wid, hei));
 	AddWidget(&lensflare_Label);
 
 	for (size_t i = 0; i < arraysize(lensflare_Button); ++i)
@@ -336,8 +231,6 @@ void LightWindow::Create(EditorComponent* _editor)
 		lensflare_Button[i].Create("LensFlareSlot");
 		lensflare_Button[i].SetText("");
 		lensflare_Button[i].SetTooltip("Load a lensflare texture to this slot");
-		lensflare_Button[i].SetPos(XMFLOAT2(mod_x, y += step));
-		lensflare_Button[i].SetSize(XMFLOAT2(mod_wid, hei));
 		lensflare_Button[i].OnClick([=](wi::gui::EventArgs args) {
 			LightComponent* light = editor->GetCurrentScene().lights.GetComponent(entity);
 			if (light == nullptr)
@@ -345,14 +238,14 @@ void LightWindow::Create(EditorComponent* _editor)
 
 			if (light->lensFlareRimTextures.size() <= i)
 			{
-				light->lensFlareRimTextures.resize(i + 1);
-				light->lensFlareNames.resize(i + 1);
+			light->lensFlareRimTextures.resize(i + 1);
+			light->lensFlareNames.resize(i + 1);
 			}
 
 			if (light->lensFlareRimTextures[i].IsValid())
 			{
-				light->lensFlareNames[i] = "";
-				light->lensFlareRimTextures[i] = {};
+			light->lensFlareNames[i] = "";
+			light->lensFlareRimTextures[i] = {};
 				lensflare_Button[i].SetText("");
 			}
 			else
@@ -363,8 +256,8 @@ void LightWindow::Create(EditorComponent* _editor)
 				params.extensions = wi::resourcemanager::GetSupportedImageExtensions();
 				wi::helper::FileDialog(params, [this, light, i](std::string fileName) {
 					wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
-						light->lensFlareRimTextures[i] = wi::resourcemanager::Load(fileName);
-						light->lensFlareNames[i] = fileName;
+					light->lensFlareRimTextures[i] = wi::resourcemanager::Load(fileName);
+					light->lensFlareNames[i] = fileName;
 						lensflare_Button[i].SetText(wi::helper::GetFileNameFromPath(fileName));
 					});
 				});
@@ -384,7 +277,8 @@ void LightWindow::SetEntity(Entity entity)
 	bool changed = this->entity != entity;
 	this->entity = entity;
 
-	const LightComponent* light = editor->GetCurrentScene().lights.GetComponent(entity);
+	Scene& scene = editor->GetCurrentScene();
+	const LightComponent* light = scene.lights.GetComponent(entity);
 
 	if (light != nullptr)
 	{
@@ -393,6 +287,7 @@ void LightWindow::SetEntity(Entity entity)
 		rangeSlider.SetValue(light->range);
 		radiusSlider.SetValue(light->radius);
 		lengthSlider.SetValue(light->length);
+		heightSlider.SetValue(light->height);
 		outerConeAngleSlider.SetValue(light->outerConeAngle);
 		innerConeAngleSlider.SetValue(light->innerConeAngle);
 		volumetricBoostSlider.SetValue(light->volumetric_boost);
@@ -428,37 +323,24 @@ void LightWindow::SetEntity(Entity entity)
 				}
 				lensflare_Button[i].SetEnabled(true);
 			}
+
+			cameraComboBox.ClearItems();
+			cameraComboBox.AddItem("INVALID_ENTITY", (uint64_t)INVALID_ENTITY);
+			for (size_t i = 0; i < scene.cameras.GetCount(); ++i)
+			{
+				Entity cameraEntity = scene.cameras.GetEntity(i);
+				const NameComponent* name = scene.names.GetComponent(cameraEntity);
+				if (name != nullptr)
+				{
+					cameraComboBox.AddItem(name->name, (uint64_t)cameraEntity);
+				}
+			}
+			cameraComboBox.SetSelectedByUserdataWithoutCallback((uint64_t)light->cameraSource);
 		}
 	}
 }
 void LightWindow::SetLightType(LightComponent::LightType type)
 {
-	if (type == LightComponent::DIRECTIONAL)
-	{
-		rangeSlider.SetEnabled(false);
-		outerConeAngleSlider.SetEnabled(false);
-		innerConeAngleSlider.SetEnabled(false);
-		radiusSlider.SetRange(0, 1);
-		lengthSlider.SetEnabled(false);
-	}
-	else
-	{
-		rangeSlider.SetEnabled(true);
-		if (type == LightComponent::SPOT)
-		{
-			outerConeAngleSlider.SetEnabled(true);
-			innerConeAngleSlider.SetEnabled(true);
-			lengthSlider.SetEnabled(false);
-		}
-		else
-		{
-			outerConeAngleSlider.SetEnabled(false);
-			innerConeAngleSlider.SetEnabled(false);
-			lengthSlider.SetEnabled(true);
-		}
-		radiusSlider.SetRange(0, 10);
-	}
-	radiusSlider.SetEnabled(true);
 	RefreshCascades();
 }
 
@@ -476,8 +358,6 @@ void LightWindow::RefreshCascades()
 
 	if (light == nullptr || light->type != LightComponent::DIRECTIONAL)
 		return;
-
-	cascades.reserve(light->cascade_distances.size());
 
 	int counter = 0;
 	for (auto& x : light->cascade_distances)
@@ -523,89 +403,101 @@ void LightWindow::RefreshCascades()
 	AddWidget(&addCascadeButton);
 	addCascadeButton.SetEnabled(true);
 
-	// refresh theme:
-	editor->generalWnd.themeCombo.SetSelected(editor->generalWnd.themeCombo.GetSelected());
+	editor->generalWnd.RefreshTheme();
 
 }
 
 void LightWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 140;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = 140;
-		const float margin_right = 40;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_right = 40;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add_fullwidth(colorPicker);
-	add(typeSelectorComboBox);
-	add(intensitySlider);
-	add(rangeSlider);
-	add(outerConeAngleSlider);
-	add(innerConeAngleSlider);
-	add(volumetricBoostSlider);
-	add(radiusSlider);
-	add(lengthSlider);
-	add_right(shadowCheckBox);
-	add_right(haloCheckBox);
-	add_right(volumetricsCheckBox);
-	add_right(staticCheckBox);
-	add_right(volumetricCloudsCheckBox);
-	add(shadowResolutionComboBox);
-
-	const LightComponent* light = editor->GetCurrentScene().lights.GetComponent(entity);
-	if (light != nullptr && light->GetType() == LightComponent::DIRECTIONAL)
+	LightComponent* light = editor->GetCurrentScene().lights.GetComponent(entity);
+	if (light != nullptr)
 	{
-		y += jump;
-		for (auto& x : cascades)
+		if (light->type == LightComponent::DIRECTIONAL)
 		{
-			add(x.distanceSlider);
-			x.removeButton.SetPos(XMFLOAT2(x.distanceSlider.GetPos().x - padding - x.removeButton.GetSize().x, x.distanceSlider.GetPos().y));
+			rangeSlider.SetVisible(false);
+			outerConeAngleSlider.SetVisible(false);
+			innerConeAngleSlider.SetVisible(false);
+			radiusSlider.SetVisible(true);
+			radiusSlider.SetRange(0, 1);
+			lengthSlider.SetVisible(false);
+			heightSlider.SetVisible(false);
 		}
-		add_fullwidth(addCascadeButton);
+		else
+		{
+			rangeSlider.SetVisible(true);
+			if (light->type == LightComponent::SPOT)
+			{
+				outerConeAngleSlider.SetVisible(true);
+				innerConeAngleSlider.SetVisible(true);
+				radiusSlider.SetVisible(true);
+				lengthSlider.SetVisible(false);
+				heightSlider.SetVisible(false);
+			}
+			else if (light->type == LightComponent::POINT)
+			{
+				outerConeAngleSlider.SetVisible(false);
+				innerConeAngleSlider.SetVisible(false);
+				radiusSlider.SetVisible(true);
+				lengthSlider.SetVisible(true);
+				heightSlider.SetVisible(false);
+			}
+			else if (light->type == LightComponent::RECTANGLE)
+			{
+				outerConeAngleSlider.SetVisible(false);
+				innerConeAngleSlider.SetVisible(false);
+				radiusSlider.SetVisible(false);
+				lengthSlider.SetVisible(true);
+				heightSlider.SetVisible(true);
+			}
+			radiusSlider.SetRange(0, 10);
+		}
 	}
 
-	y += jump;
+	layout.add_fullwidth(colorPicker);
+	layout.add(typeSelectorComboBox);
+	layout.add(intensitySlider);
+	layout.add(rangeSlider);
+	layout.add(outerConeAngleSlider);
+	layout.add(innerConeAngleSlider);
+	layout.add(volumetricBoostSlider);
+	layout.add(radiusSlider);
+	layout.add(lengthSlider);
+	layout.add(heightSlider);
+	layout.add_right(shadowCheckBox);
+	layout.add_right(haloCheckBox);
+	layout.add_right(volumetricsCheckBox);
+	layout.add_right(staticCheckBox);
+	layout.add_right(volumetricCloudsCheckBox);
+	layout.add(shadowResolutionComboBox);
+	layout.add(cameraComboBox);
 
-	add_fullwidth(tipLabel);
+	if (light != nullptr && light->GetType() == LightComponent::DIRECTIONAL)
+	{
+		layout.jump();
+		for (auto& x : cascades)
+		{
+			layout.add(x.distanceSlider);
+			x.removeButton.SetPos(XMFLOAT2(x.distanceSlider.GetPos().x - layout.padding - x.removeButton.GetSize().x, x.distanceSlider.GetPos().y));
+		}
+		layout.add_fullwidth(addCascadeButton);
+	}
 
-	y += jump;
+	layout.jump();
 
-	add_fullwidth(lensflare_Label);
-	add_fullwidth(lensflare_Button[0]);
-	add_fullwidth(lensflare_Button[1]);
-	add_fullwidth(lensflare_Button[2]);
-	add_fullwidth(lensflare_Button[3]);
-	add_fullwidth(lensflare_Button[4]);
-	add_fullwidth(lensflare_Button[5]);
-	add_fullwidth(lensflare_Button[6]);
+	layout.add_fullwidth(tipLabel);
+
+	layout.jump();
+
+	layout.add_fullwidth(lensflare_Label);
+	layout.add_fullwidth(lensflare_Button[0]);
+	layout.add_fullwidth(lensflare_Button[1]);
+	layout.add_fullwidth(lensflare_Button[2]);
+	layout.add_fullwidth(lensflare_Button[3]);
+	layout.add_fullwidth(lensflare_Button[4]);
+	layout.add_fullwidth(lensflare_Button[5]);
+	layout.add_fullwidth(lensflare_Button[6]);
 
 }

@@ -275,6 +275,38 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 				}
 			}
 			break;
+			case ENTITY_TYPE_RECTLIGHT:
+			{
+				const half4 quaternion = light.GetQuaternion();
+				const half3 right = rotate_vector(half3(1, 0, 0), quaternion);
+				const half3 up = rotate_vector(half3(0, 1, 0), quaternion);
+				const half3 forward = cross(up, right);
+				if (dot(surface.P - light.position, forward) <= 0)
+					break; // behind light
+				light.position += right * (rng.next_float() - 0.5) * light.GetLength();
+				light.position += up * (rng.next_float() - 0.5) * light.GetHeight();
+				L = light.position - surface.P;
+				const float dist2 = dot(L, L);
+				const float range = light.GetRange();
+				const float range2 = range * range;
+
+				[branch]
+				if (dist2 < range2)
+				{
+					dist = sqrt(dist2);
+					L /= dist;
+
+					surfaceToLight.create(surface, L);
+
+					[branch]
+					if (any(surfaceToLight.NdotL_sss))
+					{
+						lightColor = light.GetColor().rgb;
+						lightColor *= attenuation_pointlight(dist2, range, range2);
+					}
+				}
+			}
+			break;
 			case ENTITY_TYPE_SPOTLIGHT:
 			{
 				float3 Loriginal = normalize(light.position - surface.P);
@@ -317,7 +349,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 				if(light.IsCastingShadow() && surface.IsReceiveShadow())
 				{
 					RayDesc newRay;
-					newRay.Origin = surface.P;
+					newRay.Origin = surface.P + surface.facenormal * 0.001; // NOTE: TMin was not enough on AMD to avoid self intersection!!!
 					newRay.TMin = 0.001;
 					newRay.TMax = dist;
 					newRay.Direction = normalize(L + max3(surface.sss));
@@ -410,12 +442,7 @@ void main(uint3 DTid : SV_DispatchThreadID, uint groupIndex : SV_GroupIndex)
 				energy *= surface.albedo * (1 - surface.F) / max(0.001, 1 - specular_chance) / max(0.001, 1 - surface.transmission);
 			}
 
-			if (dot(ray.Direction, surface.facenormal) <= 0)
-			{
-				// Don't allow normal map to bend over the face normal more than 90 degrees to avoid light leaks
-				//	In this case, the ray is pushed above the surface slightly to not go below
-				ray.Origin += surface.facenormal * 0.001;
-			}
+			ray.Origin += surface.facenormal * 0.001; // NOTE: TMin was not enough on AMD to avoid self intersection!!!
 		}
 
 	}

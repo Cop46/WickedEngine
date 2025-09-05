@@ -262,6 +262,7 @@ void ContentBrowserWindow::SetSelection(SELECTION selection)
 			break;
 		case SELECTION_MODELS:
 			AddItems(content_folder + "models/", "wiscene", ICON_OBJECT);
+			AddItems(content_folder + "models/", "vrma", ICON_ANIMATION);
 			AddItems(content_folder + "models/", "vrm", ICON_HUMANOID);
 			AddItems(content_folder + "models/", "gltf", ICON_OBJECT);
 			AddItems(content_folder + "models/", "glb", ICON_OBJECT);
@@ -284,6 +285,10 @@ void ContentBrowserWindow::SetSelection(SELECTION selection)
 				if (!ext.compare("WISCENE"))
 				{
 					AddItem(filename, ICON_OBJECT);
+				}
+				if (!ext.compare("VRMA"))
+				{
+					AddItem(filename, ICON_ANIMATION);
 				}
 				if (!ext.compare("VRM"))
 				{
@@ -313,13 +318,14 @@ void ContentBrowserWindow::SetSelection(SELECTION selection)
 				i = std::min(i, editor->recentFolders.size() - 1);
 				const std::string& folder = editor->recentFolders[editor->recentFolders.size() - 1 - i];
 				AddItems(folder, "wiscene", ICON_OBJECT);
+				AddItems(folder, "vrma", ICON_ANIMATION);
 				AddItems(folder, "vrm", ICON_HUMANOID);
 				AddItems(folder, "gltf", ICON_OBJECT);
 				AddItems(folder, "glb", ICON_OBJECT);
 				AddItems(folder, "fbx", ICON_OBJECT);
 				AddItems(folder, "obj", ICON_OBJECT);
 				AddItems(folder, "lua", ICON_SCRIPT);
-				openFolderButton.OnClick([this, folder](wi::gui::EventArgs args) {
+				openFolderButton.OnClick([folder](wi::gui::EventArgs args) {
 					wi::helper::OpenUrl(folder);
 				});
 				AddWidget(&openFolderButton, wi::gui::Window::AttachmentOptions::NONE);
@@ -332,8 +338,7 @@ void ContentBrowserWindow::SetSelection(SELECTION selection)
 			AddWidget(&x);
 		}
 
-		// Refresh theme:
-		editor->generalWnd.themeCombo.SetSelected(editor->generalWnd.themeCombo.GetSelected());
+		editor->generalWnd.RefreshTheme();
 
 	});
 }

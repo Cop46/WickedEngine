@@ -53,6 +53,9 @@ namespace wi
 		wi::Canvas canvas;
 		wi::platform::window_type window;
 
+		wi::graphics::Texture splash_screen;
+		int splash_screen_subresource = -1;
+
 		// Runs the main engine loop
 		void Run();
 
@@ -111,7 +114,7 @@ namespace wi
 			// display the active graphics pipeline count
 			bool pipeline_count = false;
 			// display the pipeline creation info
-			bool pipeline_creation = false;
+			bool pipeline_creation = true;
 			// display video memory usage and budget
 			bool vram_usage = false;
 			// text size
@@ -134,6 +137,8 @@ namespace wi
 		}
 		bool IsFaded() const { return fadeManager.IsFaded(); }
 
+		const std::string rewriteable_startup_script_text = "wicked_engine_rewriteable_startup_script_path_paddedlength_127_uniquestring                                                   ";
+		bool IsScriptReplacement() const;
 	};
 
 }

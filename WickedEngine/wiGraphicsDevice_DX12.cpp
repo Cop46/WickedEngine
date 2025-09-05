@@ -126,6 +126,8 @@ namespace dx12_internal
 			ret |= D3D12_RESOURCE_STATE_VIDEO_DECODE_READ;
 		if (has_flag(value, ResourceState::VIDEO_DECODE_DST))
 			ret |= D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE;
+		if (has_flag(value, ResourceState::VIDEO_DECODE_DPB))
+			ret |= D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE;
 
 		if (has_flag(value, ResourceState::SWAPCHAIN))
 			ret |= D3D12_RESOURCE_STATE_PRESENT;
@@ -1436,12 +1438,14 @@ namespace dx12_internal
 
 		ComPtr<ID3D12VersionedRootSignatureDeserializer> rootsig_deserializer;
 		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* rootsig_desc = nullptr;
+		std::shared_ptr<void> rootsig_desc_lifetime_extender;
 		RootSignatureOptimizer rootsig_optimizer;
 
 		struct PSO_STREAM
 		{
 			struct PSO_STREAM1
 			{
+				CD3DX12_PIPELINE_STATE_STREAM_FLAGS Flags;
 				CD3DX12_PIPELINE_STATE_STREAM_VS VS;
 				CD3DX12_PIPELINE_STATE_STREAM_HS HS;
 				CD3DX12_PIPELINE_STATE_STREAM_DS DS;
@@ -1544,11 +1548,6 @@ namespace dx12_internal
 		std::shared_ptr<GraphicsDevice_DX12::AllocationHandler> allocationhandler;
 		ComPtr<ID3D12VideoDecoderHeap> decoder_heap;
 		ComPtr<ID3D12VideoDecoder> decoder;
-
-		std::atomic<uint32_t> current_param_idx{ 0 };
-		DXVA_PicParams_H264 pic_params[32] = {};
-		DXVA_Qmatrix_H264 qmatrix[32] = {};
-		DXVA_Slice_H264_Short slices[32] = {};
 
 		~VideoDecoder_DX12()
 		{
@@ -1714,12 +1713,12 @@ std::mutex queue_locker;
 	}
 	void GraphicsDevice_DX12::CopyAllocator::submit(CopyCMD cmd)
 	{
-		cmd.commandList->Close();
+		dx12_check(cmd.commandList->Close());
 		ID3D12CommandList* commandlists[] = {
 			cmd.commandList.Get()
 		};
 
-		cmd.fence->Signal(0);
+		dx12_check(cmd.fence->Signal(0));
 
 		{
 #ifdef PLATFORM_XBOX
@@ -2299,7 +2298,7 @@ std::mutex queue_locker;
 #endif // PLATFORM_WINDOWS_DESKTOP
 
 		HRESULT hr;
-		Microsoft::WRL::ComPtr<IDXGIAdapter1> dxgiAdapter;
+		ComPtr<IDXGIAdapter1> dxgiAdapter;
 
 #ifdef PLATFORM_XBOX
 
@@ -2422,6 +2421,7 @@ std::mutex queue_locker;
 
 				disabledMessages.push_back(D3D12_MESSAGE_ID_DRAW_EMPTY_SCISSOR_RECTANGLE);
 				disabledMessages.push_back(D3D12_MESSAGE_ID_SETPRIVATEDATA_CHANGINGPARAMS);
+				disabledMessages.push_back(D3D12_MESSAGE_ID_HEAP_ADDRESS_RANGE_INTERSECTS_MULTIPLE_BUFFERS);
 
 				D3D12_INFO_QUEUE_FILTER filter = {};
 				filter.AllowList.NumSeverities = static_cast<UINT>(enabledSeverities.size());
@@ -2502,8 +2502,27 @@ std::mutex queue_locker;
 			hr = dx12_check(device->CreateCommandQueue(&queues[QUEUE_VIDEO_DECODE].desc, PPV_ARGS(queues[QUEUE_VIDEO_DECODE].queue)));
 			if (SUCCEEDED(hr))
 			{
-				capabilities |= GraphicsDeviceCapability::VIDEO_DECODE_H264;
 				dx12_check(queues[QUEUE_VIDEO_DECODE].queue->SetName(L"QUEUE_VIDEO_DECODE"));
+
+				D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILE_COUNT video_decode_profile_count = {};
+				dx12_check(video_device->CheckFeatureSupport(D3D12_FEATURE_VIDEO_DECODE_PROFILE_COUNT, &video_decode_profile_count, sizeof(video_decode_profile_count)));
+				video_decode_profile_list.resize(video_decode_profile_count.ProfileCount);
+				D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILES video_decode_profiles = {};
+				video_decode_profiles.ProfileCount = video_decode_profile_count.ProfileCount;
+				video_decode_profiles.pProfiles = video_decode_profile_list.data();
+				dx12_check(video_device->CheckFeatureSupport(D3D12_FEATURE_VIDEO_DECODE_PROFILES, &video_decode_profiles, sizeof(video_decode_profiles)));
+
+				for (auto& profile : video_decode_profile_list)
+				{
+					if (profile == D3D12_VIDEO_DECODE_PROFILE_H264)
+					{
+						capabilities |= GraphicsDeviceCapability::VIDEO_DECODE_H264;
+					}
+					else if (profile == D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN)
+					{
+						//capabilities |= GraphicsDeviceCapability::VIDEO_DECODE_H265; //TODO
+					}
+				}
 			}
 		}
 
@@ -2727,7 +2746,7 @@ std::mutex queue_locker;
 				break;
 			}
 			error += "\nExiting.";
-			wilog_messagebox(error.c_str());
+			wilog_messagebox("%s", error.c_str());
 			wi::platform::Exit();
 		}
 
@@ -3533,6 +3552,20 @@ std::mutex queue_locker;
 			resourcedesc.Flags |= D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS;
 		}
 
+		if (has_flag(texture->desc.misc_flags, ResourceMiscFlag::VIDEO_DECODE_DPB_ONLY))
+		{
+			resourcedesc.Flags = D3D12_RESOURCE_FLAG_VIDEO_DECODE_REFERENCE_ONLY | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE;
+		}
+
+		if (
+			has_flag(texture->desc.misc_flags, ResourceMiscFlag::VIDEO_DECODE) ||
+			has_flag(texture->desc.misc_flags, ResourceMiscFlag::VIDEO_DECODE_DPB_ONLY)
+			)
+		{
+			// Nvidia GPU will crash if placed resource is used for video decode operation!
+			allocationDesc.Flags = D3D12MA::ALLOCATION_FLAG_COMMITTED;
+		}
+
 		switch (texture->desc.type)
 		{
 		case TextureDesc::Type::TEXTURE_1D:
@@ -4018,6 +4051,7 @@ std::mutex queue_locker;
 		pso->desc = *desc;
 
 		auto& stream = internal_state->stream;
+		//stream.stream1.Flags |= D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS; // doesn't work on windows 10
 		if (pso->desc.vs != nullptr)
 		{
 			auto shader_internal = to_internal(pso->desc.vs);
@@ -4026,6 +4060,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.vs->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4037,6 +4072,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.hs->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4048,6 +4084,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.ds->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4059,6 +4096,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.gs->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4070,6 +4108,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.ps->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4082,6 +4121,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.ms->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4093,6 +4133,7 @@ std::mutex queue_locker;
 			{
 				internal_state->rootSignature = shader_internal->rootSignature;
 				internal_state->rootsig_desc = shader_internal->rootsig_desc;
+				internal_state->rootsig_desc_lifetime_extender = pso->desc.as->internal_state;
 				stream.stream1.ROOTSIG = internal_state->rootSignature.Get();
 			}
 		}
@@ -4496,38 +4537,25 @@ std::mutex queue_locker;
 		if (video_device == nullptr)
 			return false;
 
-		D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILE_COUNT video_decode_profile_count = {};
-		dx12_check(video_device->CheckFeatureSupport(D3D12_FEATURE_VIDEO_DECODE_PROFILE_COUNT, &video_decode_profile_count, sizeof(video_decode_profile_count)));
-		wi::vector<GUID> profiles(video_decode_profile_count.ProfileCount);
-		D3D12_FEATURE_DATA_VIDEO_DECODE_PROFILES video_decode_profiles = {};
-		video_decode_profiles.ProfileCount = video_decode_profile_count.ProfileCount;
-		video_decode_profiles.pProfiles = profiles.data();
-		dx12_check(video_device->CheckFeatureSupport(D3D12_FEATURE_VIDEO_DECODE_PROFILES, &video_decode_profiles, sizeof(video_decode_profiles)));
 		D3D12_VIDEO_DECODER_DESC decoder_desc = {};
 		switch (desc->profile)
 		{
 		case VideoProfile::H264:
+			if (!CheckCapability(GraphicsDeviceCapability::VIDEO_DECODE_H264))
+				return false;
 			decoder_desc.Configuration.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_H264;
 			decoder_desc.Configuration.InterlaceType = D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_NONE;
 			break;
-		//case VideoProfile::H265:
-		//	decoder_desc.Configuration.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
-		//	break;
+		case VideoProfile::H265:
+			if (!CheckCapability(GraphicsDeviceCapability::VIDEO_DECODE_H265))
+				return false;
+			decoder_desc.Configuration.DecodeProfile = D3D12_VIDEO_DECODE_PROFILE_HEVC_MAIN;
+			decoder_desc.Configuration.InterlaceType = D3D12_VIDEO_FRAME_CODED_INTERLACE_TYPE_NONE;
+			break;
 		default:
 			assert(0); // not implemented
-			break;
-		}
-		bool profile_valid = false;
-		for (auto& x : profiles)
-		{
-			if (x == decoder_desc.Configuration.DecodeProfile)
-			{
-				profile_valid = true;
-				break;
-			}
-		}
-		if (!profile_valid)
 			return false;
+		}
 
 		D3D12_FEATURE_DATA_VIDEO_DECODE_FORMAT_COUNT video_decode_format_count = {};
 		video_decode_format_count.Configuration = decoder_desc.Configuration;
@@ -4557,11 +4585,23 @@ std::mutex queue_locker;
 		video_decode_support.BitRate = desc->bit_rate;
 		video_decode_support.FrameRate = { 0, 1 };
 		dx12_check(video_device->CheckFeatureSupport(D3D12_FEATURE_VIDEO_DECODE_SUPPORT, &video_decode_support, sizeof(video_decode_support)));
-		bool reference_only = video_decode_support.ConfigurationFlags & D3D12_VIDEO_DECODE_CONFIGURATION_FLAG_REFERENCE_ONLY_ALLOCATIONS_REQUIRED;
-		assert(!reference_only); // Not supported currently, will need to use resource flags: D3D12_RESOURCE_FLAG_VIDEO_DECODE_REFERENCE_ONLY | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE, and do output decode conversion
 
 		if (video_decode_support.DecodeTier < D3D12_VIDEO_DECODE_TIER_1)
 			return false;
+
+		video_decoder->support = {};
+		if (video_decode_support.ConfigurationFlags & D3D12_VIDEO_DECODE_CONFIGURATION_FLAG_REFERENCE_ONLY_ALLOCATIONS_REQUIRED)
+		{
+			video_decoder->support |= VideoDecoderSupportFlags::DPB_AND_OUTPUT_DISTINCT;
+		}
+		else
+		{
+			video_decoder->support |= VideoDecoderSupportFlags::DPB_AND_OUTPUT_COINCIDE;
+		}
+		if (video_decode_support.DecodeTier >= D3D12_VIDEO_DECODE_TIER_2)
+		{
+			video_decoder->support |= VideoDecoderSupportFlags::DPB_INDIVIDUAL_TEXTURES_SUPPORTED;
+		}
 
 		auto internal_state = std::make_shared<VideoDecoder_DX12>();
 		internal_state->allocationhandler = allocationhandler;
@@ -5603,11 +5643,11 @@ std::mutex queue_locker;
 					// Note: pCommandListDebugNameA and similar doesn't seem to contain anything while pCommandListDebugNameW does, so convert these by hand:
 					if (pNode->pCommandListDebugNameW != nullptr)
 					{
-						wi::helper::StringConvert(pNode->pCommandListDebugNameW, commandlistname);
+						wi::helper::StringConvert(pNode->pCommandListDebugNameW, commandlistname, arraysize(commandlistname));
 					}
 					if (pNode->pCommandQueueDebugNameW != nullptr)
 					{
-						wi::helper::StringConvert(pNode->pCommandQueueDebugNameW, commandqueuename);
+						wi::helper::StringConvert(pNode->pCommandQueueDebugNameW, commandqueuename, arraysize(commandqueuename));
 					}
 
 					log += std::string("[DRED] Commandlist = [") + commandlistname + std::string("], CommandQueue = [") + commandqueuename + std::string("], lastCompletedOp = [") + std::to_string(lastCompletedOp) + "], BreadCrumbCount = [" + std::to_string(pNode->BreadcrumbCount) + "]\n";
@@ -5662,7 +5702,7 @@ std::mutex queue_locker;
 						char objectname[1024] = {};
 						if (pNode->ObjectNameW != nullptr)
 						{
-							wi::helper::StringConvert(pNode->ObjectNameW, objectname);
+							wi::helper::StringConvert(pNode->ObjectNameW, objectname, arraysize(objectname));
 						}
 						log += std::string("\tName: ") + objectname + std::string(" ") + AllocTypeName + std::string("\n");
 						pNode = pNode->pNext;
@@ -5680,7 +5720,7 @@ std::mutex queue_locker;
 						char objectname[1024] = {};
 						if (pNode->ObjectNameW != nullptr)
 						{
-							wi::helper::StringConvert(pNode->ObjectNameW, objectname);
+							wi::helper::StringConvert(pNode->ObjectNameW, objectname, arraysize(objectname));
 						}
 						log += std::string("\tName: ") + objectname + std::string(" (Type: ") + AllocTypeName + std::string(")\n");
 						pNode = pNode->pNext;
@@ -5696,7 +5736,7 @@ std::mutex queue_locker;
 
 		std::string message = "D3D12: device removed, cause: ";
 		message += removedReasonString;
-		wilog_messagebox(message.c_str());
+		wilog_messagebox("%s", message.c_str());
 		wi::platform::Exit();
 #endif // PLATFORM_WINDOWS_DESKTOP
 	}
@@ -6666,6 +6706,8 @@ std::mutex queue_locker;
 					commandlist.GetGraphicsCommandList()->IASetPrimitiveTopology(internal_state->primitiveTopology);
 				}
 			}
+			else
+				return; // early exit for static pso
 
 			commandlist.prev_pipeline_hash = {};
 			commandlist.dirty_pso = false;
@@ -6677,7 +6719,8 @@ std::mutex queue_locker;
 			pipeline_hash.renderpass_hash = commandlist.renderpass_info.get_hash();
 			if (commandlist.prev_pipeline_hash == pipeline_hash)
 			{
-				return;
+				commandlist.active_pso = pso;
+				return; // early exit for dynamic pso|renderpass
 			}
 			commandlist.prev_pipeline_hash = pipeline_hash;
 			commandlist.dirty_pso = true;
@@ -6699,9 +6742,7 @@ std::mutex queue_locker;
 	{
 		CommandList_DX12& commandlist = GetCommandList(cmd);
 		if (commandlist.active_cs == cs)
-		{
 			return;
-		}
 		commandlist.active_pso = nullptr;
 		commandlist.active_rt = nullptr;
 
@@ -7438,8 +7479,20 @@ std::mutex queue_locker;
 		D3D12_VIDEO_DECODE_OUTPUT_STREAM_ARGUMENTS output = {};
 		D3D12_VIDEO_DECODE_INPUT_STREAM_ARGUMENTS input = {};
 
-		output.pOutputTexture2D = dpb_internal->resource.Get();
-		output.OutputSubresource = D3D12CalcSubresource(0, op->current_dpb, 0, op->DPB->desc.mip_levels, op->DPB->desc.array_size);
+		if (op->output == nullptr)
+		{
+			output.pOutputTexture2D = dpb_internal->resource.Get();
+			output.OutputSubresource = D3D12CalcSubresource(0, op->current_dpb, 0, op->DPB->desc.mip_levels, op->DPB->desc.array_size);
+		}
+		else
+		{
+			auto output_internal = to_internal(op->output);
+			output.pOutputTexture2D = output_internal->resource.Get();
+			output.OutputSubresource = 0;
+			output.ConversionArguments.Enable = TRUE;
+			output.ConversionArguments.pReferenceTexture2D = dpb_internal->resource.Get();
+			output.ConversionArguments.ReferenceSubresource = D3D12CalcSubresource(0, op->current_dpb, 0, op->DPB->desc.mip_levels, op->DPB->desc.array_size);
+		}
 
 		ID3D12Resource* reference_frames[16] = {};
 		UINT reference_subresources[16] = {};
@@ -7457,200 +7510,168 @@ std::mutex queue_locker;
 		input.CompressedBitstream.Size = op->stream_size;
 		input.pHeap = decoder_internal->decoder_heap.Get();
 
-		const h264::SliceHeader* slice_header = (const h264::SliceHeader*)op->slice_header;
-		const h264::PPS* pps = (const h264::PPS*)op->pps;
-		const h264::SPS* sps = (const h264::SPS*)op->sps;
-
-		const uint32_t current_param_idx = decoder_internal->current_param_idx.fetch_add(1) % arraysize(decoder_internal->slices);
-		DXVA_PicParams_H264& pic_params = decoder_internal->pic_params[current_param_idx];
-		DXVA_Qmatrix_H264& qmatrix = decoder_internal->qmatrix[current_param_idx];
-		DXVA_Slice_H264_Short& sliceinfo = decoder_internal->slices[current_param_idx];
-
-		pic_params = {};
-		qmatrix = {};
-		sliceinfo = {};
-
-		// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 21
-		//	https://www.microsoft.com/en-us/download/details.aspx?id=11323
-		//	Also: https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp
-		//	Also: https://github.com/mofo7777/H264Dxva2Decoder
-		pic_params.wFrameWidthInMbsMinus1 = sps->pic_width_in_mbs_minus1;
-		pic_params.wFrameHeightInMbsMinus1 = sps->pic_height_in_map_units_minus1;
-		pic_params.IntraPicFlag = op->frame_type == VideoFrameType::Intra ? 1 : 0;
-		pic_params.MbaffFrameFlag = 0 /*sps->mb_adaptive_frame_field_flag && !slice_header->field_pic_flag*/;
-		pic_params.field_pic_flag = 0 /*slice_header->field_pic_flag*/; // 0 = full frame (top and bottom field)
-		//pic_params.bottom_field_flag = 0; // missing??
-		pic_params.chroma_format_idc = 1; // sps->chroma_format_idc; // only 1 is supported (YUV420)
-		pic_params.bit_depth_chroma_minus8 = sps->bit_depth_chroma_minus8;
-		assert(pic_params.bit_depth_chroma_minus8 == 0);   // Only support for NV12 now
-		pic_params.bit_depth_luma_minus8 = sps->bit_depth_luma_minus8;
-		assert(pic_params.bit_depth_luma_minus8 == 0);   // Only support for NV12 now
-		pic_params.residual_colour_transform_flag = sps->separate_colour_plane_flag; // https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp#L328
-		if (pic_params.field_pic_flag)
+		if (video_decoder->desc.profile == VideoProfile::H264)
 		{
-			pic_params.CurrPic.AssociatedFlag = slice_header->bottom_field_flag ? 1 : 0; // if pic_params.field_pic_flag == 1, then this is 0 = top field, 1 = bottom_field
-		}
-		else
-		{
-			pic_params.CurrPic.AssociatedFlag = 0;
-		}
-		pic_params.CurrPic.Index7Bits = (UCHAR)op->current_dpb;
-		pic_params.CurrFieldOrderCnt[0] = op->poc[0];
-		pic_params.CurrFieldOrderCnt[1] = op->poc[1];
-		for (uint32_t i = 0; i < 16; ++i)
-		{
-			pic_params.RefFrameList[i].bPicEntry = 0xFF;
-			pic_params.FieldOrderCntList[i][0] = 0;
-			pic_params.FieldOrderCntList[i][1] = 0;
-			pic_params.FrameNumList[i] = 0;
-		}
-		for (size_t i = 0; i < op->dpb_reference_count; ++i)
-		{
-			uint32_t ref_slot = op->dpb_reference_slots[i];
-			assert(ref_slot != op->current_dpb);
-			pic_params.RefFrameList[i].AssociatedFlag = 0; // 0 = short term, 1 = long term reference
-			pic_params.RefFrameList[i].Index7Bits = (UCHAR)ref_slot;
-			pic_params.FieldOrderCntList[i][0] = op->dpb_poc[ref_slot];
-			pic_params.FieldOrderCntList[i][1] = op->dpb_poc[ref_slot];
-			pic_params.UsedForReferenceFlags |= 1 << (i * 2 + 0);
-			pic_params.UsedForReferenceFlags |= 1 << (i * 2 + 1);
-			pic_params.FrameNumList[i] = op->dpb_framenum[ref_slot];
-		}
-		pic_params.weighted_pred_flag = pps->weighted_pred_flag;
-		pic_params.weighted_bipred_idc = pps->weighted_bipred_idc;
-		pic_params.sp_for_switch_flag = 0;
+			const h264::SliceHeader* slice_header = (const h264::SliceHeader*)op->slice_header;
+			const h264::PPS* pps = (const h264::PPS*)op->pps;
+			const h264::SPS* sps = (const h264::SPS*)op->sps;
 
-		pic_params.transform_8x8_mode_flag = pps->transform_8x8_mode_flag;
-		pic_params.constrained_intra_pred_flag = pps->constrained_intra_pred_flag;
-		pic_params.num_ref_frames = sps->num_ref_frames;
-		pic_params.MbsConsecutiveFlag = 1; // The value shall be 1 unless the restricted-mode profile in use explicitly supports the value 0.
-		pic_params.frame_mbs_only_flag = sps->frame_mbs_only_flag;
-		pic_params.MinLumaBipredSize8x8Flag = sps->level_idc >= 31;
-		pic_params.RefPicFlag = op->reference_priority > 0 ? 1 : 0;
-		pic_params.frame_num = slice_header->frame_num;
-		pic_params.pic_init_qp_minus26 = pps->pic_init_qp_minus26;
-		pic_params.pic_init_qs_minus26 = pps->pic_init_qs_minus26;
-		pic_params.chroma_qp_index_offset = pps->chroma_qp_index_offset;
-		pic_params.second_chroma_qp_index_offset = pps->second_chroma_qp_index_offset;
-		pic_params.log2_max_frame_num_minus4 = sps->log2_max_frame_num_minus4;
-		pic_params.pic_order_cnt_type = sps->pic_order_cnt_type;
-		pic_params.log2_max_pic_order_cnt_lsb_minus4 = sps->log2_max_pic_order_cnt_lsb_minus4;
-		pic_params.delta_pic_order_always_zero_flag = sps->delta_pic_order_always_zero_flag;
-		pic_params.direct_8x8_inference_flag = sps->direct_8x8_inference_flag;
-		pic_params.entropy_coding_mode_flag = pps->entropy_coding_mode_flag;
-		pic_params.pic_order_present_flag = pps->pic_order_present_flag;
-		pic_params.num_slice_groups_minus1 = pps->num_slice_groups_minus1;
-		assert(pic_params.num_slice_groups_minus1 == 0);   // FMO Not supported by VA
-		pic_params.slice_group_map_type = pps->slice_group_map_type;
-		pic_params.deblocking_filter_control_present_flag = pps->deblocking_filter_control_present_flag;
-		pic_params.redundant_pic_cnt_present_flag = pps->redundant_pic_cnt_present_flag;
-		pic_params.slice_group_change_rate_minus1 = pps->slice_group_change_rate_minus1;
-		pic_params.Reserved16Bits = 3; // DXVA spec
-		pic_params.StatusReportFeedbackNumber = (UINT)op->decoded_frame_index + 1; // shall not be 0
-		assert(pic_params.StatusReportFeedbackNumber > 0);
-		pic_params.ContinuationFlag = 1;
-		pic_params.num_ref_idx_l0_active_minus1 = pps->num_ref_idx_l0_active_minus1;
-		pic_params.num_ref_idx_l1_active_minus1 = pps->num_ref_idx_l1_active_minus1;
-		input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_PICTURE_PARAMETERS;
-		input.FrameArguments[input.NumFrameArguments].Size = sizeof(pic_params);
-		input.FrameArguments[input.NumFrameArguments].pData = &pic_params;
-		input.NumFrameArguments++;
+			DXVA_PicParams_H264 pic_params_h264 = {};
+			DXVA_Qmatrix_H264 qmatrix_h264 = {};
+			DXVA_Slice_H264_Short sliceinfo_h264 = {};
 
-		// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 29
-		//	Also: https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp#L548
-		if (sps->seq_scaling_matrix_present_flag)
-		{
-			static constexpr int vl_zscan_normal_16[] =
+			// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 21
+			//	https://www.microsoft.com/en-us/download/details.aspx?id=11323
+			//	Also: https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp
+			//	Also: https://github.com/mofo7777/H264Dxva2Decoder
+			pic_params_h264.wFrameWidthInMbsMinus1 = sps->pic_width_in_mbs_minus1;
+			pic_params_h264.wFrameHeightInMbsMinus1 = sps->pic_height_in_map_units_minus1;
+			pic_params_h264.IntraPicFlag = op->frame_type == VideoFrameType::Intra ? 1 : 0;
+			pic_params_h264.MbaffFrameFlag = 0 /*sps->mb_adaptive_frame_field_flag && !slice_header->field_pic_flag*/;
+			pic_params_h264.field_pic_flag = 0 /*slice_header->field_pic_flag*/; // 0 = full frame (top and bottom field)
+			//pic_params_h264.bottom_field_flag = 0; // missing??
+			pic_params_h264.chroma_format_idc = 1; // sps->chroma_format_idc; // only 1 is supported (YUV420)
+			pic_params_h264.bit_depth_chroma_minus8 = sps->bit_depth_chroma_minus8;
+			assert(pic_params_h264.bit_depth_chroma_minus8 == 0);   // Only support for NV12 now
+			pic_params_h264.bit_depth_luma_minus8 = sps->bit_depth_luma_minus8;
+			assert(pic_params_h264.bit_depth_luma_minus8 == 0);   // Only support for NV12 now
+			pic_params_h264.residual_colour_transform_flag = sps->separate_colour_plane_flag; // https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp#L328
+			if (pic_params_h264.field_pic_flag)
 			{
-				/* Zig-Zag scan pattern */
-				0, 1, 4, 8, 5, 2, 3, 6,
-				9, 12, 13, 10, 7, 11, 14, 15
-			};
-			static constexpr int vl_zscan_normal[] =
+				pic_params_h264.CurrPic.AssociatedFlag = slice_header->bottom_field_flag ? 1 : 0; // if pic_params_h264.field_pic_flag == 1, then this is 0 = top field, 1 = bottom_field
+			}
+			else
 			{
-				/* Zig-Zag scan pattern */
-				 0, 1, 8,16, 9, 2, 3,10,
-				17,24,32,25,18,11, 4, 5,
-				12,19,26,33,40,48,41,34,
-				27,20,13, 6, 7,14,21,28,
-				35,42,49,56,57,50,43,36,
-				29,22,15,23,30,37,44,51,
-				58,59,52,45,38,31,39,46,
-				53,60,61,54,47,55,62,63
-			};
-			for (int i = 0; i < 6; ++i)
+				pic_params_h264.CurrPic.AssociatedFlag = 0;
+			}
+			pic_params_h264.CurrPic.Index7Bits = (UCHAR)op->current_dpb;
+			pic_params_h264.CurrFieldOrderCnt[0] = op->poc[0];
+			pic_params_h264.CurrFieldOrderCnt[1] = op->poc[1];
+			for (uint32_t i = 0; i < 16; ++i)
 			{
-				for (int j = 0; j < 16; ++j)
+				pic_params_h264.RefFrameList[i].bPicEntry = 0xFF;
+				pic_params_h264.FieldOrderCntList[i][0] = 0;
+				pic_params_h264.FieldOrderCntList[i][1] = 0;
+				pic_params_h264.FrameNumList[i] = 0;
+			}
+			for (size_t i = 0; i < op->dpb_reference_count; ++i)
+			{
+				uint32_t ref_slot = op->dpb_reference_slots[i];
+				assert(ref_slot != op->current_dpb);
+				pic_params_h264.RefFrameList[i].AssociatedFlag = 0; // 0 = short term, 1 = long term reference
+				pic_params_h264.RefFrameList[i].Index7Bits = (UCHAR)ref_slot;
+				pic_params_h264.FieldOrderCntList[i][0] = op->dpb_poc[ref_slot];
+				pic_params_h264.FieldOrderCntList[i][1] = op->dpb_poc[ref_slot];
+				pic_params_h264.UsedForReferenceFlags |= 1 << (i * 2 + 0);
+				pic_params_h264.UsedForReferenceFlags |= 1 << (i * 2 + 1);
+				pic_params_h264.FrameNumList[i] = op->dpb_framenum[ref_slot];
+			}
+			pic_params_h264.weighted_pred_flag = pps->weighted_pred_flag;
+			pic_params_h264.weighted_bipred_idc = pps->weighted_bipred_idc;
+			pic_params_h264.sp_for_switch_flag = 0;
+
+			pic_params_h264.transform_8x8_mode_flag = pps->transform_8x8_mode_flag;
+			pic_params_h264.constrained_intra_pred_flag = pps->constrained_intra_pred_flag;
+			pic_params_h264.num_ref_frames = sps->num_ref_frames;
+			pic_params_h264.MbsConsecutiveFlag = 1; // The value shall be 1 unless the restricted-mode profile in use explicitly supports the value 0.
+			pic_params_h264.frame_mbs_only_flag = sps->frame_mbs_only_flag;
+			pic_params_h264.MinLumaBipredSize8x8Flag = sps->level_idc >= 31;
+			pic_params_h264.RefPicFlag = op->reference_priority > 0 ? 1 : 0;
+			pic_params_h264.frame_num = slice_header->frame_num;
+			pic_params_h264.pic_init_qp_minus26 = pps->pic_init_qp_minus26;
+			pic_params_h264.pic_init_qs_minus26 = pps->pic_init_qs_minus26;
+			pic_params_h264.chroma_qp_index_offset = pps->chroma_qp_index_offset;
+			pic_params_h264.second_chroma_qp_index_offset = pps->second_chroma_qp_index_offset;
+			pic_params_h264.log2_max_frame_num_minus4 = sps->log2_max_frame_num_minus4;
+			pic_params_h264.pic_order_cnt_type = sps->pic_order_cnt_type;
+			pic_params_h264.log2_max_pic_order_cnt_lsb_minus4 = sps->log2_max_pic_order_cnt_lsb_minus4;
+			pic_params_h264.delta_pic_order_always_zero_flag = sps->delta_pic_order_always_zero_flag;
+			pic_params_h264.direct_8x8_inference_flag = sps->direct_8x8_inference_flag;
+			pic_params_h264.entropy_coding_mode_flag = pps->entropy_coding_mode_flag;
+			pic_params_h264.pic_order_present_flag = pps->pic_order_present_flag;
+			pic_params_h264.num_slice_groups_minus1 = pps->num_slice_groups_minus1;
+			assert(pic_params_h264.num_slice_groups_minus1 == 0);   // FMO Not supported by VA
+			pic_params_h264.slice_group_map_type = pps->slice_group_map_type;
+			pic_params_h264.deblocking_filter_control_present_flag = pps->deblocking_filter_control_present_flag;
+			pic_params_h264.redundant_pic_cnt_present_flag = pps->redundant_pic_cnt_present_flag;
+			pic_params_h264.slice_group_change_rate_minus1 = pps->slice_group_change_rate_minus1;
+			pic_params_h264.Reserved16Bits = 3; // DXVA spec
+			pic_params_h264.StatusReportFeedbackNumber = (UINT)op->decoded_frame_index + 1; // shall not be 0
+			assert(pic_params_h264.StatusReportFeedbackNumber > 0);
+			pic_params_h264.ContinuationFlag = 1;
+			pic_params_h264.num_ref_idx_l0_active_minus1 = pps->num_ref_idx_l0_active_minus1;
+			pic_params_h264.num_ref_idx_l1_active_minus1 = pps->num_ref_idx_l1_active_minus1;
+			input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_PICTURE_PARAMETERS;
+			input.FrameArguments[input.NumFrameArguments].Size = sizeof(pic_params_h264);
+			input.FrameArguments[input.NumFrameArguments].pData = &pic_params_h264;
+			input.NumFrameArguments++;
+
+			// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 29
+			//	Also: https://gitlab.freedesktop.org/mesa/mesa/-/blob/main/src/gallium/drivers/d3d12/d3d12_video_dec_h264.cpp#L548
+			if (sps->seq_scaling_matrix_present_flag)
+			{
+				static constexpr int vl_zscan_normal_16[] =
 				{
-					qmatrix.bScalingLists4x4[i][j] = pps->ScalingList4x4[i][vl_zscan_normal_16[j]];
+					/* Zig-Zag scan pattern */
+					0, 1, 4, 8, 5, 2, 3, 6,
+					9, 12, 13, 10, 7, 11, 14, 15
+				};
+				static constexpr int vl_zscan_normal[] =
+				{
+					/* Zig-Zag scan pattern */
+					 0, 1, 8,16, 9, 2, 3,10,
+					17,24,32,25,18,11, 4, 5,
+					12,19,26,33,40,48,41,34,
+					27,20,13, 6, 7,14,21,28,
+					35,42,49,56,57,50,43,36,
+					29,22,15,23,30,37,44,51,
+					58,59,52,45,38,31,39,46,
+					53,60,61,54,47,55,62,63
+				};
+				for (int i = 0; i < 6; ++i)
+				{
+					for (int j = 0; j < 16; ++j)
+					{
+						qmatrix_h264.bScalingLists4x4[i][j] = pps->ScalingList4x4[i][vl_zscan_normal_16[j]];
+					}
+				}
+				for (int i = 0; i < 64; ++i)
+				{
+					qmatrix_h264.bScalingLists8x8[0][i] = pps->ScalingList8x8[0][vl_zscan_normal[i]];
+					qmatrix_h264.bScalingLists8x8[1][i] = pps->ScalingList8x8[1][vl_zscan_normal[i]];
 				}
 			}
-			for (int i = 0; i < 64; ++i)
+			else
 			{
-				qmatrix.bScalingLists8x8[0][i] = pps->ScalingList8x8[0][vl_zscan_normal[i]];
-				qmatrix.bScalingLists8x8[1][i] = pps->ScalingList8x8[1][vl_zscan_normal[i]];
+				// I don't know why it needs to be filled with 16, but otherwise it gets corrupted output
+				//	Source: https://github.com/mofo7777/H264Dxva2Decoder
+				std::memset(&qmatrix_h264, 16, sizeof(DXVA_Qmatrix_H264));
 			}
+			input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_INVERSE_QUANTIZATION_MATRIX;
+			input.FrameArguments[input.NumFrameArguments].Size = sizeof(qmatrix_h264);
+			input.FrameArguments[input.NumFrameArguments].pData = &qmatrix_h264;
+			input.NumFrameArguments++;
+
+			// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 31
+			sliceinfo_h264.BSNALunitDataLocation = 0;
+			sliceinfo_h264.SliceBytesInBuffer = (UINT)op->stream_size;
+			sliceinfo_h264.wBadSliceChopping = 0; // whole slice is in the buffer
+			input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_SLICE_CONTROL;
+			input.FrameArguments[input.NumFrameArguments].Size = sizeof(sliceinfo_h264);
+			input.FrameArguments[input.NumFrameArguments].pData = &sliceinfo_h264;
+			input.NumFrameArguments++;
+
+			CommandList_DX12& commandlist = GetCommandList(cmd);
+			commandlist.GetVideoDecodeCommandList()->DecodeFrame(
+				decoder_internal->decoder.Get(),
+				&output,
+				&input
+			);
 		}
-		else
+		else if (video_decoder->desc.profile == VideoProfile::H265)
 		{
-			// I don't know why it needs to be filled with 16, but otherwise it gets corrupted output
-			//	Source: https://github.com/mofo7777/H264Dxva2Decoder
-			std::memset(&qmatrix, 16, sizeof(DXVA_Qmatrix_H264));
+			assert(0); // TODO
 		}
-		input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_INVERSE_QUANTIZATION_MATRIX;
-		input.FrameArguments[input.NumFrameArguments].Size = sizeof(qmatrix);
-		input.FrameArguments[input.NumFrameArguments].pData = &qmatrix;
-		input.NumFrameArguments++;
-
-		// DirectX Video Acceleration for H.264/MPEG-4 AVC Decoding, Microsoft, Updated 2010, Page 31
-		sliceinfo.BSNALunitDataLocation = 0;
-		sliceinfo.SliceBytesInBuffer = (UINT)op->stream_size;
-		sliceinfo.wBadSliceChopping = 0; // whole slice is in the buffer
-		input.FrameArguments[input.NumFrameArguments].Type = D3D12_VIDEO_DECODE_ARGUMENT_TYPE_SLICE_CONTROL;
-		input.FrameArguments[input.NumFrameArguments].Size = sizeof(sliceinfo);
-		input.FrameArguments[input.NumFrameArguments].pData = &sliceinfo;
-		input.NumFrameArguments++;
-
-		CommandList_DX12& commandlist = GetCommandList(cmd);
-		commandlist.GetVideoDecodeCommandList()->DecodeFrame(
-			decoder_internal->decoder.Get(),
-			&output,
-			&input
-		);
-
-		// Debug immediate submit-wait:
-#if 0
-		ComPtr<ID3D12Fence> fence;
-		dx12_check(device->CreateFence(0, D3D12_FENCE_FLAG_NONE, PPV_ARGS(fence)));
-
-		//D3D12_RESOURCE_BARRIER bar = {};
-		//bar.Type = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-		//bar.Transition.pResource = dpb_internal->resource.Get();
-		//bar.Transition.StateBefore = D3D12_RESOURCE_STATE_VIDEO_DECODE_WRITE;
-		//bar.Transition.StateAfter = D3D12_RESOURCE_STATE_COMMON;
-		//bar.Transition.Subresource = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-		//commandlist.GetVideoDecodeCommandList()->ResourceBarrier(1, &bar);
-
-		dx12_check(commandlist.GetVideoDecodeCommandList()->Close());
-
-		CommandQueue& queue = queues[commandlist.queue];
-		queue.submit_cmds.push_back(commandlist.GetCommandList());
-		queue.queue->ExecuteCommandLists(
-			(UINT)queue.submit_cmds.size(),
-			queue.submit_cmds.data()
-		);
-		queue.submit_cmds.clear();
-
-		dx12_check(queue.queue->Signal(fence.Get(), 1));
-		if (fence->GetCompletedValue() < 1)
-		{
-			dx12_check(fence->SetEventOnCompletion(1, nullptr));
-		}
-		fence->Signal(0);
-
-		dx12_check(commandlist.GetCommandAllocator()->Reset());
-		dx12_check(commandlist.GetVideoDecodeCommandList()->Reset(commandlist.GetCommandAllocator()));
-#endif
 	}
 
 	void GraphicsDevice_DX12::EventBegin(const char* name, CommandList cmd)
@@ -7659,7 +7680,7 @@ std::mutex queue_locker;
 		if (commandlist.queue == QUEUE_VIDEO_DECODE)
 			return;
 		wchar_t text[128];
-		if (wi::helper::StringConvert(name, text) > 0)
+		if (wi::helper::StringConvert(name, text, arraysize(text)) > 0)
 		{
 			PIXBeginEvent(commandlist.GetGraphicsCommandList(), 0xFF000000, text);
 		}
@@ -7677,7 +7698,7 @@ std::mutex queue_locker;
 		if (commandlist.queue == QUEUE_VIDEO_DECODE)
 			return;
 		wchar_t text[128];
-		if (wi::helper::StringConvert(name, text) > 0)
+		if (wi::helper::StringConvert(name, text, arraysize(text)) > 0)
 		{
 			PIXSetMarker(commandlist.GetGraphicsCommandList(), 0xFFFF0000, text);
 		}

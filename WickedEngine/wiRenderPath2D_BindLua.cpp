@@ -2,6 +2,7 @@
 #include "wiRenderPath3D_BindLua.h"
 #include "wiSprite_BindLua.h"
 #include "wiSpriteFont_BindLua.h"
+#include "wiVideo_BindLua.h"
 
 #include <string>
 
@@ -10,6 +11,7 @@ namespace wi::lua
 
 	Luna<RenderPath2D_BindLua>::FunctionType RenderPath2D_BindLua::methods[] = {
 		lunamethod(RenderPath2D_BindLua, AddSprite),
+		lunamethod(RenderPath2D_BindLua, AddVideoSprite),
 		lunamethod(RenderPath2D_BindLua, AddFont),
 		lunamethod(RenderPath2D_BindLua, RemoveSprite),
 		lunamethod(RenderPath2D_BindLua, RemoveFont),
@@ -22,6 +24,8 @@ namespace wi::lua
 		lunamethod(RenderPath2D_BindLua, SetLayerOrder),
 		lunamethod(RenderPath2D_BindLua, SetSpriteOrder),
 		lunamethod(RenderPath2D_BindLua, SetFontOrder),
+		lunamethod(RenderPath2D_BindLua, GetHDRScaling),
+		lunamethod(RenderPath2D_BindLua, SetHDRScaling),
 		lunamethod(RenderPath_BindLua, GetLayerMask),
 		lunamethod(RenderPath_BindLua, SetLayerMask),
 
@@ -64,6 +68,48 @@ namespace wi::lua
 		else
 		{
 			wi::lua::SError(L, "AddSprite(Sprite sprite, opt string layer) not enough arguments!");
+		}
+		return 0;
+	}
+	int RenderPath2D_BindLua::AddVideoSprite(lua_State* L)
+	{
+		if (component == nullptr)
+		{
+			wi::lua::SError(L, "AddVideoSprite() component is empty!");
+			return 0;
+		}
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 1)
+		{
+			wi::lua::VideoInstance_BindLua* videoinstance = Luna<wi::lua::VideoInstance_BindLua>::lightcheck(L, 1);
+			if (videoinstance == nullptr)
+			{
+				wi::lua::SError(L, "AddVideoSprite(VideoInstance videoinstance, Sprite sprite, opt string layer) first argument is not a VideoInstance!");
+				return 0;
+			}
+			wi::lua::Sprite_BindLua* sprite = Luna<wi::lua::Sprite_BindLua>::lightcheck(L, 2);
+			if (sprite == nullptr)
+			{
+				wi::lua::SError(L, "AddVideoSprite(VideoInstance videoinstance, Sprite sprite, opt string layer) second argument is not a Sprite!");
+				return 0;
+			}
+
+			RenderPath2D* ccomp = dynamic_cast<RenderPath2D*>(component);
+			if (ccomp != nullptr)
+			{
+				if (argc > 1)
+					ccomp->AddVideoSprite(&videoinstance->videoinstance, &sprite->sprite, wi::lua::SGetString(L, 3));
+				else
+					ccomp->AddVideoSprite(&videoinstance->videoinstance, &sprite->sprite);
+			}
+			else
+			{
+				wi::lua::SError(L, "AddVideoSprite(VideoInstance videoinstance, Sprite sprite, opt string layer) not a RenderPath2D!");
+			}
+		}
+		else
+		{
+			wi::lua::SError(L, "AddVideoSprite(VideoInstance videoinstance, Sprite sprite, opt string layer) not enough arguments!");
 		}
 		return 0;
 	}
@@ -412,6 +458,52 @@ namespace wi::lua
 		else
 		{
 			wi::lua::SError(L, "SetFontOrder(Font font, int order) not enough arguments!");
+		}
+		return 0;
+	}
+
+	int RenderPath2D_BindLua::GetHDRScaling(lua_State* L)
+	{
+		if (component == nullptr)
+		{
+			wi::lua::SError(L, "GetHDRScaling() component is empty!");
+			return 0;
+		}
+		RenderPath2D* ccomp = dynamic_cast<RenderPath2D*>(component);
+		if (ccomp != nullptr)
+		{
+			wi::lua::SSetFloat(L, ccomp->GetHDRScaling());
+			return 1;
+		}
+		else
+		{
+			wi::lua::SError(L, "SetHDRScaling(float value) not a RenderPath2D!");
+		}
+		return 0;
+	}
+	int RenderPath2D_BindLua::SetHDRScaling(lua_State* L)
+	{
+		if (component == nullptr)
+		{
+			wi::lua::SError(L, "SetHDRScaling(float value) component is empty!");
+			return 0;
+		}
+		int argc = wi::lua::SGetArgCount(L);
+		if (argc > 1)
+		{
+			RenderPath2D* ccomp = dynamic_cast<RenderPath2D*>(component);
+			if (ccomp != nullptr)
+			{
+				ccomp->SetHDRScaling(wi::lua::SGetFloat(L, 1));
+			}
+			else
+			{
+				wi::lua::SError(L, "SetHDRScaling(float value) not a RenderPath2D!");
+			}
+		}
+		else
+		{
+			wi::lua::SError(L, "SetHDRScaling(float value) not enough arguments!");
 		}
 		return 0;
 	}

@@ -34,7 +34,7 @@ void SpringWindow::Create(EditorComponent* _editor)
 	resetAllButton.SetTooltip("Reset all springs in the scene to initial pose.");
 	resetAllButton.SetPos(XMFLOAT2(x, y));
 	resetAllButton.SetSize(XMFLOAT2(siz, hei));
-	resetAllButton.OnClick([&](wi::gui::EventArgs args) {
+	resetAllButton.OnClick([this](wi::gui::EventArgs args) {
 		auto& scene = editor->GetCurrentScene();
 		for (size_t i = 0; i < scene.springs.GetCount(); ++i)
 		{
@@ -43,116 +43,81 @@ void SpringWindow::Create(EditorComponent* _editor)
 	});
 	AddWidget(&resetAllButton);
 
+	auto forEachSelected = [this] (auto func) {
+		return [this, func] (auto args) {
+			wi::scene::Scene& scene = editor->GetCurrentScene();
+			for (auto& x : editor->translator.selected)
+			{
+				SpringComponent* spring = scene.springs.GetComponent(x.entity);
+				if (spring != nullptr)
+				{
+					func(spring, args);
+				}
+			}
+		};
+	};
+
 	disabledCheckBox.Create("Disabled: ");
 	disabledCheckBox.SetTooltip("Disable simulation.");
 	disabledCheckBox.SetPos(XMFLOAT2(x, y += step));
 	disabledCheckBox.SetSize(XMFLOAT2(hei, hei));
-	disabledCheckBox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->SetDisabled(args.bValue);
-		}
-	});
+	disabledCheckBox.OnClick(forEachSelected([] (auto spring, auto args) {
+		spring->SetDisabled(args.bValue);
+	}));
 	AddWidget(&disabledCheckBox);
 
 	gravityCheckBox.Create("Gravity enabled: ");
 	gravityCheckBox.SetTooltip("Whether global gravity should affect the spring");
 	gravityCheckBox.SetPos(XMFLOAT2(x, y += step));
 	gravityCheckBox.SetSize(XMFLOAT2(hei, hei));
-	gravityCheckBox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->SetGravityEnabled(args.bValue);
-		}
-	});
+	gravityCheckBox.OnClick(forEachSelected([] (auto spring, auto args) {
+		spring->SetGravityEnabled(args.bValue);
+	}));
 	AddWidget(&gravityCheckBox);
 
 	stiffnessSlider.Create(0, 1, 0.1f, 100000, "Stiffness: ");
 	stiffnessSlider.SetTooltip("The stiffness affects how strongly the spring tries to orient itself to rest pose (higher values increase the jiggliness)");
 	stiffnessSlider.SetPos(XMFLOAT2(x, y += step));
 	stiffnessSlider.SetSize(XMFLOAT2(siz, hei));
-	stiffnessSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->stiffnessForce = args.fValue;
-		}
-	});
+	stiffnessSlider.OnSlide(forEachSelected([] (auto spring, auto args) {
+		spring->stiffnessForce = args.fValue;
+	}));
 	AddWidget(&stiffnessSlider);
 
 	dragSlider.Create(0, 1, 0.8f, 100000, "Drag: ");
 	dragSlider.SetTooltip("The drag affects how fast energy is lost (higher values make the spring come to rest faster)");
 	dragSlider.SetPos(XMFLOAT2(x, y += step));
 	dragSlider.SetSize(XMFLOAT2(siz, hei));
-	dragSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->dragForce = args.fValue;
-		}
-	});
+	dragSlider.OnSlide(forEachSelected([] (auto spring, auto args) {
+		spring->dragForce = args.fValue;
+	}));
 	AddWidget(&dragSlider);
 
 	windSlider.Create(0, 1, 0, 100000, "Wind affection: ");
 	windSlider.SetTooltip("How much the global wind effect affects the spring");
 	windSlider.SetPos(XMFLOAT2(x, y += step));
 	windSlider.SetSize(XMFLOAT2(siz, hei));
-	windSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->windForce = args.fValue;
-		}
-	});
+	windSlider.OnSlide(forEachSelected([] (auto spring, auto args) {
+		spring->windForce = args.fValue;
+	}));
 	AddWidget(&windSlider);
 
 	gravitySlider.Create(0, 1, 0, 100000, "Gravity affection: ");
 	gravitySlider.SetTooltip("How much the global gravity effect affects the spring");
 	gravitySlider.SetPos(XMFLOAT2(x, y += step));
 	gravitySlider.SetSize(XMFLOAT2(siz, hei));
-	gravitySlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->gravityPower = args.fValue;
-		}
-	});
+	gravitySlider.OnSlide(forEachSelected([] (auto spring, auto args) {
+		spring->gravityPower = args.fValue;
+	}));
 	AddWidget(&gravitySlider);
 
 	hitradiusSlider.Create(0, 1, 0, 100000, "Collision hit radius: ");
 	hitradiusSlider.SetTooltip("The radius of the spring's collision sphere, that will be checked against colliders.");
 	hitradiusSlider.SetPos(XMFLOAT2(x, y += step));
 	hitradiusSlider.SetSize(XMFLOAT2(siz, hei));
-	hitradiusSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			SpringComponent* spring = scene.springs.GetComponent(x.entity);
-			if (spring == nullptr)
-				continue;
-			spring->hitRadius = args.fValue;
-		}
-	});
+	hitradiusSlider.OnSlide(forEachSelected([] (auto spring, auto args) {
+		spring->hitRadius = args.fValue;
+	}));
 	AddWidget(&hitradiusSlider);
 
 
@@ -189,47 +154,15 @@ void SpringWindow::SetEntity(Entity entity)
 void SpringWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 120;
 
-	const float margin_left = 120;
-	const float margin_right = 40;
-
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add_fullwidth(resetAllButton);
-	add_right(disabledCheckBox);
-	add_right(gravityCheckBox);
-	add(stiffnessSlider);
-	add(dragSlider);
-	add(windSlider);
-	add(gravitySlider);
-	add(hitradiusSlider);
+	layout.add_fullwidth(resetAllButton);
+	layout.add_right(disabledCheckBox);
+	layout.add_right(gravityCheckBox);
+	layout.add(stiffnessSlider);
+	layout.add(dragSlider);
+	layout.add(windSlider);
+	layout.add(gravitySlider);
+	layout.add(hitradiusSlider);
 
 }

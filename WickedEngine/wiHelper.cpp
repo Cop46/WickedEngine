@@ -3,13 +3,18 @@
 #include "wiBacklog.h"
 #include "wiEventHandler.h"
 #include "wiMath.h"
+#include "wiImage.h"
+#include "wiRenderer.h"
 
 #include "Utility/lodepng.h"
 #include "Utility/dds.h"
 #include "Utility/stb_image_write.h"
-#include "Utility/basis_universal/encoder/basisu_comp.h"
-#include "Utility/basis_universal/encoder/basisu_gpu_texture.h"
-#include "Utility/basis_universal/zstd/zstd.h"
+#include "Utility/zstd/zstd.h"
+#include "Utility/win32ico.h"
+
+#ifndef __SCE__
+#include "Utility/portable-file-dialogs.h"
+#endif // __SCE__
 
 #include <thread>
 #include <locale>
@@ -32,7 +37,6 @@
 
 #ifdef PLATFORM_LINUX
 #include <sys/sysinfo.h>
-#include "Utility/portable-file-dialogs.h"
 #endif // PLATFORM_LINUX
 
 #ifdef PLATFORM_WINDOWS_DESKTOP
@@ -66,7 +70,11 @@ namespace wi::helper
 	void messageBox(const std::string& msg, const std::string& caption)
 	{
 #ifdef PLATFORM_WINDOWS_DESKTOP
-		MessageBoxA(GetActiveWindow(), msg.c_str(), caption.c_str(), 0);
+		std::wstring wmsg;
+		std::wstring wcaption;
+		StringConvert(msg, wmsg);
+		StringConvert(caption, wcaption);
+		MessageBox(GetActiveWindow(), wmsg.c_str(), wcaption.c_str(), 0);
 #endif // PLATFORM_WINDOWS_DESKTOP
 
 #ifdef SDL2
@@ -75,6 +83,11 @@ namespace wi::helper
 	}
 
 	std::string screenshot(const wi::graphics::SwapChain& swapchain, const std::string& name)
+	{
+		return screenshot(wi::graphics::GetDevice()->GetBackBuffer(&swapchain));
+	}
+
+	std::string screenshot(const wi::graphics::Texture& texture, const std::string& name)
 	{
 		std::string directory;
 		if (name.empty())
@@ -95,7 +108,7 @@ namespace wi::helper
 			filename = directory + "/sc_" + getCurrentDateTimeAsString() + ".png";
 		}
 
-		bool result = saveTextureToFile(wi::graphics::GetDevice()->GetBackBuffer(&swapchain), filename);
+		bool result = saveTextureToFile(texture, filename);
 		assert(result);
 
 		if (result)
@@ -151,25 +164,26 @@ namespace wi::helper
 
 			const uint32_t data_stride = GetFormatStride(desc.format);
 			const uint32_t block_size = GetFormatBlockSize(desc.format);
-			const uint32_t num_blocks_x = desc.width / block_size;
-			const uint32_t num_blocks_y = desc.height / block_size;
 			size_t cpy_offset = 0;
 			size_t subresourceIndex = 0;
 			for (uint32_t layer = 0; layer < desc.array_size; ++layer)
 			{
-				uint32_t mip_width = num_blocks_x;
-				uint32_t mip_height = num_blocks_y;
-				uint32_t mip_depth = desc.depth;
 				for (uint32_t mip = 0; mip < desc.mip_levels; ++mip)
 				{
+					const uint32_t mip_width = std::max(1u, desc.width >> mip);
+					const uint32_t mip_height = std::max(1u, desc.height >> mip);
+					const uint32_t mip_depth = std::max(1u, desc.depth >> mip);
+					const uint32_t num_blocks_x = (mip_width + block_size - 1) / block_size;
+					const uint32_t num_blocks_y = (mip_height + block_size - 1) / block_size;
+
 					assert(subresourceIndex < stagingTex.mapped_subresource_count);
 					const SubresourceData& subresourcedata = stagingTex.mapped_subresources[subresourceIndex++];
-					const size_t dst_rowpitch = mip_width * data_stride;
+					const size_t dst_rowpitch = num_blocks_x * data_stride;
 					for (uint32_t z = 0; z < mip_depth; ++z)
 					{
 						uint8_t* dst_slice = texturedata.data() + cpy_offset;
 						uint8_t* src_slice = (uint8_t*)subresourcedata.data_ptr + subresourcedata.slice_pitch * z;
-						for (uint32_t i = 0; i < mip_height; ++i)
+						for (uint32_t i = 0; i < num_blocks_y; ++i)
 						{
 							std::memcpy(
 								dst_slice + i * dst_rowpitch,
@@ -177,12 +191,8 @@ namespace wi::helper
 								dst_rowpitch
 							);
 						}
-						cpy_offset += mip_height * dst_rowpitch;
+						cpy_offset += num_blocks_y * dst_rowpitch;
 					}
-
-					mip_width = std::max(1u, mip_width / 2);
-					mip_height = std::max(1u, mip_height / 2);
-					mip_depth = std::max(1u, mip_depth / 2);
 				}
 			}
 		}
@@ -508,11 +518,6 @@ namespace wi::helper
 			mip_depth = std::max(1u, mip_depth / 2);
 		}
 
-		bool basis = !extension.compare("BASIS");
-		bool ktx2 = !extension.compare("KTX2");
-		basisu::image basis_image;
-		basisu::vector<basisu::image> basis_mipmaps;
-
 		int dst_channel_count = 4;
 		if (desc.format == Format::R10G10B10A2_UNORM)
 		{
@@ -671,122 +676,147 @@ namespace wi::helper
 			// This can be saved by reducing target channel count, no conversion needed
 			dst_channel_count = 2;
 		}
-		else if (IsFormatBlockCompressed(desc.format))
-		{
-			basisu::texture_format fmt;
-			switch (desc.format)
-			{
-			default:
-				assert(0);
-				return false;
-			case Format::BC1_UNORM:
-			case Format::BC1_UNORM_SRGB:
-				fmt = basisu::texture_format::cBC1;
-				break;
-			case Format::BC3_UNORM:
-			case Format::BC3_UNORM_SRGB:
-				fmt = basisu::texture_format::cBC3;
-				break;
-			case Format::BC4_UNORM:
-				fmt = basisu::texture_format::cBC4;
-				break;
-			case Format::BC5_UNORM:
-				fmt = basisu::texture_format::cBC5;
-				break;
-			case Format::BC7_UNORM:
-			case Format::BC7_UNORM_SRGB:
-				fmt = basisu::texture_format::cBC7;
-				break;
-			}
-			basisu::gpu_image basis_gpu_image;
-			basis_gpu_image.init(fmt, desc.width, desc.height);
-			std::memcpy(basis_gpu_image.get_ptr(), texturedata.data(), std::min(texturedata.size(), (size_t)basis_gpu_image.get_size_in_bytes()));
-			basis_gpu_image.unpack(basis_image);
-		}
 		else
 		{
 			assert(desc.format == Format::R8G8B8A8_UNORM || desc.format == Format::R8G8B8A8_UNORM_SRGB); // If you need to save other texture format, implement data conversion for it
 		}
 
-		if (basis || ktx2)
+		if (!extension.compare("ICO"))
 		{
-			if (basis_image.get_total_pixels() == 0)
+			const uint32_t minsize = 32;
+
+			size_t filesize = sizeof(ico::ICONDIR);
+
+			ico::ICONDIR icondir = { 0,1,0 };
+
+			for (auto& mip : mips)
 			{
-				basis_image.init(texturedata.data(), desc.width, desc.height, 4);
-				if (desc.mip_levels > 1)
+				if (mip.width > 256 || mip.height > 256)
+					continue;
+				if (mip.width < minsize || mip.height < minsize)
+					break;
+				icondir.idCount++;
+				filesize += sizeof(ico::ICONDIRENTRY);
+			}
+
+			if (icondir.idCount < 1)
+			{
+				wilog_assert(0, "No valid images were found that can be added to ICO file format!");
+				return false;
+			}
+
+			uint32_t imageDataOffset = (uint32_t)filesize;
+
+			for (auto& mip : mips)
+			{
+				if (mip.width > 256 || mip.height > 256)
+					continue;
+				if (mip.width < minsize || mip.height < minsize)
+					break;
+				const uint32_t pixelCount = mip.width * mip.height;
+				const uint32_t rgbDataSize = pixelCount * 4; // 32-bit RGBA
+				const uint32_t maskSize = ((mip.width + 7) / 8) * mip.height; // 1-bit mask, padded to byte
+				const uint32_t imageDataSize = sizeof(ico::BITMAPINFOHEADER) + rgbDataSize + maskSize;
+				filesize += imageDataSize;
+			}
+
+			filedata.resize(filesize);
+			uint8_t* ptr = filedata.data();
+
+			std::memcpy(ptr, &icondir, sizeof(ico::ICONDIR));
+			ptr += sizeof(ico::ICONDIR);
+
+			for (auto& mip : mips)
+			{
+				if (mip.width > 256 || mip.height > 256)
+					continue;
+				if (mip.width < minsize || mip.height < minsize)
+					break;
+
+				const uint32_t pixelCount = mip.width * mip.height;
+				const uint32_t rgbDataSize = pixelCount * 4; // 32-bit RGBA
+				const uint32_t maskSize = ((mip.width + 7) / 8) * mip.height; // 1-bit mask, padded to byte
+				const uint32_t imageDataSize = sizeof(ico::BITMAPINFOHEADER) + rgbDataSize + maskSize;
+
+				ico::ICONDIRENTRY iconEntry = {
+					static_cast<uint8_t>(mip.width > 255 ? 0 : mip.width), // Width (0 for 256+)
+					static_cast<uint8_t>(mip.height > 255 ? 0 : mip.height), // Height (0 for 256+)
+					0, // Color count (0 for 32-bit)
+					0, // Reserved
+					1, // Color planes
+					32, // Bits per pixel
+					imageDataSize, // Size of image data
+					imageDataOffset // Offset to image data
+				};
+				std::memcpy(ptr, &iconEntry, sizeof(ico::ICONDIRENTRY));
+				ptr += sizeof(ico::ICONDIRENTRY);
+				imageDataOffset += imageDataSize;
+			}
+
+			for (auto& mip : mips)
+			{
+				if (mip.width > 256 || mip.height > 256)
+					continue;
+				if (mip.width < minsize || mip.height < minsize)
+					break;
+
+				const uint32_t pixelCount = mip.width * mip.height;
+				const uint32_t rgbDataSize = pixelCount * 4; // 32-bit RGBA
+				const uint32_t maskSize = ((mip.width + 7) / 8) * mip.height; // 1-bit mask, padded to byte
+
+				ico::BITMAPINFOHEADER bmpHeader = {
+					sizeof(ico::BITMAPINFOHEADER), // Size of header
+					int32_t(mip.width), // Width
+					int32_t(mip.height * 2), // Height (doubled for XOR + AND mask)
+					1, // Planes
+					32, // Bits per pixel
+					0, // No compression
+					rgbDataSize + maskSize, // Image size
+					0, // X pixels per meter
+					0, // Y pixels per meter
+					0, // Colors used
+					0  // Important colors
+				};
+				std::memcpy(ptr, &bmpHeader, sizeof(ico::BITMAPINFOHEADER));
+				ptr += sizeof(ico::BITMAPINFOHEADER);
+
+				// Convert RGBA to BGRA and write XOR mask (flipped vertically)
+				for (uint32_t y = mip.height; y > 0; --y)
 				{
-					basis_mipmaps.reserve(desc.mip_levels - 1);
-					for (uint32_t mip = 1; mip < desc.mip_levels; ++mip)
+					const uint8_t* src = mip.address + (y - 1) * mip.width * 4;
+					for (uint32_t x = 0; x < mip.width; ++x)
 					{
-						basisu::image basis_mip;
-						const MipDesc& mipdesc = mips[mip];
-						basis_mip.init(mipdesc.address, mipdesc.width, mipdesc.height, 4);
-						basis_mipmaps.push_back(basis_mip);
+						// Convert RGBA to BGRA
+						ptr[0] = src[2]; // B
+						ptr[1] = src[1]; // G
+						ptr[2] = src[0]; // R
+						ptr[3] = src[3]; // A
+						ptr += 4;
+						src += 4;
+					}
+				}
+
+				// Write AND mask (1-bit transparency mask)
+				for (uint32_t y = mip.height; y > 0; --y)
+				{
+					const uint8_t* src = mip.address + (y - 1) * mip.width * 4;
+					for (uint32_t x = 0; x < mip.width; x += 8)
+					{
+						uint8_t maskByte = 0;
+						for (uint32_t bit = 0; bit < 8 && (x + bit) < mip.width; ++bit)
+						{
+							// Set bit to 0 if pixel is opaque (alpha > 0), 1 if transparent
+							if (src[(x + bit) * 4 + 3] == 0)
+							{
+								maskByte |= (1 << (7 - bit));
+							}
+						}
+						*ptr++ = maskByte;
 					}
 				}
 			}
-			static bool encoder_initialized = false;
-			if (!encoder_initialized)
-			{
-				encoder_initialized = true;
-				basisu::basisu_encoder_init(false, false);
-			}
-			basisu::basis_compressor_params params;
-			params.m_source_images.push_back(basis_image);
-			if (desc.mip_levels > 1)
-			{
-				params.m_source_mipmap_images.push_back(basis_mipmaps);
-			}
-			if (ktx2)
-			{
-				params.m_create_ktx2_file = true;
-			}
-			else
-			{
-				params.m_create_ktx2_file = false;
-			}
-#if 1
-			params.m_compression_level = basisu::BASISU_DEFAULT_COMPRESSION_LEVEL;
-#else
-			params.m_compression_level = basisu::BASISU_MAX_COMPRESSION_LEVEL;
-#endif
-			// Disable CPU mipmap generation:
-			//	instead we provide mipmap data that was downloaded from the GPU with m_source_mipmap_images.
-			//	This is better, because engine specific mipgen options will be retained, such as coverage preserving mipmaps
-			params.m_mip_gen = false;
-			params.m_quality_level = basisu::BASISU_QUALITY_MAX;
-			params.m_multithreading = true;
-			int num_threads = std::max(1u, std::thread::hardware_concurrency());
-			basisu::job_pool jpool(num_threads);
-			params.m_pJob_pool = &jpool;
-			basisu::basis_compressor compressor;
-			if (compressor.init(params))
-			{
-				auto result = compressor.process();
-				if (result == basisu::basis_compressor::cECSuccess)
-				{
-					if (basis)
-					{
-						const auto& basis_file = compressor.get_output_basis_file();
-						filedata.resize(basis_file.size());
-						std::memcpy(filedata.data(), basis_file.data(), basis_file.size());
-						return true;
-					}
-					else if (ktx2)
-					{
-						const auto& ktx2_file = compressor.get_output_ktx2_file();
-						filedata.resize(ktx2_file.size());
-						std::memcpy(filedata.data(), ktx2_file.data(), ktx2_file.size());
-						return true;
-					}
-				}
-				else
-				{
-					wi::backlog::post("basisu::basis_compressor::process() failure!", wi::backlog::LogLevel::Error);
-					assert(0);
-				}
-			}
-			return false;
+
+			return true;
 		}
 
 		int write_result = 0;
@@ -818,6 +848,35 @@ namespace wi::helper
 		else if (!extension.compare("BMP"))
 		{
 			write_result = stbi_write_bmp_to_func(func, &filedata, (int)mip.width, (int)mip.height, dst_channel_count, mip.address);
+		}
+		else if (!extension.compare("H"))
+		{
+			const size_t datasize = mip.width * mip.height * sizeof(wi::Color);
+			std::string ss;
+			ss += "struct EmbeddedImage {\n";
+			ss += "const unsigned int width = " + std::to_string(mip.width) + ";\n";
+			ss += "const unsigned int height = " + std::to_string(mip.height) + ";\n";
+			ss += "const unsigned int bytes_per_pixel = 4;\n";
+			ss += "const char comment[256] = \"RGBA Image Header Generated By Wicked Engine\";\n";
+			ss += "const unsigned char pixel_data[" + std::to_string(mip.width) + " * " + std::to_string(mip.height) + " * 4] = {";
+			for (size_t i = 0; i < datasize; ++i)
+			{
+				if (i % 32 == 0)
+				{
+					ss += "\n";
+				}
+				ss += std::to_string((uint32_t)mip.address[i]) + ",";
+			}
+			ss += "\n};\n};\n";
+			filedata.resize(ss.size());
+			std::memcpy(filedata.data(), ss.c_str(), ss.length());
+			return true;
+		}
+		else if (!extension.compare("RAW"))
+		{
+			filedata.resize(mip.width* mip.height * sizeof(wi::Color));
+			std::memcpy(filedata.data(), mip.address, filedata.size());
+			return true;
 		}
 		else
 		{
@@ -885,6 +944,28 @@ namespace wi::helper
 		}
 
 		return success;
+	}
+
+	bool CreateCursorFromTexture(const wi::graphics::Texture& texture, int hotspotX, int hotspotY, wi::vector<uint8_t>& data)
+	{
+		if (!saveTextureToMemoryFile(texture, "ico", data))
+			return false;
+
+		// rewrite ICO structure for CUR structure:
+		ico::ICONDIR* icondir = (ico::ICONDIR*)data.data();
+		icondir->idType = 2;
+
+		uint32_t baseWidth = texture.desc.width;
+		uint32_t baseHeight = texture.desc.height;
+
+		for (uint16_t i = 0; i < icondir->idCount; ++i)
+		{
+			ico::ICONDIRENTRY* icondirentry = (ico::ICONDIRENTRY*)(data.data() + sizeof(ico::ICONDIR)) + i;
+			icondirentry->wPlanes = (uint16_t)hotspotX / (baseWidth / (icondirentry->bWidth == 0 ? 256 : icondirentry->bWidth));
+			icondirentry->wBitCount = (uint16_t)hotspotY / (baseHeight / (icondirentry->bHeight == 0 ? 256 : icondirentry->bHeight));
+		}
+
+		return true;
 	}
 
 	std::string getCurrentDateTimeAsString()
@@ -1039,6 +1120,13 @@ namespace wi::helper
 		}
 	}
 
+	std::string BackslashToForwardSlash(const std::string& str)
+	{
+		std::string ret = str;
+		std::replace(ret.begin(), ret.end(), '\\', '/');
+		return ret;
+	}
+
 	void DirectoryCreate(const std::string& path)
 	{
 		std::filesystem::create_directories(ToNativeString(path));
@@ -1137,6 +1225,11 @@ namespace wi::helper
 		return std::chrono::duration_cast<std::chrono::duration<uint64_t>>(tim.time_since_epoch()).count();
 	}
 
+	bool FileCopy(const std::string& filename_src, const std::string& filename_dst)
+	{
+		return std::filesystem::copy_file(ToNativeString(filename_src), ToNativeString(filename_dst), std::filesystem::copy_options::overwrite_existing);
+	}
+
 	std::string GetTempDirectoryPath()
 	{
 #if defined(PLATFORM_XBOX) || defined(PLATFORM_PS5)
@@ -1177,12 +1270,25 @@ namespace wi::helper
 #endif // PLATFORM_PS5
 	}
 
+	std::string GetExecutablePath()
+	{
+#ifdef _WIN32
+		wchar_t wstr[1024] = {};
+		GetModuleFileName(NULL, wstr, arraysize(wstr));
+		char str[1024] = {};
+		StringConvert(wstr, str, arraysize(str));
+		return str;
+#else
+		return std::filesystem::canonical("/proc/self/exe").string();
+#endif // _WIN32
+	}
+
 	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess)
 	{
 #ifdef PLATFORM_WINDOWS_DESKTOP
 		std::thread([=] {
 
-			wchar_t szFile[256];
+			wchar_t szFile[4096];
 
 			OPENFILENAME ofn;
 			ZeroMemory(&ofn, sizeof(ofn));
@@ -1233,7 +1339,12 @@ namespace wi::helper
 			{
 			case FileDialogParams::OPEN:
 				ofn.Flags = OFN_PATHMUSTEXIST | OFN_FILEMUSTEXIST;
+				ofn.Flags |= OFN_EXPLORER;
 				ofn.Flags |= OFN_NOCHANGEDIR;
+				if (params.multiselect)
+				{
+					ofn.Flags |= OFN_ALLOWMULTISELECT;
+				}
 				ok = GetOpenFileName(&ofn) == TRUE;
 				break;
 			case FileDialogParams::SAVE:
@@ -1245,24 +1356,38 @@ namespace wi::helper
 
 			if (ok)
 			{
-				std::string result_filename;
-				StringConvert(ofn.lpstrFile, result_filename);
-				onSuccess(result_filename);
+				const wchar_t* p = szFile;
+				std::wstring directory = p;
+				p += directory.length() + 1;
+				if (*p == L'\0')
+				{
+					// Single file
+					std::string result_filename;
+					StringConvert(directory, result_filename);
+					onSuccess(BackslashToForwardSlash(result_filename));
+				}
+				else
+				{
+					// Multiple files
+					while (*p)
+					{
+						std::wstring fullPath = directory + L"\\" + p;
+						p += wcslen(p) + 1;
+						std::string result_filename;
+						StringConvert(fullPath, result_filename);
+						onSuccess(BackslashToForwardSlash(result_filename));
+					}
+				}
 			}
 
 			}).detach();
 #endif // PLATFORM_WINDOWS_DESKTOP
 
 #ifdef PLATFORM_LINUX
-		if (!pfd::settings::available()) {
-			const char *message = "No dialog backend available";
-#ifdef SDL2
-			SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR,
-									 "File dialog error!",
-									 message,
-									 nullptr);
-#endif
-			std::cerr << message << std::endl;
+		if (!pfd::settings::available())
+		{
+			wilog_messagebox("[wi::helper::FileDialog()] No file dialog backend available!");
+			return;
 		}
 
 		std::vector<std::string> extensions = {params.description, ""};
@@ -1272,31 +1397,34 @@ namespace wi::helper
 			extensions[1] += "*." + toLower(x);
 			extensions[1] += " ";
 			extensions[1] += "*." + toUpper(x);
-			if (extcount < params.extensions.size() - 1) {
+			if (extcount < params.extensions.size() - 1)
+			{
 				extensions[1] += " ";
 			}
 			extcount++;
 		}
 
 		switch (params.type) {
-			case FileDialogParams::OPEN: {
-				std::vector<std::string> selection = pfd::open_file(
-					"Open file",
-					std::filesystem::current_path().string(),
-					extensions
-				).result();
+			case FileDialogParams::OPEN:
+			{
+				pfd::opt options = pfd::opt::none;
+				if (params.multiselect)
+				{
+					options = options | pfd::opt::multiselect;
+				}
+				std::vector<std::string> selection = pfd::open_file("Open file", std::filesystem::current_path().string(), extensions, options).result();
 				if (!selection.empty())
 				{
-					onSuccess(selection[0]);
+					for (auto& x : selection)
+					{
+						onSuccess(x);
+					}
 				}
 				break;
 			}
-			case FileDialogParams::SAVE: {
-				std::string destination = pfd::save_file(
-					"Save file",
-					std::filesystem::current_path().string(),
-					extensions
-				).result();
+			case FileDialogParams::SAVE:
+			{
+				std::string destination = pfd::save_file("Save file", std::filesystem::current_path().string(), extensions).result();
 				if (!destination.empty())
 				{
 					onSuccess(destination);
@@ -1305,6 +1433,20 @@ namespace wi::helper
 			}
 		}
 #endif // PLATFORM_LINUX
+	}
+
+	std::string FolderDialog(const std::string& description)
+	{
+#ifdef __SCE__
+		return "";
+#else
+		if (!pfd::settings::available())
+		{
+			messageBox("No dialog backend available!", "Error!");
+			return "";
+		}
+		return pfd::select_folder(description).result();
+#endif // __SCE__
 	}
 
 	void GetFileNamesInDirectory(const std::string& directory, std::function<void(std::string fileName)> onSuccess, const std::string& filter_extension)
@@ -1383,86 +1525,275 @@ namespace wi::helper
 
 	void StringConvert(const std::string& from, std::wstring& to)
 	{
-#ifdef _WIN32
-		int num = MultiByteToWideChar(CP_UTF8, 0, from.c_str(), -1, NULL, 0);
-		if (num > 0)
+		to.clear();
+		size_t i = 0;
+		while (i < from.size())
 		{
-			to.resize(size_t(num) - 1);
-			MultiByteToWideChar(CP_UTF8, 0, from.c_str(), -1, &to[0], num);
-		}
-#else
-		std::wstring_convert<std::codecvt_utf8<wchar_t>> cv;
-		to = cv.from_bytes(from);
-#endif // _WIN32
-	}
+			uint32_t codepoint = 0;
+			unsigned char c = from[i];
 
-	void StringConvert(const std::wstring& from, std::string& to)
-	{
-#ifdef _WIN32
-		int num = WideCharToMultiByte(CP_UTF8, 0, from.c_str(), -1, NULL, 0, NULL, NULL);
-		if (num > 0)
-		{
-			to.resize(size_t(num) - 1);
-			WideCharToMultiByte(CP_UTF8, 0, from.c_str(), -1, &to[0], num, NULL, NULL);
-		}
-#else
-		std::wstring_convert<std::codecvt_utf8<wchar_t>> cv;
-		to = cv.to_bytes(from);
-#endif // _WIN32
-	}
-
-	int StringConvert(const char* from, wchar_t* to, int dest_size_in_characters)
-	{
-#ifdef _WIN32
-		int num = MultiByteToWideChar(CP_UTF8, 0, from, -1, NULL, 0);
-		if (num > 0)
-		{
-			if (dest_size_in_characters >= 0)
+			if (c < 0x80)
 			{
-				num = std::min(num, dest_size_in_characters);
+				codepoint = c;
+				i += 1;
 			}
-			MultiByteToWideChar(CP_UTF8, 0, from, -1, &to[0], num);
-		}
-		return num;
-#else
-		std::wstring_convert<std::codecvt_utf8<wchar_t>> cv;
-		auto result = cv.from_bytes(from).c_str();
-		int num = (int)cv.converted();
-		if (dest_size_in_characters >= 0)
-		{
-			num = std::min(num, dest_size_in_characters);
-		}
-		std::memcpy(to, result, num * sizeof(wchar_t));
-		return num;
-#endif // _WIN32
-	}
-
-	int StringConvert(const wchar_t* from, char* to, int dest_size_in_characters)
-	{
-#ifdef _WIN32
-		int num = WideCharToMultiByte(CP_UTF8, 0, from, -1, NULL, 0, NULL, NULL);
-		if (num > 0)
-		{
-			if (dest_size_in_characters >= 0)
+			else if ((c & 0xE0) == 0xC0)
 			{
-				num = std::min(num, dest_size_in_characters);
+				if (i + 1 >= from.size())
+					break;
+				codepoint = ((c & 0x1F) << 6) | (from[i + 1] & 0x3F);
+				i += 2;
 			}
-			WideCharToMultiByte(CP_UTF8, 0, from, -1, &to[0], num, NULL, NULL);
+			else if ((c & 0xF0) == 0xE0)
+			{
+				if (i + 2 >= from.size())
+					break;
+				codepoint = ((c & 0x0F) << 12) | ((from[i + 1] & 0x3F) << 6) | (from[i + 2] & 0x3F);
+				i += 3;
+			}
+			else if ((c & 0xF8) == 0xF0)
+			{
+				if (i + 3 >= from.size())
+					break;
+				codepoint = ((c & 0x07) << 18) | ((from[i + 1] & 0x3F) << 12) | ((from[i + 2] & 0x3F) << 6) | (from[i + 3] & 0x3F);
+				i += 4;
+			}
+			else
+			{
+				++i;
+				continue;
+			}
+
+			if constexpr (sizeof(wchar_t) >= 4)
+			{
+				to += static_cast<wchar_t>(codepoint);
+			}
+			else
+			{
+				if (codepoint <= 0xFFFF)
+				{
+					to += static_cast<wchar_t>(codepoint);
+				}
+				else
+				{
+					codepoint -= 0x10000;
+					to += static_cast<wchar_t>((codepoint >> 10) + 0xD800);
+					to += static_cast<wchar_t>((codepoint & 0x3FF) + 0xDC00);
+				}
+			}
 		}
-		return num;
-#else
-		std::wstring_convert<std::codecvt_utf8<wchar_t>> cv;
-		auto result = cv.to_bytes(from).c_str();
-		int num = (size_t)cv.converted();
-		if (dest_size_in_characters >= 0)
-		{
-			num = std::min(num, dest_size_in_characters);
-		}
-		std::memcpy(to, result, num * sizeof(char));
-		return num;
-#endif // _WIN32
 	}
 	
+	void StringConvert(const std::wstring& from, std::string& to)
+	{
+		to.clear();
+		for (size_t i = 0; i < from.size(); ++i)
+		{
+			uint32_t codepoint = 0;
+			wchar_t wc = from[i];
+
+			if constexpr (sizeof(wchar_t) >= 4)
+			{
+				codepoint = static_cast<uint32_t>(wc);
+			}
+			else
+			{
+				if (wc >= 0xD800 && wc <= 0xDBFF)
+				{
+					if (i + 1 < from.size())
+					{
+						wchar_t wc_low = from[i + 1];
+						if (wc_low >= 0xDC00 && wc_low <= 0xDFFF)
+						{
+							codepoint = ((static_cast<uint32_t>(wc - 0xD800) << 10) | (static_cast<uint32_t>(wc_low - 0xDC00))) + 0x10000;
+							++i;
+						}
+					}
+				}
+				else
+				{
+					codepoint = static_cast<uint32_t>(wc);
+				}
+			}
+
+			if (codepoint <= 0x7F)
+			{
+				to += static_cast<char>(codepoint);
+			}
+			else if (codepoint <= 0x7FF)
+			{
+				to += static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F));
+				to += static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else if (codepoint <= 0xFFFF)
+			{
+				to += static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F));
+				to += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				to += static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else if (codepoint <= 0x10FFFF)
+			{
+				to += static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07));
+				to += static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+				to += static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				to += static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+		}
+	}
+	
+	int StringConvert(const char* from, wchar_t* to, int dest_size_in_characters)
+	{
+		if (!from || !to || dest_size_in_characters <= 0)
+			return 0;
+
+		const unsigned char* src = reinterpret_cast<const unsigned char*>(from);
+		int written = 0;
+
+		while (*src && written < dest_size_in_characters - 1)
+		{
+			uint32_t codepoint = 0;
+			unsigned char c = *src;
+
+			if (c < 0x80)
+			{
+				codepoint = c;
+				++src;
+			}
+			else if ((c & 0xE0) == 0xC0)
+			{
+				if (!src[1])
+					break;
+				codepoint = ((c & 0x1F) << 6) | (src[1] & 0x3F);
+				src += 2;
+			}
+			else if ((c & 0xF0) == 0xE0)
+			{
+				if (!src[1] || !src[2])
+					break;
+				codepoint = ((c & 0x0F) << 12) | ((src[1] & 0x3F) << 6) | (src[2] & 0x3F);
+				src += 3;
+			}
+			else if ((c & 0xF8) == 0xF0)
+			{
+				if (!src[1] || !src[2] || !src[3])
+					break;
+				codepoint = ((c & 0x07) << 18) | ((src[1] & 0x3F) << 12) | ((src[2] & 0x3F) << 6) | (src[3] & 0x3F);
+				src += 4;
+			}
+			else
+			{
+				++src;
+				continue;
+			}
+
+			if constexpr (sizeof(wchar_t) >= 4)
+			{
+				to[written++] = static_cast<wchar_t>(codepoint);
+			}
+			else
+			{
+				if (codepoint <= 0xFFFF)
+				{
+					to[written++] = static_cast<wchar_t>(codepoint);
+				}
+				else
+				{
+					if (written + 1 >= dest_size_in_characters - 1)
+						break;
+					codepoint -= 0x10000;
+					to[written++] = static_cast<wchar_t>((codepoint >> 10) + 0xD800);
+					to[written++] = static_cast<wchar_t>((codepoint & 0x3FF) + 0xDC00);
+				}
+			}
+		}
+
+		to[written] = 0;
+		return written;
+	}
+	
+	int StringConvert(const wchar_t* from, char* to, int dest_size_in_characters)
+	{
+		if (!from || !to || dest_size_in_characters <= 0)
+			return 0;
+
+		int written = 0;
+		for (int i = 0; from[i] != 0 && written < dest_size_in_characters - 1; ++i)
+		{
+			uint32_t codepoint = 0;
+			wchar_t wc = from[i];
+
+			if constexpr (sizeof(wchar_t) >= 4)
+			{
+				codepoint = static_cast<uint32_t>(wc);
+			}
+			else
+			{
+				if (wc >= 0xD800 && wc <= 0xDBFF)
+				{
+					wchar_t wc_low = from[i + 1];
+					if (wc_low >= 0xDC00 && wc_low <= 0xDFFF)
+					{
+						codepoint = ((static_cast<uint32_t>(wc - 0xD800) << 10) | (static_cast<uint32_t>(wc_low - 0xDC00))) + 0x10000;
+						++i;
+					}
+					else
+					{
+						codepoint = wc;
+					}
+				}
+				else
+				{
+					codepoint = static_cast<uint32_t>(wc);
+				}
+			}
+
+			if (codepoint <= 0x7F)
+			{
+				if (written + 1 >= dest_size_in_characters)
+					break;
+				to[written++] = static_cast<char>(codepoint);
+			}
+			else if (codepoint <= 0x7FF)
+			{
+				if (written + 2 >= dest_size_in_characters)
+					break;
+				to[written++] = static_cast<char>(0xC0 | ((codepoint >> 6) & 0x1F));
+				to[written++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else if (codepoint <= 0xFFFF)
+			{
+				if (written + 3 >= dest_size_in_characters)
+					break;
+				to[written++] = static_cast<char>(0xE0 | ((codepoint >> 12) & 0x0F));
+				to[written++] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				to[written++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+			else if (codepoint <= 0x10FFFF)
+			{
+				if (written + 4 >= dest_size_in_characters)
+					break;
+				to[written++] = static_cast<char>(0xF0 | ((codepoint >> 18) & 0x07));
+				to[written++] = static_cast<char>(0x80 | ((codepoint >> 12) & 0x3F));
+				to[written++] = static_cast<char>(0x80 | ((codepoint >> 6) & 0x3F));
+				to[written++] = static_cast<char>(0x80 | (codepoint & 0x3F));
+			}
+		}
+
+		if (written < dest_size_in_characters)
+			to[written] = '\0';
+
+		return written;
+	}
+
+	std::string StringRemoveTrailingWhitespaces(const std::string& str)
+	{
+		size_t found;
+		found = str.find_last_not_of(" /t");
+		if (found == std::string::npos)
+			return str;
+		return str.substr(0, found + 1);
+	}
+
 	void DebugOut(const std::string& str, DebugLevel level)
 	{
 #ifdef _WIN32
@@ -1678,5 +2009,51 @@ namespace wi::helper
 			hash_combine(hash, data[i]);
 		}
 		return hash;
+	}
+
+	std::wstring GetClipboardText()
+	{
+		std::wstring wstr;
+
+#ifdef PLATFORM_WINDOWS_DESKTOP
+		if (!::OpenClipboard(NULL))
+			return wstr;
+		HANDLE wbuf_handle = ::GetClipboardData(CF_UNICODETEXT);
+		if (wbuf_handle == NULL)
+		{
+			::CloseClipboard();
+			return wstr;
+		}
+		if (const WCHAR* wbuf_global = (const WCHAR*)::GlobalLock(wbuf_handle))
+		{
+			wstr = wbuf_global;
+		}
+		::GlobalUnlock(wbuf_handle);
+		::CloseClipboard();
+#endif // PLATFORM_WINDOWS_DESKTOP
+
+		return wstr;
+	}
+
+	void SetClipboardText(const std::wstring& wstr)
+	{
+#ifdef PLATFORM_WINDOWS_DESKTOP
+		if (!::OpenClipboard(NULL))
+			return;
+		const int wbuf_length = (int)wstr.length() + 1;
+		HGLOBAL wbuf_handle = ::GlobalAlloc(GMEM_MOVEABLE, (SIZE_T)wbuf_length * sizeof(WCHAR));
+		if (wbuf_handle == NULL)
+		{
+			::CloseClipboard();
+			return;
+		}
+		WCHAR* wbuf_global = (WCHAR*)::GlobalLock(wbuf_handle);
+		std::memcpy(wbuf_global, wstr.c_str(), wbuf_length * sizeof(wchar_t));
+		::GlobalUnlock(wbuf_handle);
+		::EmptyClipboard();
+		if (::SetClipboardData(CF_UNICODETEXT, wbuf_handle) == NULL)
+			::GlobalFree(wbuf_handle);
+		::CloseClipboard();
+#endif // PLATFORM_WINDOWS_DESKTOP
 	}
 }

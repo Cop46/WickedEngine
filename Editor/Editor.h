@@ -4,6 +4,8 @@
 #include "ComponentsWindow.h"
 #include "ProfilerWindow.h"
 #include "ContentBrowserWindow.h"
+#include "ProjectCreatorWindow.h"
+#include "ThemeEditorWindow.h"
 #include "GraphicsWindow.h"
 #include "CameraWindow.h"
 #include "MaterialPickerWindow.h"
@@ -46,6 +48,7 @@ public:
 
 	wi::gui::Button playButton;
 	wi::gui::Button stopButton;
+	wi::gui::Button projectCreatorButton;
 
 	wi::gui::Button saveButton;
 	wi::gui::Button openButton;
@@ -63,6 +66,8 @@ public:
 	ComponentsWindow componentsWnd;
 	ProfilerWindow profilerWnd;
 	ContentBrowserWindow contentBrowserWnd;
+	ProjectCreatorWindow projectCreatorWnd;
+	ThemeEditorWindow themeEditorWnd;
 	wi::gui::Window topmenuWnd;
 
 	wi::gui::Button generalButton;
@@ -83,6 +88,7 @@ public:
 	wi::physics::PickDragOperation physicsDragOp;
 
 	std::unique_ptr<wi::RenderPath3D> renderPath;
+	wi::graphics::Texture gui_background_effect;
 	const wi::graphics::Texture* GetGUIBlurredBackground() const override { return renderPath->GetGUIBlurredBackground(); }
 
 	void ResizeBuffers() override;
@@ -146,6 +152,7 @@ public:
 
 	bool bone_picking = false;
 	void CheckBonePickingEnabled();
+	wi::unordered_map<wi::ecs::Entity, wi::primitive::Capsule> bone_picking_items;
 
 	void UpdateDynamicWidgets();
 
@@ -174,13 +181,14 @@ public:
 	size_t maxRecentFilenames = 10;
 	wi::vector<std::string> recentFolders;
 	size_t maxRecentFolders = 8;
-	void RegisterRecentlyUsed(const std::string& filename);
+	void RegisterRecentlyUsed(std::string filename);
 
 	void Open(std::string filename);
 	void Save(const std::string& filename);
 	void SaveAs();
 	bool deleting = false;
 
+	wi::graphics::Texture CreateThumbnail(wi::graphics::Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps = false) const;
 	wi::graphics::Texture CreateThumbnailScreenshot() const;
 
 	std::string save_text_message = "";
@@ -286,3 +294,11 @@ static const char* EditorLocalizationStrings[] = {
 	"Content",
 };
 static_assert(arraysize(EditorLocalizationStrings) == size_t(EditorLocalization::Count));
+
+struct ApplicationExeCustomization
+{
+	char name_padded[120];
+	wi::Color font_color; // color of backlog font (startup text)
+	wi::Color background_color; // color of startup background behind startup text
+};
+extern ApplicationExeCustomization exe_customization;

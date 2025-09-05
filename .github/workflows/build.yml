@@ -5,13 +5,19 @@ on:
     branches: [ master ]
 
 env:
-  CCACHE_VERSION: 4.10.2
-  CCACHE_NODIRECT: 1
+  CCACHE_VERSION: 4.11.3
+  CCACHE_MAXSIZE: 500Mi
+  # see https://ccache.dev/manual/latest.html#_precompiled_headers
+  CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
 
 jobs:
 
   windows:
     runs-on: windows-latest
+    env:
+      # needed on Windows because wiRenderer conditionally includes wiShaderDump.h
+      # and only our CMake config has a workaround for it
+      CCACHE_NODIRECT: 1
     steps:
     - uses: actions/checkout@v4
 
@@ -20,8 +26,8 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: C:\Users\runneradmin\AppData\Local\ccache
-        key: win-ccache-${{ github.run_id }}
-        restore-keys: win-ccache-
+        key: ccache-win-${{ github.run_id }}
+        restore-keys: ccache-win-
 
     - name: Install Ccache
       run: |
@@ -80,8 +86,19 @@ jobs:
 
   linux:
     runs-on: ubuntu-latest
-    steps:
+    name: linux (${{ matrix.cc }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - cc: gcc
+          cxx: g++
+          package_bins: true
+        - cc: clang
+          cxx: clang++
+          package_bins: false
 
+    steps:
     - uses: actions/checkout@v4
 
     - name: Restore Ccache database
@@ -89,8 +106,8 @@ jobs:
       uses: actions/cache/restore@v4
       with:
         path: ~/.cache/ccache
-        key: ccache-${{ github.run_id }}
-        restore-keys: ccache-
+        key: ccache-${{ matrix.cc }}-${{ github.run_id }}
+        restore-keys: ccache-${{ matrix.cc }}-
 
     - name: Install dependencies
       run: |
@@ -101,8 +118,8 @@ jobs:
       run: |
         mkdir build
         cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
-        CCACHE_NODIRECT=1 make -j$(nproc)
+        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DWICKED_USE_IPO=NO
+        make -j$(nproc)
     - name: Generate shader dump
       run: |
         cd build/WickedEngine
@@ -112,7 +129,7 @@ jobs:
     - name: Recompile with shader dump
       run: |
         cd build
-        CCACHE_NODIRECT=1 make -B -j $(nproc)
+        make -j $(nproc)
 
     - name: Save Ccache database
       id: save-ccache
@@ -123,19 +140,19 @@ jobs:
         key: ${{ steps.restore-ccache.outputs.cache-primary-key }}
 
     - name: Move files
+      if: matrix.package_bins
       run: |
-        mv build/Editor/WickedEngineEditor ./Editor_Linux
+        mv build/Editor/Editor ./Editor_Linux
         mv Editor/config.ini ./
         mv Editor/startup.lua ./
-        mv Editor/languages ./
         mv Editor/fonts ./
 
     - name: Package Editor
+      if: matrix.package_bins
       uses: actions/upload-artifact@v4
       with:
         name: Editor (Linux)
         path: |
-          languages/
           fonts/
           config.ini
           startup.lua

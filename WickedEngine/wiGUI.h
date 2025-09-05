@@ -87,6 +87,9 @@ namespace wi::gui
 		// Window:
 		WIDGET_ID_WINDOW_BASE,
 
+		// Colorpicker:
+		WIDGET_ID_COLORPICKER_BASE,
+
 		// other user-defined widget states can be specified after this (but in user's own enum):
 		//	And you will of course need to handle it yourself in a SetColor() override for example
 		WIDGET_ID_USER,
@@ -223,6 +226,7 @@ namespace wi::gui
 	};
 
 	class Widget;
+	class ComboBox;
 
 	class GUI
 	{
@@ -248,6 +252,7 @@ namespace wi::gui
 		bool IsVisible() const { return visible; }
 
 		void SetColor(wi::Color color, int id = -1);
+		void SetImage(wi::Resource resource, int id = -1);
 		void SetShadowColor(wi::Color color);
 		void SetTheme(const Theme& theme, int id = -1);
 
@@ -257,6 +262,7 @@ namespace wi::gui
 
 	class Widget : public wi::scene::TransformComponent
 	{
+		friend class ComboBox;
 	private:
 		int tooltipTimer = 0;
 	protected:
@@ -278,10 +284,15 @@ namespace wi::gui
 		float angular_highlight_width = 0;
 		float angular_highlight_timer = 0;
 		XMFLOAT4 angular_highlight_color = XMFLOAT4(1, 1, 1, 1);
+		float left_text_width = 0;
+		float right_text_width = 0;
 
 	public:
 		Widget();
 		virtual ~Widget() = default;
+
+		// Delete copy/move to keep internal references stable.
+		Widget(const Widget &) = delete;
 
 		const std::string& GetName() const;
 		void SetName(const std::string& value);
@@ -340,8 +351,8 @@ namespace wi::gui
 		void AttachTo(Widget* parent);
 		void Detach();
 
-		void Activate();
-		void Deactivate();
+		virtual void Activate();
+		virtual void Deactivate();
 
 		void ApplyScissor(const wi::Canvas& canvas, const wi::graphics::Rect rect, wi::graphics::CommandList cmd, bool constrain_to_parent = true) const;
 		wi::primitive::Hitbox2D GetPointerHitbox(bool constrained = true) const;
@@ -365,6 +376,9 @@ namespace wi::gui
 		float GetAngularHighlightWidth() const { return angular_highlight_width; };
 		void SetAngularHighlightColor(const XMFLOAT4& value) { angular_highlight_color = value; };
 		XMFLOAT4 GetAngularHighlightColor() const { return angular_highlight_color; };
+
+		constexpr float GetLeftTextWidth() const { return left_text_width; }
+		constexpr float GetRightTextWidth() const { return right_text_width; }
 	};
 
 	// Clickable, draggable box
@@ -377,11 +391,9 @@ namespace wi::gui
 		std::function<void(EventArgs args)> onDragEnd;
 		XMFLOAT2 dragStart = XMFLOAT2(0, 0);
 		XMFLOAT2 prevPos = XMFLOAT2(0, 0);
+		bool disableClicking = false;
 	public:
 		void Create(const std::string& name);
-
-		wi::SpriteFont font_description;
-		void SetDescription(const std::string& desc) { font_description.SetText(desc); }
 
 		void Update(const wi::Canvas& canvas, float dt) override;
 		void Render(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const override;
@@ -392,6 +404,12 @@ namespace wi::gui
 		void OnDragStart(std::function<void(EventArgs args)> func);
 		void OnDrag(std::function<void(EventArgs args)> func);
 		void OnDragEnd(std::function<void(EventArgs args)> func);
+
+		wi::SpriteFont font_description;
+		void SetDescription(const std::string& desc) { font_description.SetText(desc); }
+		const std::string GetDescription() const { return font_description.GetTextA(); }
+
+		void DisableClickForCurrentDragOperation() { disableClicking = true; }
 	};
 
 	// Generic scroll bar
@@ -452,6 +470,7 @@ namespace wi::gui
 	{
 	protected:
 		bool wrap_enabled = true;
+		bool fittext_enabled = false;
 	public:
 		void Create(const std::string& name);
 
@@ -465,6 +484,7 @@ namespace wi::gui
 		ScrollBar scrollbar;
 
 		void SetWrapEnabled(bool value) { wrap_enabled = value; }
+		void SetFitTextEnabled(bool value) { fittext_enabled = value; }
 
 		float margin_left = 0;
 		float margin_right = 0;
@@ -484,15 +504,11 @@ namespace wi::gui
 	public:
 		void Create(const std::string& name);
 
-		wi::SpriteFont font_description;
-
 		void SetValue(const std::string& newValue);
 		void SetValue(int newValue);
 		void SetValue(float newValue);
 		const std::string GetValue();
 		const std::string GetCurrentInputValue();
-		void SetDescription(const std::string& desc) { font_description.SetText(desc); }
-		const std::string GetDescription() const { return font_description.GetTextA(); }
 
 		// Set whether incomplete input will be removed on lost activation state (default: true)
 		void SetCancelInputEnabled(bool value) { cancel_input_enabled = value; }
@@ -502,7 +518,13 @@ namespace wi::gui
 		static void AddInput(const wchar_t inputChar);
 		static void AddInput(const char inputChar);
 		static void DeleteFromInput(int direction = -1);
-		void SetAsActive();
+
+		// Sets this text input as currently active in typing state
+		//	selectall params: selects the current input, so typing will immediately overwrite it
+		void SetAsActive(bool selectall = false);
+
+		void Activate() override;
+		void Deactivate() override;
 
 		void Update(const wi::Canvas& canvas, float dt) override;
 		void Render(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const override;
@@ -514,6 +536,10 @@ namespace wi::gui
 		void OnInputAccepted(std::function<void(EventArgs args)> func);
 		// Called when input was updated with new character:
 		void OnInput(std::function<void(EventArgs args)> func);
+
+		wi::SpriteFont font_description;
+		void SetDescription(const std::string& desc) { font_description.SetText(desc); }
+		const std::string GetDescription() const { return font_description.GetTextA(); }
 	};
 
 	// Define an interval and slide the control along it
@@ -595,6 +621,7 @@ namespace wi::gui
 			COMBOSTATE_SELECTING,	// The hovered item is clicked
 			COMBOSTATE_SCROLLBAR_HOVER,		// scrollbar is to be selected
 			COMBOSTATE_SCROLLBAR_GRABBED,	// scrollbar is moved
+			COMBOSTATE_FILTER_INTERACT, // interaction with filter sub-widget
 			COMBOSTATE_COUNT,
 		} combostate = COMBOSTATE_INACTIVE;
 		int hovered = -1;
@@ -610,6 +637,10 @@ namespace wi::gui
 
 		wi::Color drop_color = wi::Color::Ghost();
 		std::wstring invalid_selection_text;
+
+		TextInputField filter;
+		std::string filterText;
+		int filteredItemCount = 0;
 
 		float GetDropOffset(const wi::Canvas& canvas) const;
 		float GetDropX(const wi::Canvas& canvas) const;
@@ -662,6 +693,7 @@ namespace wi::gui
 		wi::vector<Widget*> widgets;
 		bool minimized = false;
 		bool has_titlebar = false;
+		bool right_aligned_image = false;
 		Widget scrollable_area;
 		float control_size = 20;
 		std::function<void(EventArgs args)> onClose;
@@ -686,6 +718,151 @@ namespace wi::gui
 		XMFLOAT2 resize_begin = XMFLOAT2(0, 0);
 		float resize_blink_timer = 0;
 
+		struct Layout
+		{
+			float padding = 2;
+			float width = 0;
+			float height = 0;
+			float y = 0;
+			float x = 0;
+			float margin_left = 160;
+
+			// Reset layout state:
+			void reset(Window& window)
+			{
+				const XMFLOAT2 widgetareasize = window.GetWidgetAreaSize();
+				width = widgetareasize.x;
+				height = widgetareasize.y - window.GetControlSize();
+				y = padding;
+			}
+
+			// Jump over an empty space to visually separate widgets a bit:
+			void jump(float amount = 20)
+			{
+				y += amount;
+			}
+
+			// Add one widget in a row:
+			void add(wi::gui::Widget& widget)
+			{
+				if (!widget.IsVisible())
+					return;
+				const XMFLOAT2 size = widget.GetSize();
+				x = margin_left;
+				y += widget.GetShadowRadius();
+				widget.SetPos(XMFLOAT2(x, y));
+				widget.SetSize(XMFLOAT2(width - x - padding - widget.GetShadowRadius(), size.y));
+				y += size.y;
+				y += widget.GetShadowRadius();
+				y += padding;
+			}
+			// Add one widget to the right side:
+			void add_right(wi::gui::Widget& widget)
+			{
+				if (!widget.IsVisible())
+					return;
+				const XMFLOAT2 size = widget.GetSize();
+				x = width - padding - size.x;
+				x -= widget.GetRightTextWidth();
+				x -= widget.GetShadowRadius();
+				y += widget.GetShadowRadius();
+				widget.SetPos(XMFLOAT2(x, y));
+				if (widget.GetLeftTextWidth() > 0)
+				{
+					x -= widget.GetLeftTextWidth() + padding * 4;
+				}
+				x -= padding;
+				x -= widget.GetShadowRadius();
+				y += size.y;
+				y += widget.GetShadowRadius();
+				y += padding;
+			}
+			// Add one widget to fill the whole width:
+			void add_fullwidth(wi::gui::Widget& widget)
+			{
+				if (!widget.IsVisible())
+					return;
+				const XMFLOAT2 size = widget.GetSize();
+				x = padding;
+				x += widget.GetLeftTextWidth();
+				x += widget.GetShadowRadius();
+				y += widget.GetShadowRadius();
+				widget.SetPos(XMFLOAT2(x, y));
+				widget.SetSize(XMFLOAT2(width - x - padding - widget.GetShadowRadius(), size.y));
+				y += size.y;
+				y += widget.GetShadowRadius();
+				y += padding;
+			}
+			// Add one widget to fill the whole width and keep aspect ratio:
+			void add_fullwidth_aspect(wi::gui::Widget& widget)
+			{
+				if (!widget.IsVisible())
+					return;
+				x = padding;
+				x += widget.GetLeftTextWidth();
+				x += widget.GetShadowRadius();
+				y += widget.GetShadowRadius();
+				widget.SetPos(XMFLOAT2(margin_left, y));
+				float h_aspect = widget.GetSize().y / widget.GetSize().x;
+				const wi::Resource& res = widget.sprites[widget.GetState()].textureResource;
+				if (res.IsValid())
+				{
+					const wi::graphics::Texture& tex = res.GetTexture();
+					h_aspect = (float)tex.desc.height / (float)tex.desc.width;
+				}
+				const float w = width - x - padding - widget.GetShadowRadius();
+				widget.SetSize(XMFLOAT2(w, w * h_aspect));
+				widget.SetPos(XMFLOAT2(x, y));
+				y += widget.GetSize().y;
+				y += widget.GetShadowRadius();
+				y += padding;
+			}
+
+			// Add multiple widgets in a row aligned to the right side:
+			template<typename... Args>
+			void add_right(wi::gui::Widget& widget, Args&&... args)
+			{
+				add_right(std::forward<Args>(args)...);
+				if (!widget.IsVisible())
+					return;
+				const XMFLOAT2 size = widget.GetSize();
+				x -= size.x;
+				x -= widget.GetRightTextWidth();
+				x -= widget.GetShadowRadius();
+				widget.SetPos(XMFLOAT2(x, y - size.y - padding - widget.GetShadowRadius()));
+				if (widget.GetLeftTextWidth() > 0)
+				{
+					x -= widget.GetLeftTextWidth() + padding * 4;
+				}
+				x -= padding;
+				x -= widget.GetShadowRadius();
+			}
+
+			void helper_fitx(float sizx, wi::gui::Widget& widget)
+			{
+				float left = widget.GetLeftTextWidth();
+				if (left > 0)
+					left += padding;
+				widget.SetSize(XMFLOAT2(sizx - left, widget.GetSize().y));
+			}
+			template<typename... Args>
+			void helper_fitx(float sizx, wi::gui::Widget& widget, Args&&... args)
+			{
+				helper_fitx(sizx, widget);
+				helper_fitx(sizx, std::forward<Args>(args)...);
+			}
+
+			// Add multiple widgets in a row, equally sized to fit
+			template<typename... Args>
+			void add(wi::gui::Widget& widget, Args&&... args)
+			{
+				constexpr size_t total_count = 1 + sizeof...(Args);
+				const float onewidth = (width - padding) / total_count - (padding * (total_count - 1));
+				helper_fitx(onewidth, widget, std::forward<Args>(args)...);
+				add_right(widget, std::forward<Args>(args)...);
+			}
+		} layout;
+		 
 	public:
 		enum class WindowControls
 		{
@@ -724,6 +901,7 @@ namespace wi::gui
 		void Render(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const override;
 		void RenderTooltip(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const override;
 		void SetColor(wi::Color color, int id = -1) override;
+		void SetImage(wi::Resource resource, int id = -1) override;
 		void SetShadowColor(wi::Color color) override;
 		void SetTheme(const Theme& theme, int id = -1) override;
 		const char* GetWidgetTypeName() const override { return "Window"; }
@@ -751,8 +929,13 @@ namespace wi::gui
 		ScrollBar scrollbar_horizontal;
 		WindowControls controls;
 
+		// Set whether the background image should be aligned to the right side while keeping aspect ratio
+		void SetRightAlignedImage(bool value) { right_aligned_image = value; }
+
 		void ExportLocalization(wi::Localization& localization) const override;
 		void ImportLocalization(const wi::Localization& localization) override;
+
+		wi::graphics::Texture background_overlay;
 	};
 
 	// HSV-Color Picker
@@ -777,6 +960,8 @@ namespace wi::gui
 		void Update(const wi::Canvas& canvas, float dt) override;
 		void Render(const wi::Canvas& canvas, wi::graphics::CommandList cmd) const override;
 		void ResizeLayout() override;
+		void SetColor(wi::Color color, int id = -1) override;
+		void SetImage(wi::Resource resource, int id = -1) override;
 		const char* GetWidgetTypeName() const override { return "ColorPicker"; }
 
 		wi::Color GetPickColor() const;

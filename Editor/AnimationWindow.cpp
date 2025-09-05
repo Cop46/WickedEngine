@@ -33,6 +33,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	infoLabel.Create("");
 	infoLabel.SetSize(XMFLOAT2(100, 50));
 	infoLabel.SetText("The animation window will stay open even if you select other entities until it is collapsed, so you can record other entities' data.");
+	infoLabel.SetFitTextEnabled(true);
 	AddWidget(&infoLabel);
 
 	modeComboBox.Create("Sampling: ");
@@ -42,7 +43,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	modeComboBox.AddItem("Step", AnimationComponent::AnimationSampler::Mode::STEP);
 	modeComboBox.AddItem("Linear", AnimationComponent::AnimationSampler::Mode::LINEAR);
 	modeComboBox.AddItem("Cubic spline", AnimationComponent::AnimationSampler::Mode::CUBICSPLINE);
-	modeComboBox.OnSelect([&](wi::gui::EventArgs args) {
+	modeComboBox.OnSelect([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -76,7 +77,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	loopTypeButton.SetDescription("Loop type: ");
 	loopTypeButton.SetSize(XMFLOAT2(hei, hei));
 	loopTypeButton.SetPos(XMFLOAT2(x, y += step));
-	loopTypeButton.OnClick([&](wi::gui::EventArgs args) {
+	loopTypeButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -102,7 +103,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	backwardsButton.SetTooltip("Play the animation backwards from the current position.");
 	backwardsButton.SetSize(XMFLOAT2(30, hei));
 	backwardsButton.SetPos(XMFLOAT2(loopTypeButton.GetPos().x + loopTypeButton.GetSize().x + padding, y));
-	backwardsButton.OnClick([&](wi::gui::EventArgs args) {
+	backwardsButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -120,7 +121,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	backwardsFromEndButton.SetTooltip("Play the animation backwards starting from the end.");
 	backwardsFromEndButton.SetSize(backwardsButton.GetSize());
 	backwardsFromEndButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x + padding, y));
-	backwardsFromEndButton.OnClick([&](wi::gui::EventArgs args) {
+	backwardsFromEndButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -136,7 +137,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	stopButton.SetTooltip("Stop.");
 	stopButton.SetSize(backwardsButton.GetSize());
 	stopButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 2 + padding * 2, y));
-	stopButton.OnClick([&](wi::gui::EventArgs args) {
+	stopButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -157,7 +158,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	playFromStartButton.SetTooltip("Play the animation from the beginning.");
 	playFromStartButton.SetSize(backwardsButton.GetSize());
 	playFromStartButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 3 + padding * 3, y));
-	playFromStartButton.OnClick([&](wi::gui::EventArgs args) {
+	playFromStartButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -174,7 +175,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	playButton.SetTooltip("Play the animation from the current position.");
 	playButton.SetSize(backwardsButton.GetSize());
 	playButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 4 + padding * 4, y));
-	playButton.OnClick([&](wi::gui::EventArgs args) {
+	playButton.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -190,7 +191,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	timerSlider.Create(0, 1, 0, 100000, "Timer: ");
 	timerSlider.SetSize(XMFLOAT2(wid, hei));
 	timerSlider.SetPos(XMFLOAT2(x, y += step));
-	timerSlider.OnSlide([&](wi::gui::EventArgs args) {
+	timerSlider.OnSlide([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -204,7 +205,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	amountSlider.Create(0, 1, 1, 100000, "Amount: ");
 	amountSlider.SetSize(XMFLOAT2(wid, hei));
 	amountSlider.SetPos(XMFLOAT2(x, y += step));
-	amountSlider.OnSlide([&](wi::gui::EventArgs args) {
+	amountSlider.OnSlide([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -218,7 +219,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	speedSlider.Create(0, 4, 1, 100000, "Speed: ");
 	speedSlider.SetSize(XMFLOAT2(wid, hei));
 	speedSlider.SetPos(XMFLOAT2(x, y += step));
-	speedSlider.OnSlide([&](wi::gui::EventArgs args) {
+	speedSlider.OnSlide([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -235,7 +236,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	startInput.SetDescription("Start time: ");
 	startInput.SetSize(XMFLOAT2(wid, hei));
 	startInput.SetPos(XMFLOAT2(x, y += step));
-	startInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	startInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -249,7 +250,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	endInput.SetDescription("End time: ");
 	endInput.SetSize(XMFLOAT2(wid, hei));
 	endInput.SetPos(XMFLOAT2(x, y += step));
-	endInput.OnInputAccepted([&](wi::gui::EventArgs args) {
+	endInput.OnInputAccepted([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -294,7 +295,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	recordCombo.AddItem("Material [reflectance] " ICON_MATERIAL);
 	recordCombo.AddItem("Material [texmuladd] " ICON_MATERIAL);
 	recordCombo.AddItem("Close loop " ICON_LOOP, ~0ull);
-	recordCombo.OnSelect([&](wi::gui::EventArgs args) {
+	recordCombo.OnSelect([this](wi::gui::EventArgs args) {
 		wi::scene::Scene& scene = editor->GetCurrentScene();
 
 		AnimationComponent* animation = scene.animations.GetComponent(entity);
@@ -983,7 +984,9 @@ void AnimationWindow::Create(EditorComponent* _editor)
 		retargetCombo.SetSelectedWithoutCallback(-1);
 		wi::scene::Scene& scene = editor->GetCurrentScene();
 
-		Entity retarget_entity = scene.RetargetAnimation((Entity)args.userdata, entity, true);
+		Entity dst_entity = (Entity)args.userdata;
+		scene.ResetPose(dst_entity); // reset pose to be able to retarget anim to character while it's already in an animated pose
+		Entity retarget_entity = scene.RetargetAnimation(dst_entity, entity, true);
 		if (retarget_entity != INVALID_ENTITY)
 		{
 			NameComponent name;
@@ -1004,7 +1007,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	rootMotionCheckBox.SetTooltip("Toggle root bone animation.");
 	rootMotionCheckBox.SetSize(XMFLOAT2(hei, hei));
 	//rootMotionCheckBox.SetPos(XMFLOAT2(x, y += step));
-	rootMotionCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	rootMotionCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -1023,7 +1026,7 @@ void AnimationWindow::Create(EditorComponent* _editor)
 	rootBoneComboBox.SetSize(XMFLOAT2(wid, hei));
 	rootBoneComboBox.SetPos(XMFLOAT2(x, y));
 	rootBoneComboBox.SetEnabled(false);
-	rootBoneComboBox.OnSelect([&](wi::gui::EventArgs args) {
+	rootBoneComboBox.OnSelect([this](wi::gui::EventArgs args) {
 		AnimationComponent* animation = editor->GetCurrentScene().animations.GetComponent(entity);
 		if (animation != nullptr)
 		{
@@ -1102,7 +1105,7 @@ void AnimationWindow::SetEntity(Entity entity)
 	}
 }
 
-void AnimationWindow::Update()
+void AnimationWindow::UpdateData()
 {
 	Scene& scene = editor->GetCurrentScene();
 
@@ -1327,71 +1330,38 @@ void AnimationWindow::RefreshKeyframesList()
 void AnimationWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 80;
 
-	const float margin_left = 80;
-	const float margin_right = 50;
+	layout.add_fullwidth(infoLabel);
+	layout.add(modeComboBox);
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_right = 40;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add_fullwidth(infoLabel);
-	add(modeComboBox);
-
-	loopTypeButton.SetPos(XMFLOAT2(margin_left, y));
-	const float l = loopTypeButton.GetPos().x + loopTypeButton.GetSize().x + padding;
-	const float r = width - margin_right - padding * 4;
+	loopTypeButton.SetPos(XMFLOAT2(layout.margin_left, layout.y));
+	const float l = loopTypeButton.GetPos().x + loopTypeButton.GetSize().x + layout.padding;
+	const float r = layout.width - layout.padding - layout.padding * 4;
 	const float diff = r - l;
 	backwardsButton.SetSize(XMFLOAT2(diff/5, backwardsButton.GetSize().y));
 	backwardsFromEndButton.SetSize(backwardsButton.GetSize());
 	stopButton.SetSize(backwardsButton.GetSize());
 	playFromStartButton.SetSize(backwardsButton.GetSize());
 	playButton.SetSize(backwardsButton.GetSize());
-	backwardsButton.SetPos(XMFLOAT2(loopTypeButton.GetPos().x + loopTypeButton.GetSize().x + padding, y));
-	backwardsFromEndButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x + padding, y));
-	stopButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 2 + padding * 2, y));
-	playFromStartButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 3 + padding * 3, y));
-	playButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 4 + padding * 4, y));
-	y += stopButton.GetSize().y;
-	y += padding;
+	backwardsButton.SetPos(XMFLOAT2(loopTypeButton.GetPos().x + loopTypeButton.GetSize().x + layout.padding, layout.y));
+	backwardsFromEndButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x + layout.padding, layout.y));
+	stopButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 2 + layout.padding * 2, layout.y));
+	playFromStartButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 3 + layout.padding * 3, layout.y));
+	playButton.SetPos(XMFLOAT2(backwardsButton.GetPos().x + backwardsButton.GetSize().x * 4 + layout.padding * 4, layout.y));
+	layout.y += stopButton.GetSize().y;
+	layout.y += layout.padding;
 
-	add(timerSlider);
-	add(amountSlider);
-	add(speedSlider);
-	add(startInput);
-	add(endInput);
-	add(recordCombo);
-	add(retargetCombo);
-	rootMotionCheckBox.SetPos(XMFLOAT2(margin_left, y));
-	y += rootMotionCheckBox.GetSize().y;
-	y += padding;
-	add(rootBoneComboBox);
-	add_fullwidth(keyframesList);
+	layout.add(timerSlider);
+	layout.add(amountSlider);
+	layout.add(speedSlider);
+	layout.add(startInput);
+	layout.add(endInput);
+	layout.add(recordCombo);
+	layout.add(retargetCombo);
+	rootMotionCheckBox.SetPos(XMFLOAT2(layout.margin_left, layout.y));
+	layout.y += rootMotionCheckBox.GetSize().y;
+	layout.y += layout.padding;
+	layout.add(rootBoneComboBox);
+	layout.add_fullwidth(keyframesList);
 }

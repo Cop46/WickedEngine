@@ -7,6 +7,18 @@ using namespace wi::scene;
 
 static const std::string languages_directory = "languages/";
 
+enum class Theme : uint64_t
+{
+	Dark,
+	Bright,
+	Soft,
+	Hacking,
+	Nord,
+
+	User = ~0ull - 1,
+	Custom = ~0ull
+};
+
 void GeneralWindow::Create(EditorComponent* _editor)
 {
 	editor = _editor;
@@ -180,11 +192,11 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	{
 		focusModeCheckBox.SetCheck(editor->main->config.GetSection("options").GetBool("focus_mode"));
 	}
-	focusModeCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	focusModeCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		editor->main->config.GetSection("options").Set("focus_mode", args.bValue);
 		// trigger themeCombo's OnSelect handler, which will enable/disable shadow highlighting
 		// according to this checkbox's state
-		themeCombo.SetSelected(themeCombo.GetSelected());
+		RefreshTheme();
 	});
 	AddWidget(&focusModeCheckBox);
 
@@ -192,7 +204,7 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	versionCheckBox.SetTooltip("Toggle the engine version display text in top left corner.");
 	editor->main->infoDisplay.watermark = editor->main->config.GetSection("options").GetBool("version");
 	versionCheckBox.SetCheck(editor->main->infoDisplay.watermark);
-	versionCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	versionCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		editor->main->infoDisplay.watermark = args.bValue;
 		editor->main->config.GetSection("options").Set("version", args.bValue);
 		editor->main->config.Commit();
@@ -204,7 +216,7 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	fpsCheckBox.SetTooltip("Toggle the FPS display text in top left corner.");
 	editor->main->infoDisplay.fpsinfo = editor->main->config.GetSection("options").GetBool("fps");
 	fpsCheckBox.SetCheck(editor->main->infoDisplay.fpsinfo);
-	fpsCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	fpsCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		editor->main->infoDisplay.fpsinfo = args.bValue;
 		editor->main->config.GetSection("options").Set("fps", args.bValue);
 		editor->main->config.Commit();
@@ -223,7 +235,7 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	editor->main->infoDisplay.logical_size = info;
 	editor->main->infoDisplay.pipeline_count = info;
 	otherinfoCheckBox.SetCheck(info);
-	otherinfoCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	otherinfoCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		editor->main->infoDisplay.heap_allocation_counter = args.bValue;
 		editor->main->infoDisplay.vram_usage = args.bValue;
 		editor->main->infoDisplay.device_name = args.bValue;
@@ -256,11 +268,16 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	{
 		saveCompressionCheckBox.SetCheck(editor->main->config.GetSection("options").GetBool("save_compressed"));
 	}
-	saveCompressionCheckBox.OnClick([&](wi::gui::EventArgs args) {
+	saveCompressionCheckBox.OnClick([this](wi::gui::EventArgs args) {
 		editor->main->config.GetSection("options").Set("save_compressed", args.bValue);
 		editor->main->config.Commit();
 	});
 	AddWidget(&saveCompressionCheckBox);
+
+	outlineOpacitySlider.Create(0, 1, 1, 100, "Outline Opacity: ");
+	outlineOpacitySlider.SetTooltip("You can control the transparency of the selection outline");
+	outlineOpacitySlider.SetSize(XMFLOAT2(100, 18));
+	AddWidget(&outlineOpacitySlider);
 
 	transformToolOpacitySlider.Create(0, 1, 1, 100, "Transform Tool Opacity: ");
 	transformToolOpacitySlider.SetTooltip("You can control the transparency of the object placement tool");
@@ -310,7 +327,7 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	localizationButton.Create(ICON_LANGUAGE " Create Localization Template");
 	localizationButton.SetTooltip("Generate a file that can be used to edit localization for the Editor.\nThe template will be created from the currently selected language.");
 	localizationButton.SetSize(XMFLOAT2(100, 18));
-	localizationButton.OnClick([&](wi::gui::EventArgs args) {
+	localizationButton.OnClick([this](wi::gui::EventArgs args) {
 		wi::helper::FileDialogParams params;
 		params.type = wi::helper::FileDialogParams::SAVE;
 		params.description = "XML file (.xml)";
@@ -360,28 +377,29 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	wi::helper::GetFileNamesInDirectory(languages_directory, add_language, "XML");
 
 
-	enum class Theme
-	{
-		Dark,
-		Bright,
-		Soft,
-		Hacking,
-		Nord,
-	};
+	themeEditorButton.Create("themeEditorButton");
+	themeEditorButton.SetText(ICON_THEME_EDITOR);
+	themeEditorButton.SetTooltip("Open the theme editor.");
+	themeEditorButton.SetSize(XMFLOAT2(themeEditorButton.GetSize().y, themeEditorButton.GetSize().y));
+	themeEditorButton.OnClick([this](wi::gui::EventArgs args) {
+		editor->themeEditorWnd.nameInput.SetText(currentTheme);
+		editor->themeEditorWnd.SetVisible(!editor->themeEditorWnd.IsVisible());
+	});
+	AddWidget(&themeEditorButton);
+
 
 	themeCombo.Create("Theme: ");
 	themeCombo.SetTooltip("Choose a color theme...");
-	themeCombo.AddItem("Dark " ICON_DARK, (uint64_t)Theme::Dark);
-	themeCombo.AddItem("Bright " ICON_BRIGHT, (uint64_t)Theme::Bright);
-	themeCombo.AddItem("Soft " ICON_SOFT, (uint64_t)Theme::Soft);
-	themeCombo.AddItem("Hacking " ICON_HACKING, (uint64_t)Theme::Hacking);
-	themeCombo.AddItem("Nord " ICON_NORD, (uint64_t)Theme::Nord);
 	themeCombo.OnSelect([=](wi::gui::EventArgs args) {
+
+		currentTheme = themeCombo.GetItemText(args.iValue);
 
 		// Dark theme defaults:
 		wi::Color theme_color_idle = wi::Color(30, 40, 60, 200);
 		wi::Color theme_color_focus = wi::Color(70, 150, 170, 220);
-		wi::Color dark_point = wi::Color(10, 10, 20, 220); // darker elements will lerp towards this
+		wi::Color theme_color_background = wi::Color(10, 10, 20, 220);
+		XMFLOAT4 theme_color_gradient = theme_color_focus;
+		XMFLOAT4 theme_color_wave = theme_color_focus;
 		wi::gui::Theme theme;
 		theme.image.background = true;
 		theme.image.blendFlag = wi::enums::BLENDMODE_OPAQUE;
@@ -394,42 +412,134 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			break;
 		case Theme::Dark:
 			editor->main->config.GetSection("options").Set("theme", "Dark");
+			editor->themeEditorWnd.imageResource = {};
+			theme_color_wave = wi::Color(99, 155, 220, 103);
 			break;
 		case Theme::Bright:
 			editor->main->config.GetSection("options").Set("theme", "Bright");
 			theme_color_idle = wi::Color(200, 210, 220, 230);
 			theme_color_focus = wi::Color(210, 230, 255, 250);
-			dark_point = wi::Color(180, 180, 190, 230);
+			theme_color_background = wi::Color(180, 180, 190, 230);
 			theme.shadow_color = wi::Color::Shadow();
 			theme.font.color = wi::Color(50, 50, 80, 255);
+			theme_color_gradient = XMFLOAT4(1, 1, 1, 0.66f);
+			theme_color_wave = theme_color_focus;
+			theme_color_wave.w = 0.4f;
+			editor->themeEditorWnd.imageResource = {};
 			break;
 		case Theme::Soft:
 			editor->main->config.GetSection("options").Set("theme", "Soft");
 			theme_color_idle = wi::Color(200, 180, 190, 190);
 			theme_color_focus = wi::Color(240, 190, 200, 230);
-			dark_point = wi::Color(100, 80, 90, 220);
+			theme_color_background = wi::Color(100, 80, 90, 220);
 			theme.shadow_color = wi::Color(240, 190, 200, 180);
 			theme.font.color = wi::Color(255, 230, 240, 255);
+			theme_color_gradient = theme_color_focus;
+			theme_color_wave = theme_color_focus;
+			theme_color_wave.w = 0.4f;
+			editor->themeEditorWnd.imageResource = {};
 			break;
 		case Theme::Hacking:
 			editor->main->config.GetSection("options").Set("theme", "Hacking");
-			theme_color_idle = wi::Color(0, 0, 0, 255);
+			theme_color_idle = wi::Color(0, 38, 0, 255);
 			theme_color_focus = wi::Color(0, 160, 60, 255);
-			dark_point = wi::Color(0, 0, 0, 255);
+			theme_color_background = wi::Color(0, 20, 0, 255);
 			theme.shadow_color = wi::Color(0, 200, 90, 200);
 			theme.font.color = wi::Color(0, 200, 90, 255);
 			theme.font.shadow_color = wi::Color::Shadow();
+			theme_color_gradient = theme_color_focus;
+			theme_color_wave = theme_color_focus;
+			theme_color_wave.w = 0.4f;
+			editor->themeEditorWnd.imageResource = {};
 			break;
 		case Theme::Nord:
 			editor->main->config.GetSection("options").Set("theme", "Nord");
 			theme_color_idle = wi::Color(46, 52, 64, 255);
 			theme_color_focus = wi::Color(59, 66, 82, 255);
-			dark_point = wi::Color(46, 52, 64, 255);
+			theme_color_background = wi::Color(36, 42, 54, 255);
 			theme.shadow_color = wi::Color(106, 112, 124, 200);
 			theme.font.color = wi::Color(236, 239, 244, 255);
-			theme.font.shadow_color = wi::Color::Shadow();
+			theme_color_gradient = XMFLOAT4(1, 1, 1, 0.66f);
+			theme_color_wave = wi::Color(58, 75, 93, 153);
+			editor->themeEditorWnd.imageResource = {};
+			break;
+		case Theme::User:
+			{
+				editor->main->config.GetSection("options").Set("theme", currentTheme);
+				wi::Archive archive(wi::helper::GetCurrentPath() + "/themes/" + currentTheme + ".witheme");
+				if (archive.IsOpen())
+				{
+					uint64_t version = 0;
+					archive >> version;
+					archive >> theme_color_idle.rgba;
+					archive >> theme_color_focus.rgba;
+					archive >> theme_color_background.rgba;
+					archive >> theme.shadow_color.rgba;
+					archive >> theme.font.color.rgba;
+					archive >> theme.font.shadow_color.rgba;
+					std::string imageresourcename;
+					archive >> imageresourcename;
+					wi::vector<uint8_t> imagedata;
+					archive >> imagedata;
+
+					// New version handlers should be added at the end, so older versions can open newer themes!
+					if (version >= 2)
+					{
+						wi::Color grad;
+						archive >> grad.rgba;
+						theme_color_gradient = grad;
+					}
+					else
+					{
+						theme_color_gradient = theme_color_focus;
+					}
+					if (version >= 3)
+					{
+						wi::Color wave;
+						archive >> wave.rgba;
+						theme_color_wave = wave;
+					}
+					else
+					{
+						theme_color_wave = theme_color_focus;
+						theme_color_wave.w = 0.4f;
+					}
+
+					static uint64_t cnt = 0;
+					if (imagedata.empty())
+					{
+						editor->themeEditorWnd.imageResource = {};
+						editor->themeEditorWnd.imageResourceName = {};
+					}
+					else
+					{
+						editor->themeEditorWnd.imageResource = wi::resourcemanager::Load(wi::helper::GetCurrentPath() + "/themes/" + imageresourcename, wi::resourcemanager::Flags::IMPORT_RETAIN_FILEDATA, imagedata.data(), imagedata.size());
+						editor->themeEditorWnd.imageResourceName = imageresourcename;
+					}
+				}
+			}
+			break;
+		case Theme::Custom:
+			theme_color_idle = editor->themeEditorWnd.idleColor;
+			theme_color_focus = editor->themeEditorWnd.focusColor;
+			theme_color_background = editor->themeEditorWnd.backgroundColor;
+			theme.shadow_color = editor->themeEditorWnd.shadowColor;
+			theme.font.color = editor->themeEditorWnd.fontColor;
+			theme.font.shadow_color = editor->themeEditorWnd.fontShadowColor;
+			theme_color_gradient = editor->themeEditorWnd.gradientColor;
+			theme_color_wave = editor->themeEditorWnd.waveColor;
 			break;
 		}
+
+		editor->themeEditorWnd.idleColor = theme_color_idle;
+		editor->themeEditorWnd.focusColor = theme_color_focus;
+		editor->themeEditorWnd.backgroundColor = theme_color_background;
+		editor->themeEditorWnd.shadowColor = theme.shadow_color;
+		editor->themeEditorWnd.fontColor = theme.font.color;
+		editor->themeEditorWnd.fontShadowColor = theme.font.shadow_color;
+		editor->themeEditorWnd.gradientColor = wi::Color::fromFloat4(theme_color_gradient);
+		editor->themeEditorWnd.waveColor = wi::Color::fromFloat4(theme_color_wave);
+		editor->themeEditorWnd.UpdateColorPickerMode();
 
 		theme.shadow_highlight = !focusModeCheckBox.GetCheck();
 		theme.shadow_highlight_spread = 0.4f;
@@ -437,10 +547,6 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		theme.shadow_highlight_color.x *= 1.4f;
 		theme.shadow_highlight_color.y *= 1.4f;
 		theme.shadow_highlight_color.z *= 1.4f;
-		if ((Theme)args.userdata == Theme::Nord)
-		{
-			theme.shadow_highlight_color = wi::Color::White();
-		}
 
 		//theme.image.highlight_color = theme_color_focus;
 		//theme.image.highlight_spread = 0.3f;
@@ -463,43 +569,45 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		gui.SetColor(theme_color_focus, wi::gui::FOCUS);
 		gui.SetColor(theme_color_active, wi::gui::ACTIVE);
 		gui.SetColor(theme_color_deactivating, wi::gui::DEACTIVATING);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.7f), wi::gui::WIDGET_ID_WINDOW_BASE);
+
+		gui.SetImage(editor->themeEditorWnd.imageResource, wi::gui::WIDGET_ID_WINDOW_BASE);
+		if (editor->themeEditorWnd.imageResource.IsValid())
+		{
+			gui.SetColor(wi::Color::lerp(wi::Color::White(), theme_color_background, saturate(editor->themeEditorWnd.imageSlider.GetValue())), wi::gui::WIDGET_ID_WINDOW_BASE);
+		}
+		else
+		{
+			gui.SetColor(theme_color_background, wi::gui::WIDGET_ID_WINDOW_BASE);
+		}
+
+		gui.SetImage({}, wi::gui::WIDGET_ID_COLORPICKER_BASE);
+		gui.SetColor(theme_color_background, wi::gui::WIDGET_ID_COLORPICKER_BASE);
 
 		gui.SetColor(theme_color_focus, wi::gui::WIDGET_ID_TEXTINPUTFIELD_ACTIVE);
 		gui.SetColor(theme_color_focus, wi::gui::WIDGET_ID_TEXTINPUTFIELD_DEACTIVATING);
 
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.75f), wi::gui::WIDGET_ID_SLIDER_BASE_IDLE);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.8f), wi::gui::WIDGET_ID_SLIDER_BASE_FOCUS);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.85f), wi::gui::WIDGET_ID_SLIDER_BASE_ACTIVE);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.8f), wi::gui::WIDGET_ID_SLIDER_BASE_DEACTIVATING);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.75f), wi::gui::WIDGET_ID_SLIDER_BASE_IDLE);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.8f), wi::gui::WIDGET_ID_SLIDER_BASE_FOCUS);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.85f), wi::gui::WIDGET_ID_SLIDER_BASE_ACTIVE);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.8f), wi::gui::WIDGET_ID_SLIDER_BASE_DEACTIVATING);
 		gui.SetColor(theme_color_idle, wi::gui::WIDGET_ID_SLIDER_KNOB_IDLE);
 		gui.SetColor(theme_color_focus, wi::gui::WIDGET_ID_SLIDER_KNOB_FOCUS);
 		gui.SetColor(theme_color_active, wi::gui::WIDGET_ID_SLIDER_KNOB_ACTIVE);
 		gui.SetColor(theme_color_deactivating, wi::gui::WIDGET_ID_SLIDER_KNOB_DEACTIVATING);
 
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.75f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_IDLE);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.8f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_FOCUS);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.85f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_ACTIVE);
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.8f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_DEACTIVATING);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.75f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_IDLE);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.8f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_FOCUS);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.85f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_ACTIVE);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.8f), wi::gui::WIDGET_ID_SCROLLBAR_BASE_DEACTIVATING);
 		gui.SetColor(theme_color_idle, wi::gui::WIDGET_ID_SCROLLBAR_KNOB_INACTIVE);
 		gui.SetColor(theme_color_focus, wi::gui::WIDGET_ID_SCROLLBAR_KNOB_HOVER);
 		gui.SetColor(theme_color_active, wi::gui::WIDGET_ID_SCROLLBAR_KNOB_GRABBED);
 
-		gui.SetColor(wi::Color::lerp(theme_color_idle, dark_point, 0.8f), wi::gui::WIDGET_ID_COMBO_DROPDOWN);
+		gui.SetColor(wi::Color::lerp(theme_color_idle, theme_color_background, 0.8f), wi::gui::WIDGET_ID_COMBO_DROPDOWN);
 
-		if ((Theme)args.userdata == Theme::Hacking)
-		{
-			gui.SetColor(wi::Color(0, 200, 90, 255), wi::gui::WIDGET_ID_SLIDER_KNOB_IDLE);
-			gui.SetColor(wi::Color(0, 200, 90, 255), wi::gui::WIDGET_ID_SCROLLBAR_KNOB_INACTIVE);
-		}
-		
-		if ((Theme)args.userdata == Theme::Nord)
-		{
-			gui.SetColor(wi::Color(136, 192, 208, 255), wi::gui::WIDGET_ID_SLIDER_KNOB_IDLE);
-			gui.SetColor(wi::Color(76, 86, 106, 255), wi::gui::WIDGET_ID_SCROLLBAR_KNOB_INACTIVE);
-		}
 
 		// customize individual elements:
+		editor->componentsWnd.SetRightAlignedImage(true);
 		editor->loadmodel_font.params.color = theme.font.color;
 		XMFLOAT4 highlight = theme_color_focus;
 		highlight.x *= 2;
@@ -507,6 +615,8 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		highlight.z *= 2;
 		editor->newEntityCombo.SetAngularHighlightColor(highlight);
 		editor->componentsWnd.newComponentCombo.SetAngularHighlightColor(highlight);
+		editor->projectCreatorWnd.createButton.SetAngularHighlightColor(highlight);
+		editor->themeEditorWnd.saveButton.SetAngularHighlightColor(highlight);
 		editor->componentsWnd.materialWnd.textureSlotButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->componentsWnd.objectWnd.lightmapPreviewButton.SetColor(wi::Color::White());
 		for (auto& x : editor->componentsWnd.objectWnd.lightmapPreviewButton.sprites)
@@ -516,7 +626,12 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		editor->componentsWnd.spriteWnd.textureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->paintToolWnd.brushTextureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->paintToolWnd.revealTextureButton.SetColor(wi::Color::White(), wi::gui::IDLE);
+		editor->projectCreatorWnd.iconButton.SetColor(wi::Color::White(), wi::gui::IDLE);
+		editor->projectCreatorWnd.thumbnailButton.SetColor(wi::Color::White(), wi::gui::IDLE);
+		editor->projectCreatorWnd.splashScreenButton.SetColor(wi::Color::White(), wi::gui::IDLE);
+		editor->projectCreatorWnd.cursorButton.SetColor(wi::Color::White(), wi::gui::IDLE);
 		editor->aboutLabel.sprites[wi::gui::FOCUS] = editor->aboutLabel.sprites[wi::gui::IDLE];
+		editor->exitButton.SetColor(wi::Color::Error(), wi::gui::FOCUS);
 		int scene_id = 0;
 		for (auto& editorscene : editor->scenes)
 		{
@@ -563,6 +678,36 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		editor->cameraButton.SetShadowHighlightSpread(0.2f);
 		editor->materialsButton.SetShadowHighlightSpread(0.2f);
 		editor->paintToolButton.SetShadowHighlightSpread(0.2f);
+
+		if (editor->themeEditorWnd.imageResource.IsValid())
+		{
+			// When there is background image, make the entity tools not occlude a big part of it:
+			editor->componentsWnd.entityTree.SetShadowRadius(0);
+			editor->componentsWnd.entityTree.sprites[wi::gui::IDLE].params.blendFlag = wi::enums::BLENDMODE_ALPHA;
+			editor->componentsWnd.entityTree.sprites[wi::gui::IDLE].params.disableBackground();
+			editor->componentsWnd.entityTree.sprites[wi::gui::FOCUS].params.disableBackground();
+			editor->componentsWnd.entityTree.scrollbar.SetShadowRadius(0);
+
+			editor->componentsWnd.filterInput.SetShadowRadius(0);
+			editor->componentsWnd.filterInput.sprites[wi::gui::IDLE].params.blendFlag = wi::enums::BLENDMODE_ALPHA;
+			editor->componentsWnd.filterInput.sprites[wi::gui::IDLE].params.disableBackground();
+			editor->componentsWnd.filterInput.sprites[wi::gui::FOCUS].params.disableBackground();
+
+			editor->componentsWnd.filterCombo.SetShadowRadius(0);
+			editor->componentsWnd.filterCombo.sprites[wi::gui::IDLE].params.blendFlag = wi::enums::BLENDMODE_ALPHA;
+			editor->componentsWnd.filterCombo.sprites[wi::gui::IDLE].params.disableBackground();
+			editor->componentsWnd.filterCombo.sprites[wi::gui::FOCUS].params.disableBackground();
+
+			editor->componentsWnd.filterCaseCheckBox.SetShadowRadius(0);
+			editor->componentsWnd.filterCaseCheckBox.sprites[wi::gui::IDLE].params.blendFlag = wi::enums::BLENDMODE_ALPHA;
+			editor->componentsWnd.filterCaseCheckBox.sprites[wi::gui::IDLE].params.disableBackground();
+			editor->componentsWnd.filterCaseCheckBox.sprites[wi::gui::FOCUS].params.disableBackground();
+		}
+		else
+		{
+			editor->componentsWnd.entityTree.SetShadowRadius(1);
+			editor->componentsWnd.entityTree.scrollbar.SetShadowRadius(1);
+		}
 
 		for (int i = 0; i < arraysize(editor->newSceneButton.sprites); ++i)
 		{
@@ -645,6 +790,12 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		}
 		for (int i = 0; i < arraysize(wi::gui::Widget::sprites); ++i)
 		{
+			themeEditorButton.sprites[i].params.enableCornerRounding();
+			themeEditorButton.sprites[i].params.corners_rounding[0].radius = 8;
+			themeEditorButton.sprites[i].params.corners_rounding[1].radius = 8;
+			themeEditorButton.sprites[i].params.corners_rounding[2].radius = 8;
+			themeEditorButton.sprites[i].params.corners_rounding[3].radius = 8;
+
 			localizationButton.sprites[i].params.enableCornerRounding();
 			localizationButton.sprites[i].params.corners_rounding[0].radius = 8;
 			localizationButton.sprites[i].params.corners_rounding[1].radius = 8;
@@ -662,12 +813,6 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			ddsConvButton.sprites[i].params.corners_rounding[1].radius = 8;
 			ddsConvButton.sprites[i].params.corners_rounding[2].radius = 8;
 			ddsConvButton.sprites[i].params.corners_rounding[3].radius = 8;
-
-			ktxConvButton.sprites[i].params.enableCornerRounding();
-			ktxConvButton.sprites[i].params.corners_rounding[0].radius = 8;
-			ktxConvButton.sprites[i].params.corners_rounding[1].radius = 8;
-			ktxConvButton.sprites[i].params.corners_rounding[2].radius = 8;
-			ktxConvButton.sprites[i].params.corners_rounding[3].radius = 8;
 
 			duplicateCollidersButton.sprites[i].params.enableCornerRounding();
 			duplicateCollidersButton.sprites[i].params.corners_rounding[0].radius = 8;
@@ -689,8 +834,8 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editor->playButton.sprites[i].params.enableCornerRounding();
 			editor->playButton.sprites[i].params.corners_rounding[0].radius = 10;
 
-			editor->stopButton.sprites[i].params.enableCornerRounding();
-			editor->stopButton.sprites[i].params.corners_rounding[1].radius = 10;
+			editor->projectCreatorButton.sprites[i].params.enableCornerRounding();
+			editor->projectCreatorButton.sprites[i].params.corners_rounding[1].radius = 10;
 
 			editor->translateButton.sprites[i].params.enableCornerRounding();
 			editor->translateButton.sprites[i].params.corners_rounding[0].radius = 10;
@@ -722,9 +867,9 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[2].radius = 10;
 			editor->componentsWnd.splineWnd.addButton.sprites[i].params.corners_rounding[3].radius = 10;
 		}
-		editor->componentsWnd.weatherWnd.default_sky_horizon = dark_point;
+		editor->componentsWnd.weatherWnd.default_sky_horizon = theme_color_background;
 		editor->componentsWnd.weatherWnd.default_sky_zenith = theme_color_idle;
-		editor->componentsWnd.weatherWnd.Update();
+		editor->componentsWnd.weatherWnd.UpdateData();
 
 		for (auto& x : editor->componentsWnd.lightWnd.cascades)
 		{
@@ -814,18 +959,9 @@ void GeneralWindow::Create(EditorComponent* _editor)
 			sprite.params.corners_rounding[3].radius = 10;
 		}
 
-		if ((Theme)args.userdata == Theme::Bright)
-		{
-			editor->inactiveEntityColor = theme_color_focus;
-			editor->hoveredEntityColor = theme_color_focus;
-			editor->dummyColor = theme_color_focus;
-		}
-		else
-		{
-			editor->inactiveEntityColor = theme.font.color;
-			editor->hoveredEntityColor = theme.font.color;
-			editor->dummyColor = theme.font.color;
-		}
+		editor->inactiveEntityColor = theme.font.color;
+		editor->hoveredEntityColor = theme.font.color;
+		editor->dummyColor = theme.font.color;
 		editor->inactiveEntityColor.setA(150);
 		editor->backgroundEntityColor = shadow_color;
 
@@ -856,13 +992,116 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		{
 			editor->newEntityCombo.SetAngularHighlightWidth(0);
 			editor->newEntityCombo.SetShadowRadius(2);
+			editor->componentsWnd.newComponentCombo.SetAngularHighlightWidth(0);
+			editor->componentsWnd.newComponentCombo.SetShadowRadius(2);
 		}
 		else
 		{
 			editor->newEntityCombo.SetAngularHighlightWidth(3);
 			editor->newEntityCombo.SetShadowRadius(0);
+			editor->componentsWnd.newComponentCombo.SetAngularHighlightWidth(3);
+			editor->componentsWnd.newComponentCombo.SetShadowRadius(0);
 		}
+
+		wi::image::Params::Gradient gradient = wi::image::Params::Gradient::Linear;
+		XMFLOAT2 gradient_start = XMFLOAT2(0, 0);
+		XMFLOAT2 gradient_end = XMFLOAT2(0, 0.32f);
+		for (int i = 0; i < /*arraysize(wi::gui::Widget::sprites)*/1; ++i)
+		{
+			editor->playButton.sprites[i].params.gradient = gradient;
+			editor->playButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->playButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->playButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->stopButton.sprites[i].params.gradient = gradient;
+			editor->stopButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->stopButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->stopButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->projectCreatorButton.sprites[i].params.gradient = gradient;
+			editor->projectCreatorButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->projectCreatorButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->projectCreatorButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->saveButton.sprites[i].params.gradient = gradient;
+			editor->saveButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->saveButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->saveButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->openButton.sprites[i].params.gradient = gradient;
+			editor->openButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->openButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->openButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->contentBrowserButton.sprites[i].params.gradient = gradient;
+			editor->contentBrowserButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->contentBrowserButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->contentBrowserButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->logButton.sprites[i].params.gradient = gradient;
+			editor->logButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->logButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->logButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->profilerButton.sprites[i].params.gradient = gradient;
+			editor->profilerButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->profilerButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->profilerButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->fullscreenButton.sprites[i].params.gradient = gradient;
+			editor->fullscreenButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->fullscreenButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->fullscreenButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->bugButton.sprites[i].params.gradient = gradient;
+			editor->bugButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->bugButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->bugButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->aboutButton.sprites[i].params.gradient = gradient;
+			editor->aboutButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->aboutButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->aboutButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->exitButton.sprites[i].params.gradient = gradient;
+			editor->exitButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->exitButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->exitButton.sprites[i].params.gradient_uv_end = gradient_end;
+		}
+
+		gradient = wi::image::Params::Gradient::Circular;
+		gradient_start = XMFLOAT2(0.9f, 0.1f);
+		gradient_end = XMFLOAT2(0.42f, 0.1f);
+		for (int i = 0; i < /*arraysize(wi::gui::Widget::sprites)*/1; ++i)
+		{
+			editor->generalButton.sprites[i].params.gradient = gradient;
+			editor->generalButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->generalButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->generalButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->graphicsButton.sprites[i].params.gradient = gradient;
+			editor->graphicsButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->graphicsButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->graphicsButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->paintToolButton.sprites[i].params.gradient = gradient;
+			editor->paintToolButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->paintToolButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->paintToolButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->materialsButton.sprites[i].params.gradient = gradient;
+			editor->materialsButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->materialsButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->materialsButton.sprites[i].params.gradient_uv_end = gradient_end;
+
+			editor->cameraButton.sprites[i].params.gradient = gradient;
+			editor->cameraButton.sprites[i].params.gradient_color = theme_color_gradient;
+			editor->cameraButton.sprites[i].params.gradient_uv_start = gradient_start;
+			editor->cameraButton.sprites[i].params.gradient_uv_end = gradient_end;
+		}
+
 	});
+	ReloadThemes();
 	AddWidget(&themeCombo);
 
 
@@ -927,51 +1166,6 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	AddWidget(&ddsConvButton);
 
 
-	ktxConvButton.Create("KTX2 Convert");
-	ktxConvButton.SetTooltip("All material textures in the scene will be converted to KTX2 format.\nTHIS MIGHT TAKE LONG, SO GET YOURSELF A COFFEE OR TEA!");
-	ktxConvButton.SetSize(XMFLOAT2(100, 18));
-	ktxConvButton.OnClick([=](wi::gui::EventArgs args) {
-
-		Scene& scene = editor->GetCurrentScene();
-
-		wi::unordered_map<std::string, wi::Resource> conv;
-		for (uint32_t i = 0; i < scene.materials.GetCount(); ++i)
-		{
-			MaterialComponent& material = scene.materials[i];
-			for (auto& x : material.textures)
-			{
-				if (x.GetGPUResource() == nullptr)
-					continue;
-				if (has_flag(x.resource.GetTexture().GetDesc().misc_flags, ResourceMiscFlag::SPARSE))
-					continue;
-				if (wi::helper::GetExtensionFromFileName(x.name).compare("KTX2"))
-				{
-					x.name = wi::helper::ReplaceExtension(x.name, "KTX2");
-					conv[x.name] = x.resource;
-				}
-			}
-		}
-
-		for (auto& x : conv)
-		{
-			wi::vector<uint8_t> filedata;
-			if (wi::helper::saveTextureToMemoryFile(x.second.GetTexture(), "KTX2", filedata))
-			{
-				x.second = wi::resourcemanager::Load(x.first, wi::resourcemanager::Flags::NONE, filedata.data(), filedata.size());
-				x.second.SetFileData(std::move(filedata));
-			}
-		}
-
-		for (uint32_t i = 0; i < scene.materials.GetCount(); ++i)
-		{
-			MaterialComponent& material = scene.materials[i];
-			material.CreateRenderData();
-		}
-
-		});
-	AddWidget(&ktxConvButton);
-
-
 	duplicateCollidersButton.Create("Delete duplicate colliders");
 	duplicateCollidersButton.SetTooltip("Duplicate colliders will be removed from the scene.");
 	duplicateCollidersButton.SetSize(XMFLOAT2(100, 18));
@@ -1001,117 +1195,125 @@ void GeneralWindow::RefreshLanguageSelectionAfterWholeGUIWasInitialized()
 	}
 }
 
+void GeneralWindow::RefreshTheme()
+{
+	themeCombo.SetSelected(themeCombo.GetSelected());
+}
+void GeneralWindow::ReloadThemes()
+{
+	if (editor->main->config.GetSection("options").Has("theme"))
+		currentTheme = editor->main->config.GetSection("options").GetText("theme");
+	else
+		currentTheme = "Dark";
+
+	themeCombo.ClearItems();
+	themeCombo.AddItem("Dark " ICON_DARK, (uint64_t)Theme::Dark);
+	themeCombo.AddItem("Bright " ICON_BRIGHT, (uint64_t)Theme::Bright);
+	themeCombo.AddItem("Soft " ICON_SOFT, (uint64_t)Theme::Soft);
+	themeCombo.AddItem("Hacking " ICON_HACKING, (uint64_t)Theme::Hacking);
+	themeCombo.AddItem("Nord " ICON_NORD, (uint64_t)Theme::Nord);
+
+	wi::vector<std::string> custom_themes;
+	wi::helper::GetFileNamesInDirectory(wi::helper::GetCurrentPath() + "/themes/", [&](std::string filename) {
+		custom_themes.push_back(wi::helper::GetFileNameFromPath(wi::helper::RemoveExtension(filename)));
+	}, "witheme");
+	std::sort(custom_themes.begin(), custom_themes.end(), std::less());
+	for (auto& x : custom_themes)
+	{
+		themeCombo.AddItem(x, (uint64_t)Theme::User);
+	}
+
+	if (currentTheme == "Dark")
+	{
+		themeCombo.SetSelectedByUserdata((uint64_t)Theme::Dark);
+	}
+	else if (currentTheme == "Bright")
+	{
+		themeCombo.SetSelectedByUserdata((uint64_t)Theme::Bright);
+	}
+	else if (currentTheme == "Soft")
+	{
+		themeCombo.SetSelectedByUserdata((uint64_t)Theme::Soft);
+	}
+	else if (currentTheme == "Hacking")
+	{
+		themeCombo.SetSelectedByUserdata((uint64_t)Theme::Hacking);
+	}
+	else if (currentTheme == "Nord")
+	{
+		themeCombo.SetSelectedByUserdata((uint64_t)Theme::Nord);
+	}
+	else
+	{
+		for (int i = 0; i < (int)themeCombo.GetItemCount(); ++i)
+		{
+			if (currentTheme == themeCombo.GetItemText(i))
+			{
+				themeCombo.SetSelected(i);
+				break;
+			}
+		}
+	}
+
+	// add after!
+	themeCombo.AddItem("Custom " ICON_THEME_EDITOR, (uint64_t)Theme::Custom);
+}
+
 void GeneralWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	float width = GetWidgetAreaSize().x - padding * 2;
-	float y = padding;
-	float jump = 20;
-	float x_off = 100;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = 155;
-		const float margin_right = 0;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_right = 0;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding * 2;
-		const float margin_right = 0;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add_right(versionCheckBox, fpsCheckBox, otherinfoCheckBox);
 
-	otherinfoCheckBox.SetPos(XMFLOAT2(width - otherinfoCheckBox.GetSize().x, y));
-	fpsCheckBox.SetPos(XMFLOAT2(otherinfoCheckBox.GetPos().x - fpsCheckBox.GetSize().x - 70, y));
-	versionCheckBox.SetPos(XMFLOAT2(fpsCheckBox.GetPos().x - versionCheckBox.GetSize().x - 70, y));
-	y += versionCheckBox.GetSize().y;
-	y += padding;
+	layout.add(masterVolumeSlider);
 
-	width -= padding * 6;
-	add(masterVolumeSlider);
-	width += padding * 6;
+	layout.add(saveModeComboBox);
 
-	saveModeComboBox.SetPos(XMFLOAT2(x_off, y));
-	saveModeComboBox.SetSize(XMFLOAT2(width - x_off - saveModeComboBox.GetScale().y - 1, saveModeComboBox.GetScale().y));
-	y += saveModeComboBox.GetSize().y;
-	y += padding;
+	layout.add_right(saveCompressionCheckBox);
 
-	add_right(saveCompressionCheckBox);
+	layout.add(themeCombo);
+	themeEditorButton.SetPos(XMFLOAT2(themeCombo.GetPos().x - themeCombo.GetLeftTextWidth() - themeEditorButton.GetSize().x - layout.padding * 2, themeCombo.GetPos().y));
 
-	themeCombo.SetPos(XMFLOAT2(x_off, y));
-	themeCombo.SetSize(XMFLOAT2(width - x_off - themeCombo.GetScale().y - 1, themeCombo.GetScale().y));
-	y += themeCombo.GetSize().y;
-	y += padding;
+	layout.add(languageCombo);
 
-	languageCombo.SetPos(XMFLOAT2(x_off, y));
-	languageCombo.SetSize(XMFLOAT2(width - x_off - languageCombo.GetScale().y - 1, languageCombo.GetScale().y));
-	y += languageCombo.GetSize().y;
-	y += padding;
+	layout.add_fullwidth(localizationButton);
 
-	add_fullwidth(localizationButton);
+	layout.add_right(physicsDebugCheckBox);
+	layout.add_right(nameDebugCheckBox);
+	layout.add_right(wireFrameCheckBox);
+	layout.add_right(gridHelperCheckBox);
+	layout.add_right(aabbDebugCheckBox);
+	layout.add_right(boneLinesCheckBox);
+	layout.add_right(debugEmittersCheckBox);
+	layout.add_right(debugForceFieldsCheckBox);
+	layout.add_right(debugRaytraceBVHCheckBox);
+	layout.add_right(envProbesCheckBox);
+	layout.add_right(cameraVisCheckBox);
+	layout.add_right(colliderVisCheckBox);
+	layout.add_right(springVisCheckBox);
+	layout.add_right(splineVisCheckBox);
 
-	physicsDebugCheckBox.SetPos(XMFLOAT2(width - physicsDebugCheckBox.GetSize().x, y));
-	y += physicsDebugCheckBox.GetSize().y;
-	y += padding;
+	layout.jump();
 
-	nameDebugCheckBox.SetPos(XMFLOAT2(width - nameDebugCheckBox.GetSize().x, y));
-	y += nameDebugCheckBox.GetSize().y;
-	y += padding;
+	layout.add_right(freezeCullingCameraCheckBox);
+	layout.add_right(disableAlbedoMapsCheckBox);
+	layout.add_right(forceDiffuseLightingCheckBox);
 
-	add_right(wireFrameCheckBox);
-	add_right(gridHelperCheckBox);
-	add_right(aabbDebugCheckBox);
-	add_right(boneLinesCheckBox);
-	add_right(debugEmittersCheckBox);
-	add_right(debugForceFieldsCheckBox);
-	add_right(debugRaytraceBVHCheckBox);
-	add_right(envProbesCheckBox);
-	add_right(cameraVisCheckBox);
-	add_right(colliderVisCheckBox);
-	add_right(springVisCheckBox);
-	add_right(splineVisCheckBox);
+	layout.jump();
 
-	y += jump;
+	layout.add_right(focusModeCheckBox);
 
-	add_right(freezeCullingCameraCheckBox);
-	add_right(disableAlbedoMapsCheckBox);
-	add_right(forceDiffuseLightingCheckBox);
-	y += jump;
+	layout.jump();
 
-	add_right(focusModeCheckBox);
+	layout.add(outlineOpacitySlider);
+	layout.add(transformToolOpacitySlider);
+	layout.add(transformToolDarkenSlider);
+	layout.add(bonePickerOpacitySlider);
+	layout.add_right(skeletonsVisibleCheckBox);
 
-	y += jump;
+	layout.jump();
 
-	float prev_width = width;
-	width -= padding * 6;
-	add(transformToolOpacitySlider);
-	add(transformToolDarkenSlider);
-	add(bonePickerOpacitySlider);
-	add_right(skeletonsVisibleCheckBox);
-
-	y += jump;
-	width = prev_width;
-
-	add_fullwidth(eliminateCoarseCascadesButton);
-	add_fullwidth(ddsConvButton);
-	add_fullwidth(ktxConvButton);
-	add_fullwidth(duplicateCollidersButton);
+	layout.add_fullwidth(eliminateCoarseCascadesButton);
+	layout.add_fullwidth(ddsConvButton);
+	layout.add_fullwidth(duplicateCollidersButton);
 }

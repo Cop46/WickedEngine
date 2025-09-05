@@ -5,19 +5,27 @@
 
 #include "Utility/stb_image.h"
 #include "Utility/dds.h"
+#include <wiHelper.h>
+#include <wiUnorderedSet.h>
 
 #define TINYGLTF_IMPLEMENTATION
-#define TINYGLTF_NO_FS
 #define TINYGLTF_NO_STB_IMAGE
 #define TINYGLTF_NO_STB_IMAGE_WRITE
 #include "tiny_gltf.h"
 
+#ifndef _WIN32
+#  include <wordexp.h>
+#endif
+
 using namespace wi::graphics;
 using namespace wi::scene;
 using namespace wi::ecs;
+using json = nlohmann::json;
 
-namespace tinygltf
+namespace wi::tinygltf
 {
+
+	using namespace ::tinygltf;
 
 	bool FileExists(const std::string& abs_filename, void*) {
 		return wi::helper::FileExists(abs_filename);
@@ -81,6 +89,13 @@ namespace tinygltf
 		return wi::helper::FileWrite(filepath, contents.data(), contents.size());
 	}
 
+	bool GetFileSizeInBytes(size_t* filesize_out, std::string* err,
+							const std::string& filepath, void* userdata)
+	{
+		*filesize_out = wi::helper::FileSize(filepath);
+		return true;
+	}
+
 	bool LoadImageData(Image *image, const int image_idx, std::string *err,
 		std::string *warn, int req_width, int req_height,
 		const unsigned char *bytes, int size, void *userdata)
@@ -111,8 +126,10 @@ namespace tinygltf
 		return true;
 	}
 
-	bool WriteImageData(const std::string *basepath, const std::string *filename,
-		Image *image, bool embedImages, void *)
+	bool WriteImageData(
+		const std::string* basepath, const std::string* filename,
+		const Image* image, bool embedImages, const FsCallbacks*, const URICallbacks*,
+		std::string* out_uri, void*)
 	{
 		assert(0); // TODO
 		return false;
@@ -127,6 +144,7 @@ struct LoaderState
 	tinygltf::Model gltfModel;
 	Scene* scene;
 	wi::unordered_map<int, Entity> entityMap;  // node -> entity
+	std::unordered_multimap<int, Entity> punctualLightMap;  // KHR_lights_punctual -> entities
 	Entity rootEntity = INVALID_ENTITY;
 
 	//Export states
@@ -138,8 +156,42 @@ struct LoaderState
 void Import_Extension_VRM(LoaderState& state);
 void Import_Extension_VRMC(LoaderState& state);
 void VRM_ToonMaterialCustomize(const std::string& name, MaterialComponent& material);
+void Import_VRMC_Bone(LoaderState& state, Entity boneEntity, const std::string& boneName);
 void Import_Mixamo_Bone(LoaderState& state, Entity boneEntity, const tinygltf::Node& node);
 void Import_Makehuman_Bone(LoaderState& state, Entity boneEntity, const tinygltf::Node& node);
+
+static void ImportMetadata(LoaderState& state, Entity entity, const tinygltf::Value& extras)
+{
+	if (extras.IsObject())
+	{
+		MetadataComponent& metadata = state.scene->metadatas.Create(entity);
+
+		for (auto& key : extras.Keys())
+		{
+			auto& value = extras.Get(key);
+			switch (value.Type())
+			{
+			case tinygltf::Type::BOOL_TYPE:
+				metadata.bool_values.set(key, value.Get<bool>());
+				break;
+			case tinygltf::Type::INT_TYPE:
+				metadata.int_values.set(key, value.Get<int>());
+				break;
+			case tinygltf::Type::REAL_TYPE:
+				metadata.float_values.set(key, float(value.Get<double>()));
+				break;
+			case tinygltf::Type::STRING_TYPE:
+				metadata.string_values.set(key, value.Get<std::string>());
+				break;
+			default:
+				json j;
+				tinygltf::ValueToJson(value, &j);
+				metadata.string_values.set(key, j.dump());
+			}
+		}
+	}
+
+}
 
 // Recursively loads nodes and resolves hierarchy:
 void LoadNode(int nodeIndex, Entity parent, LoaderState& state)
@@ -204,6 +256,8 @@ void LoadNode(int nodeIndex, Entity parent, LoaderState& state)
 	{
 		// https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_lights_punctual
 		entity = scene.Entity_CreateLight(""); // light component will be filled later
+		int index = ext_lights_punctual->second.Get("light").Get<int>();
+		state.punctualLightMap.insert({ index, entity });
 	}
 
 	if (entity == INVALID_ENTITY)
@@ -257,6 +311,8 @@ void LoadNode(int nodeIndex, Entity parent, LoaderState& state)
 		transform.world._44 = (float)node.matrix[15];
 		transform.ApplyTransform(); // this creates S, R, T vectors from world matrix
 	}
+
+	ImportMetadata(state, entity, node.extras);
 
 	transform.UpdateTransform();
 
@@ -435,6 +491,26 @@ void FlipZAxis(LoaderState& state)
 	}
 }
 
+static const wi::unordered_set<std::string> SUPPORTED_EXTENSIONS = {
+	"EXT_lights_image_based",
+	"KHR_lights_punctual",
+	"KHR_materials_anisotropy",
+	"KHR_materials_clearcoat",
+	"KHR_materials_emissive_strength",
+	"KHR_materials_ior",
+	"KHR_materials_pbrSpecularGlossiness",
+	"KHR_materials_sheen",
+	"KHR_materials_specular",
+	"KHR_materials_transmission",
+	"KHR_materials_unlit",
+	"VRM",
+	"VRMC_materials_mtoon",
+	"VRMC_springBone",
+	"VRMC_springBone_extended_collider",
+	"VRMC_vrm",
+	"VRMC_vrm_animation",
+};
+
 void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 {
 	std::string directory = wi::helper::GetDirectoryFromPath(fileName);
@@ -446,21 +522,24 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 	std::string warn;
 
 	tinygltf::FsCallbacks callbacks;
-	callbacks.ReadWholeFile = tinygltf::ReadWholeFile;
-	callbacks.WriteWholeFile = tinygltf::WriteWholeFile;
-	callbacks.FileExists = tinygltf::FileExists;
-	callbacks.ExpandFilePath = tinygltf::ExpandFilePath;
-	loader.SetFsCallbacks(callbacks);
+	callbacks.ReadWholeFile = wi::tinygltf::ReadWholeFile;
+	callbacks.WriteWholeFile = wi::tinygltf::WriteWholeFile;
+	callbacks.FileExists = wi::tinygltf::FileExists;
+	callbacks.GetFileSizeInBytes = wi::tinygltf::GetFileSizeInBytes;
+	callbacks.ExpandFilePath = wi::tinygltf::ExpandFilePath;
+
+	bool ret = loader.SetFsCallbacks(callbacks);
+	assert(ret);
 
 	wi::resourcemanager::ResourceSerializer seri; // keep this alive to not delete loaded images while importing gltf
-	loader.SetImageLoader(tinygltf::LoadImageData, &seri);
-	loader.SetImageWriter(tinygltf::WriteImageData, nullptr);
-	
+	loader.SetImageLoader(wi::tinygltf::LoadImageData, &seri);
+	loader.SetImageWriter(wi::tinygltf::WriteImageData, nullptr);
+
 	LoaderState state;
 	state.scene = &scene;
 
 	wi::vector<uint8_t> filedata;
-	bool ret = wi::helper::FileRead(fileName, filedata);
+	ret = wi::helper::FileRead(fileName, filedata);
 
 	if (ret)
 	{
@@ -496,7 +575,16 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 
 	if (!ret)
 	{
-		wi::helper::messageBox(err, "GLTF error!");
+		wi::helper::messageBox(err, "glTF error!");
+		return;
+	}
+
+	for (auto& ext : state.gltfModel.extensionsRequired)
+	{
+		if (SUPPORTED_EXTENSIONS.find(ext) == SUPPORTED_EXTENSIONS.end())
+		{
+			wi::backlog::post("The glTF file " + fileName + " requires the unsupported extension " + ext + ". Trying to import it anyway, some objects might be missing!", wi::backlog::LogLevel::Warning);
+		}
 	}
 
 	state.rootEntity = CreateEntity();
@@ -538,10 +626,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			auto& tex = state.gltfModel.textures[baseColorTexture->second.TextureIndex()];
 			int img_source = tex.source;
-			if (tex.extensions.count("KHR_texture_basisu"))
-			{
-				img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-			}
 			auto& img = state.gltfModel.images[img_source];
 			material.textures[MaterialComponent::BASECOLORMAP].name = img.uri;
 			material.textures[MaterialComponent::BASECOLORMAP].uvset = baseColorTexture->second.TextureTexCoord();
@@ -550,10 +634,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			auto& tex = state.gltfModel.textures[normalTexture->second.TextureIndex()];
 			int img_source = tex.source;
-			if (tex.extensions.count("KHR_texture_basisu"))
-			{
-				img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-			}
 			auto& img = state.gltfModel.images[img_source];
 			material.textures[MaterialComponent::NORMALMAP].name = img.uri;
 			material.textures[MaterialComponent::NORMALMAP].uvset = normalTexture->second.TextureTexCoord();
@@ -562,10 +642,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			auto& tex = state.gltfModel.textures[metallicRoughnessTexture->second.TextureIndex()];
 			int img_source = tex.source;
-			if (tex.extensions.count("KHR_texture_basisu"))
-			{
-				img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-			}
 			auto& img = state.gltfModel.images[img_source];
 			material.textures[MaterialComponent::SURFACEMAP].name = img.uri;
 			material.textures[MaterialComponent::SURFACEMAP].uvset = metallicRoughnessTexture->second.TextureTexCoord();
@@ -574,10 +650,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			auto& tex = state.gltfModel.textures[emissiveTexture->second.TextureIndex()];
 			int img_source = tex.source;
-			if (tex.extensions.count("KHR_texture_basisu"))
-			{
-				img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-			}
 			auto& img = state.gltfModel.images[img_source];
 			material.textures[MaterialComponent::EMISSIVEMAP].name = img.uri;
 			material.textures[MaterialComponent::EMISSIVEMAP].uvset = emissiveTexture->second.TextureTexCoord();
@@ -586,10 +658,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			auto& tex = state.gltfModel.textures[occlusionTexture->second.TextureIndex()];
 			int img_source = tex.source;
-			if (tex.extensions.count("KHR_texture_basisu"))
-			{
-				img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-			}
 			auto& img = state.gltfModel.images[img_source];
 			material.textures[MaterialComponent::OCCLUSIONMAP].name = img.uri;
 			material.textures[MaterialComponent::OCCLUSIONMAP].uvset = occlusionTexture->second.TextureTexCoord();
@@ -675,10 +743,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = ext_transmission->second.Get("transmissionTexture").Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::TRANSMISSIONMAP].name = img.uri;
 				material.textures[MaterialComponent::TRANSMISSIONMAP].uvset = (uint32_t)ext_transmission->second.Get("transmissionTexture").Get("texCoord").Get<int>();
@@ -698,10 +762,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = specularGlossinessWorkflow->second.Get("diffuseTexture").Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::BASECOLORMAP].name = img.uri;
 				material.textures[MaterialComponent::BASECOLORMAP].uvset = (uint32_t)specularGlossinessWorkflow->second.Get("diffuseTexture").Get("texCoord").Get<int>();
@@ -711,10 +771,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = specularGlossinessWorkflow->second.Get("specularGlossinessTexture").Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::SURFACEMAP].name = img.uri;
 				material.textures[MaterialComponent::SURFACEMAP].uvset = (uint32_t)specularGlossinessWorkflow->second.Get("specularGlossinessTexture").Get("texCoord").Get<int>();
@@ -764,10 +820,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::SHEENCOLORMAP].name = img.uri;
 				material.textures[MaterialComponent::SHEENCOLORMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -783,10 +835,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::SHEENROUGHNESSMAP].name = img.uri;
 				material.textures[MaterialComponent::SHEENROUGHNESSMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -818,10 +866,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::CLEARCOATMAP].name = img.uri;
 				material.textures[MaterialComponent::CLEARCOATMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -837,10 +881,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::CLEARCOATROUGHNESSMAP].name = img.uri;
 				material.textures[MaterialComponent::CLEARCOATROUGHNESSMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -851,10 +891,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::CLEARCOATNORMALMAP].name = img.uri;
 				material.textures[MaterialComponent::CLEARCOATNORMALMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -895,10 +931,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 					int index = param.Get("index").Get<int>();
 					auto& tex = state.gltfModel.textures[index];
 					int img_source = tex.source;
-					if (tex.extensions.count("KHR_texture_basisu"))
-					{
-						img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-					}
 					auto& img = state.gltfModel.images[img_source];
 					material.textures[MaterialComponent::SURFACEMAP].name = img.uri;
 					material.textures[MaterialComponent::SURFACEMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -909,10 +941,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 					int index = param.Get("index").Get<int>();
 					auto& tex = state.gltfModel.textures[index];
 					int img_source = tex.source;
-					if (tex.extensions.count("KHR_texture_basisu"))
-					{
-						img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-					}
 					auto& img = state.gltfModel.images[img_source];
 					material.textures[MaterialComponent::SPECULARMAP].name = img.uri;
 					material.textures[MaterialComponent::SPECULARMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -928,10 +956,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::SPECULARMAP].name = img.uri;
 				material.textures[MaterialComponent::SPECULARMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -968,10 +992,6 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::ANISOTROPYMAP].name = img.uri;
 				material.textures[MaterialComponent::ANISOTROPYMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
@@ -994,15 +1014,12 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				int index = param.Get("index").Get<int>();
 				auto& tex = state.gltfModel.textures[index];
 				int img_source = tex.source;
-				if (tex.extensions.count("KHR_texture_basisu"))
-				{
-					img_source = tex.extensions["KHR_texture_basisu"].Get("source").Get<int>();
-				}
 				auto& img = state.gltfModel.images[img_source];
 				material.textures[MaterialComponent::ANISOTROPYMAP].name = img.uri;
 				material.textures[MaterialComponent::ANISOTROPYMAP].uvset = (uint32_t)param.Get("texCoord").Get<int>();
 			}
 		}
+		ImportMetadata(state, materialEntity, x.extras);
 
 		material.CreateRenderData();
 	}
@@ -1602,6 +1619,7 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 			mesh.ComputeNormals(MeshComponent::COMPUTE_NORMALS_SMOOTH_FAST);
 		}
 
+		ImportMetadata(state, meshEntity, x.extras);
 		mesh.CreateRenderData(); // tangents are generated inside if needed, which must be done before FlipZAxis!
 	}
 
@@ -1627,6 +1645,7 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		{
 			assert(0);
 		}
+		ImportMetadata(state, armatureEntity, skin.extras);
 	}
 
 	// Create transform hierarchy, assign objects, meshes, armatures, cameras:
@@ -1811,45 +1830,51 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 				animationcomponent.channels[i].path = AnimationComponent::AnimationChannel::Path::UNKNOWN;
 			}
 		}
-
+		ImportMetadata(state, entity, anim.extras);
 	}
 
 	// Create lights:
 	int lightIndex = 0;
 	for (auto& x : state.gltfModel.lights)
 	{
-		Entity entity = scene.lights.GetEntity(lightIndex);
-		LightComponent& light = scene.lights[lightIndex++];
-		NameComponent& name = *scene.names.GetComponent(entity);
-		name = x.name;
-
-		if (!x.type.compare("spot"))
+		for (auto [it, end] = state.punctualLightMap.equal_range(lightIndex); it != end; it++)
 		{
-			light.type = LightComponent::LightType::SPOT;
-		}
-		if (!x.type.compare("point"))
-		{
-			light.type = LightComponent::LightType::POINT;
-		}
-		if (!x.type.compare("directional"))
-		{
-			light.type = LightComponent::LightType::DIRECTIONAL;
-		}
+			Entity entity = it->second;
+			LightComponent& light = scene.lights[lightIndex];
+			NameComponent& name = *scene.names.GetComponent(entity);
+			name = x.name;
 
-		if (!x.color.empty())
-		{
-			light.color = XMFLOAT3(float(x.color[0]), float(x.color[1]), float(x.color[2]));
+			if (!x.type.compare("spot"))
+			{
+				light.type = LightComponent::LightType::SPOT;
+			}
+			if (!x.type.compare("point"))
+			{
+				light.type = LightComponent::LightType::POINT;
+			}
+			if (!x.type.compare("directional"))
+			{
+				light.type = LightComponent::LightType::DIRECTIONAL;
+			}
+
+			if (!x.color.empty())
+			{
+				light.color = XMFLOAT3(float(x.color[0]), float(x.color[1]), float(x.color[2]));
+			}
+
+			light.intensity = float(x.intensity);
+			light.range = x.range > 0 ? float(x.range) : std::numeric_limits<float>::max();
+			light.outerConeAngle = float(x.spot.outerConeAngle);
+			light.innerConeAngle = float(x.spot.innerConeAngle);
+			light.SetCastShadow(true);
+
+			// In gltf, default light direction is forward, in engine, it's downwards, so apply a rotation:
+			TransformComponent& transform = *scene.transforms.GetComponent(entity);
+			transform.RotateRollPitchYaw(XMFLOAT3(XM_PIDIV2, 0, 0));
+
+			ImportMetadata(state, entity, x.extras);
 		}
-
-		light.intensity = float(x.intensity);
-		light.range = x.range > 0 ? float(x.range) : std::numeric_limits<float>::max();
-		light.outerConeAngle = float(x.spot.outerConeAngle);
-		light.innerConeAngle = float(x.spot.innerConeAngle);
-		light.SetCastShadow(true);
-
-		// In gltf, default light direction is forward, in engine, it's downwards, so apply a rotation:
-		TransformComponent& transform = *scene.transforms.GetComponent(entity);
-		transform.RotateRollPitchYaw(XMFLOAT3(XM_PIDIV2, 0, 0));
+		lightIndex++;
 	}
 
 	int cameraIndex = 0;
@@ -1868,6 +1893,8 @@ void ImportModel_GLTF(const std::string& fileName, Scene& scene)
 		camera.fov = (float)x.perspective.yfov;
 		camera.zFarP = (float)x.perspective.zfar;
 		camera.zNearP = (float)x.perspective.znear;
+
+		ImportMetadata(state, entity, x.extras);
 	}
 
 	// https://github.com/KhronosGroup/glTF/blob/main/extensions/2.0/Vendor/EXT_lights_image_based/README.md
@@ -2354,232 +2381,8 @@ void Import_Extension_VRM(LoaderState& state)
 					if (humanBone.Has("bone"))
 					{
 						const auto& value = humanBone.Get("bone");
-						const std::string& type = wi::helper::toUpper(value.Get<std::string>());
-
-						if (!type.compare("NECK"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Neck)] = boneID;
-						}
-						else if (!type.compare("HEAD"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Head)] = boneID;
-						}
-						else if (!type.compare("LEFTEYE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftEye)] = boneID;
-						}
-						else if (!type.compare("RIGHTEYE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightEye)] = boneID;
-						}
-						else if (!type.compare("JAW"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Jaw)] = boneID;
-						}
-						else if (!type.compare("HIPS"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Hips)] = boneID;
-						}
-						else if (!type.compare("SPINE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Spine)] = boneID;
-						}
-						else if (!type.compare("CHEST"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::Chest)] = boneID;
-						}
-						else if (!type.compare("UPPERCHEST"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::UpperChest)] = boneID;
-						}
-						else if (!type.compare("LEFTSHOULDER"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftShoulder)] = boneID;
-						}
-						else if (!type.compare("RIGHTSHOULDER"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightShoulder)] = boneID;
-						}
-						else if (!type.compare("LEFTUPPERARM"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperArm)] = boneID;
-						}
-						else if (!type.compare("RIGHTUPPERARM"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightUpperArm)] = boneID;
-						}
-						else if (!type.compare("LEFTLOWERARM"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerArm)] = boneID;
-						}
-						else if (!type.compare("RIGHTLOWERARM"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightLowerArm)] = boneID;
-						}
-						else if (!type.compare("LEFTHAND"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftHand)] = boneID;
-						}
-						else if (!type.compare("RIGHTHAND"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightHand)] = boneID;
-						}
-						else if (!type.compare("LEFTUPPERLEG"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperLeg)] = boneID;
-						}
-						else if (!type.compare("RIGHTUPPERLEG"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightUpperLeg)] = boneID;
-						}
-						else if (!type.compare("LEFTLOWERLEG"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerLeg)] = boneID;
-						}
-						else if (!type.compare("RIGHTLOWERLEG"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightLowerLeg)] = boneID;
-						}
-						else if (!type.compare("LEFTFOOT"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftFoot)] = boneID;
-						}
-						else if (!type.compare("RIGHTFOOT"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightFoot)] = boneID;
-						}
-						else if (!type.compare("LEFTTOES"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftToes)] = boneID;
-						}
-						else if (!type.compare("RIGHTTOES"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightToes)] = boneID;
-						}
-						else if (!type.compare("LEFTTHUMBPROXIMAL"))
-						{
-							// VRM 0.0 thumb proximal = VRM 1.0 thumb metacarpal
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbMetacarpal)] = boneID;
-						}
-						else if (!type.compare("RIGHTTHUMBPROXIMAL"))
-						{
-							// VRM 0.0 thumb proximal = VRM 1.0 thumb metacarpal
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightThumbMetacarpal)] = boneID;
-						}
-						else if (!type.compare("LEFTTHUMBINTERMEDIATE"))
-						{
-							// VRM 0.0 thumb intermediate = VRM 1.0 thumb proximal
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbProximal)] = boneID;
-						}
-						else if (!type.compare("RIGHTTHUMBINTERMEDIATE"))
-						{
-							// VRM 0.0 thumb intermediate = VRM 1.0 thumb proximal
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightThumbProximal)] = boneID;
-						}
-						else if (!type.compare("LEFTTHUMBDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbDistal)] = boneID;
-						}
-						else if (!type.compare("RIGHTTHUMBDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightThumbDistal)] = boneID;
-						}
-						else if (!type.compare("LEFTINDEXPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexProximal)] = boneID;
-						}
-						else if (!type.compare("RIGHTINDEXPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightIndexProximal)] = boneID;
-						}
-						else if (!type.compare("LEFTINDEXINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexIntermediate)] = boneID;
-						}
-						else if (!type.compare("RIGHTINDEXINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightIndexIntermediate)] = boneID;
-						}
-						else if (!type.compare("LEFTINDEXDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexDistal)] = boneID;
-						}
-						else if (!type.compare("RIGHTINDEXDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightIndexDistal)] = boneID;
-						}
-						else if (!type.compare("LEFTMIDDLEPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleProximal)] = boneID;
-						}
-						else if (!type.compare("RIGHTMIDDLEPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleProximal)] = boneID;
-						}
-						else if (!type.compare("LEFTMIDDLEINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleIntermediate)] = boneID;
-						}
-						else if (!type.compare("RIGHTMIDDLEINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleIntermediate)] = boneID;
-						}
-						else if (!type.compare("LEFTMIDDLEDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleDistal)] = boneID;
-						}
-						else if (!type.compare("RIGHTMIDDLEDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleDistal)] = boneID;
-						}
-						else if (!type.compare("LEFTRINGPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftRingProximal)] = boneID;
-						}
-						else if (!type.compare("RIGHTRINGPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightRingProximal)] = boneID;
-						}
-						else if (!type.compare("LEFTRINGINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftRingIntermediate)] = boneID;
-						}
-						else if (!type.compare("RIGHTRINGINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightRingIntermediate)] = boneID;
-						}
-						else if (!type.compare("LEFTRINGDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftRingDistal)] = boneID;
-						}
-						else if (!type.compare("RIGHTRINGDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightRingDistal)] = boneID;
-						}
-						else if (!type.compare("LEFTLITTLEPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleProximal)] = boneID;
-						}
-						else if (!type.compare("RIGHTLITTLEPROXIMAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightLittleProximal)] = boneID;
-						}
-						else if (!type.compare("LEFTLITTLEINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleIntermediate)] = boneID;
-						}
-						else if (!type.compare("RIGHTLITTLEINTERMEDIATE"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightLittleIntermediate)] = boneID;
-						}
-						else if (!type.compare("LEFTLITTLEDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleDistal)] = boneID;
-						}
-						else if (!type.compare("RIGHTLITTLEDISTAL"))
-						{
-							component.bones[size_t(HumanoidComponent::HumanoidBone::RightLittleDistal)] = boneID;
-						}
+						const std::string& boneName = value.Get<std::string>();
+						Import_VRMC_Bone(state, boneID, boneName);
 					}
 				}
 			}
@@ -3222,6 +3025,53 @@ void Import_Extension_VRMC(LoaderState& state)
 	{
 		wi::backlog::post("VRMC_springBone_extended_collider extension found in model, but it is not implemented yet in the importer.", wi::backlog::LogLevel::Warning);
 	}
+
+	auto ext_vrma = state.gltfModel.extensions.find("VRMC_vrm_animation");
+	if (ext_vrma != state.gltfModel.extensions.end())
+	{
+		if (ext_vrma->second.Has("specVersion"))
+		{
+			std::string spec = ext_vrma->second.Get("specVersion").Get<std::string>();
+			if (spec.compare("1.0") != 0)
+			{
+				wilog_warning("VRMC_vrm_animation.specVersion is not 1.0!");
+			}
+		}
+		if (ext_vrma->second.Has("humanoid"))
+		{
+			auto humanoid = ext_vrma->second.Get("humanoid");
+			if (humanoid.Has("humanBones"))
+			{
+				auto humanBones = humanoid.Get("humanBones");
+				for (auto& key : humanBones.Keys())
+				{
+					const auto& bone = humanBones.Get(key);
+					if (bone.Has("node"))
+					{
+						auto node = bone.Get("node");
+						int idx = node.GetNumberAsInt();
+						if (state.entityMap.count(idx))
+						{
+							Entity boneEntity = state.entityMap[idx];
+							Import_VRMC_Bone(state, boneEntity, key);
+						}
+					}
+				}
+			}
+			else
+			{
+				wilog_warning("VRMC_vrm_animation.humanoid doesn't contain humanBones!");
+			}
+		}
+		if (ext_vrma->second.Has("expressions"))
+		{
+			wilog_warning("VRMC_vrm_animation.expressions not implemented yet! Please provide a sample model which contains this data in Github issue: https://github.com/turanszkij/WickedEngine/issues/new/");
+		}
+		if (ext_vrma->second.Has("lookAt"))
+		{
+			wilog_warning("VRMC_vrm_animation.lookAt not implemented yet! Please provide a sample model which contains this data in Github issue: https://github.com/turanszkij/WickedEngine/issues/new/");
+		}
+	}
 }
 
 void VRM_ToonMaterialCustomize(const std::string& name, MaterialComponent& material)
@@ -3243,6 +3093,245 @@ void VRM_ToonMaterialCustomize(const std::string& name, MaterialComponent& mater
 	{
 		// Disable shadow casting for some elements on the face like eyes, eyebrows, etc:
 		material.SetCastShadow(false);
+	}
+}
+
+void Import_VRMC_Bone(LoaderState& state, Entity boneID, const std::string& boneName)
+{
+	auto get_humanoid = [&]() -> HumanoidComponent& {
+		HumanoidComponent* component = state.scene->humanoids.GetComponent(state.rootEntity);
+		if (component == nullptr)
+		{
+			component = &state.scene->humanoids.Create(state.rootEntity);
+		}
+		return *component;
+	};
+
+	std::string type = wi::helper::toUpper(boneName);
+
+	if (!type.compare("NECK"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Neck)] = boneID;
+	}
+	else if (!type.compare("HEAD"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Head)] = boneID;
+	}
+	else if (!type.compare("LEFTEYE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftEye)] = boneID;
+	}
+	else if (!type.compare("RIGHTEYE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightEye)] = boneID;
+	}
+	else if (!type.compare("JAW"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Jaw)] = boneID;
+	}
+	else if (!type.compare("HIPS"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Hips)] = boneID;
+	}
+	else if (!type.compare("SPINE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Spine)] = boneID;
+	}
+	else if (!type.compare("CHEST"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::Chest)] = boneID;
+	}
+	else if (!type.compare("UPPERCHEST"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::UpperChest)] = boneID;
+	}
+	else if (!type.compare("LEFTSHOULDER"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftShoulder)] = boneID;
+	}
+	else if (!type.compare("RIGHTSHOULDER"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightShoulder)] = boneID;
+	}
+	else if (!type.compare("LEFTUPPERARM"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperArm)] = boneID;
+	}
+	else if (!type.compare("RIGHTUPPERARM"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightUpperArm)] = boneID;
+	}
+	else if (!type.compare("LEFTLOWERARM"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerArm)] = boneID;
+	}
+	else if (!type.compare("RIGHTLOWERARM"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLowerArm)] = boneID;
+	}
+	else if (!type.compare("LEFTHAND"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftHand)] = boneID;
+	}
+	else if (!type.compare("RIGHTHAND"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightHand)] = boneID;
+	}
+	else if (!type.compare("LEFTUPPERLEG"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftUpperLeg)] = boneID;
+	}
+	else if (!type.compare("RIGHTUPPERLEG"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightUpperLeg)] = boneID;
+	}
+	else if (!type.compare("LEFTLOWERLEG"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLowerLeg)] = boneID;
+	}
+	else if (!type.compare("RIGHTLOWERLEG"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLowerLeg)] = boneID;
+	}
+	else if (!type.compare("LEFTFOOT"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftFoot)] = boneID;
+	}
+	else if (!type.compare("RIGHTFOOT"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightFoot)] = boneID;
+	}
+	else if (!type.compare("LEFTTOES"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftToes)] = boneID;
+	}
+	else if (!type.compare("RIGHTTOES"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightToes)] = boneID;
+	}
+	else if (!type.compare("LEFTTHUMBPROXIMAL"))
+	{
+		// VRM 0.0 thumb proximal = VRM 1.0 thumb metacarpal
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbMetacarpal)] = boneID;
+	}
+	else if (!type.compare("RIGHTTHUMBPROXIMAL"))
+	{
+		// VRM 0.0 thumb proximal = VRM 1.0 thumb metacarpal
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbMetacarpal)] = boneID;
+	}
+	else if (!type.compare("LEFTTHUMBINTERMEDIATE"))
+	{
+		// VRM 0.0 thumb intermediate = VRM 1.0 thumb proximal
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbProximal)] = boneID;
+	}
+	else if (!type.compare("RIGHTTHUMBINTERMEDIATE"))
+	{
+		// VRM 0.0 thumb intermediate = VRM 1.0 thumb proximal
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbProximal)] = boneID;
+	}
+	else if (!type.compare("LEFTTHUMBDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftThumbDistal)] = boneID;
+	}
+	else if (!type.compare("RIGHTTHUMBDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightThumbDistal)] = boneID;
+	}
+	else if (!type.compare("LEFTINDEXPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexProximal)] = boneID;
+	}
+	else if (!type.compare("RIGHTINDEXPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexProximal)] = boneID;
+	}
+	else if (!type.compare("LEFTINDEXINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexIntermediate)] = boneID;
+	}
+	else if (!type.compare("RIGHTINDEXINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexIntermediate)] = boneID;
+	}
+	else if (!type.compare("LEFTINDEXDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftIndexDistal)] = boneID;
+	}
+	else if (!type.compare("RIGHTINDEXDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightIndexDistal)] = boneID;
+	}
+	else if (!type.compare("LEFTMIDDLEPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleProximal)] = boneID;
+	}
+	else if (!type.compare("RIGHTMIDDLEPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleProximal)] = boneID;
+	}
+	else if (!type.compare("LEFTMIDDLEINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleIntermediate)] = boneID;
+	}
+	else if (!type.compare("RIGHTMIDDLEINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleIntermediate)] = boneID;
+	}
+	else if (!type.compare("LEFTMIDDLEDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftMiddleDistal)] = boneID;
+	}
+	else if (!type.compare("RIGHTMIDDLEDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightMiddleDistal)] = boneID;
+	}
+	else if (!type.compare("LEFTRINGPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingProximal)] = boneID;
+	}
+	else if (!type.compare("RIGHTRINGPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingProximal)] = boneID;
+	}
+	else if (!type.compare("LEFTRINGINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingIntermediate)] = boneID;
+	}
+	else if (!type.compare("RIGHTRINGINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingIntermediate)] = boneID;
+	}
+	else if (!type.compare("LEFTRINGDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftRingDistal)] = boneID;
+	}
+	else if (!type.compare("RIGHTRINGDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightRingDistal)] = boneID;
+	}
+	else if (!type.compare("LEFTLITTLEPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleProximal)] = boneID;
+	}
+	else if (!type.compare("RIGHTLITTLEPROXIMAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleProximal)] = boneID;
+	}
+	else if (!type.compare("LEFTLITTLEINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleIntermediate)] = boneID;
+	}
+	else if (!type.compare("RIGHTLITTLEINTERMEDIATE"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleIntermediate)] = boneID;
+	}
+	else if (!type.compare("LEFTLITTLEDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::LeftLittleDistal)] = boneID;
+	}
+	else if (!type.compare("RIGHTLITTLEDISTAL"))
+	{
+		get_humanoid().bones[size_t(HumanoidComponent::HumanoidBone::RightLittleDistal)] = boneID;
 	}
 }
 
@@ -3865,11 +3954,13 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 	tinygltf::TinyGLTF writer;
 
 	tinygltf::FsCallbacks callbacks;
-	callbacks.ReadWholeFile = tinygltf::ReadWholeFile;
-	callbacks.WriteWholeFile = tinygltf::WriteWholeFile;
-	callbacks.FileExists = tinygltf::FileExists;
-	callbacks.ExpandFilePath = tinygltf::ExpandFilePath;
-	writer.SetFsCallbacks(callbacks);
+	callbacks.ReadWholeFile = wi::tinygltf::ReadWholeFile;
+	callbacks.WriteWholeFile = wi::tinygltf::WriteWholeFile;
+	callbacks.FileExists = wi::tinygltf::FileExists;
+	callbacks.ExpandFilePath = wi::tinygltf::ExpandFilePath;
+	callbacks.GetFileSizeInBytes = wi::tinygltf::GetFileSizeInBytes;
+	bool res = writer.SetFsCallbacks(callbacks);
+	assert(res);
 
 	LoaderState state;
 	state.scene = &scene;
@@ -4677,8 +4768,8 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 
 			// Build accessors
 
-			size_t morph_pos_accessor_index;
-			if(buf_d_morph_pos_size > 0)
+			size_t morph_pos_accessor_index = 0;
+			if (buf_d_morph_pos_size > 0)
 			{
 				// Sparse accessor indices
 				auto is_sparse = (m_morph.sparse_indices_positions.size() > 0);
@@ -4708,22 +4799,22 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 				morph_pos_accessor_builder.componentType = TINYGLTF_COMPONENT_TYPE_FLOAT;
 				morph_pos_accessor_builder.count = (is_sparse) ? mesh.vertex_positions.size() : m_morph.vertex_positions.size();
 				morph_pos_accessor_builder.type = TINYGLTF_TYPE_VEC3;
-				if(is_sparse)
+				if (is_sparse)
 				{
 					auto& sparse = morph_pos_accessor_builder.sparse;
 					sparse.isSparse = true;
 					sparse.count = (int)m_morph.sparse_indices_positions.size();
-					
+
 					sparse.indices.bufferView = morph_sparse_bufferView_index;
 					sparse.indices.componentType = TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT;
-					
+
 					sparse.values.bufferView = morph_pos_bufferView_index;
 				}
 				state.gltfModel.accessors.push_back(morph_pos_accessor_builder);
 			}
 
-			size_t morph_norm_accessor_index;
-			if(buf_d_morph_norm_size > 0)
+			size_t morph_norm_accessor_index = 0;
+			if (buf_d_morph_norm_size > 0)
 			{
 				// Sparse accessor indices
 				auto is_sparse = (m_morph.sparse_indices_normals.size() > 0);
@@ -4755,15 +4846,15 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 				// morph_norm_accessor_builder.count = (is_sparse) ? mesh.vertex_normals.size() : m_morph.vertex_normals.size();
 				morph_norm_accessor_builder.count = (is_sparse) ? mesh.vertex_positions.size() : m_morph.vertex_normals.size();
 				morph_norm_accessor_builder.type = TINYGLTF_TYPE_VEC3;
-				if(is_sparse)
+				if (is_sparse)
 				{
 					auto& sparse = morph_norm_accessor_builder.sparse;
 					sparse.isSparse = true;
 					sparse.count = (int)m_morph.sparse_indices_normals.size();
-					
+
 					sparse.indices.bufferView = morph_sparse_bufferView_index;
 					sparse.indices.componentType = TINYGLTF_COMPONENT_TYPE_UNSIGNED_INT;
-					
+
 					sparse.values.bufferView = morph_norm_bufferView_index;
 				}
 				state.gltfModel.accessors.push_back(morph_norm_accessor_builder);
@@ -5112,6 +5203,13 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 		
 		tinygltf::Animation animation_builder;
 
+		Entity entity = wiscene.animations.GetEntity(anim_id);
+		const NameComponent* name = wiscene.names.GetComponent(entity);
+		if (name != nullptr)
+		{
+			animation_builder.name = name->name;
+		}
+
 		for(auto& sampler : animation.samplers)
 		{
 			tinygltf::AnimationSampler sampler_builder;
@@ -5159,13 +5257,14 @@ void ExportModel_GLTF(const std::string& filename, Scene& scene)
 	auto file_extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename));
 	if(file_extension == "GLB")
 	{
-		writer.WriteGltfSceneToFile(&state.gltfModel, filename, false, true, true, true);
+		res = writer.WriteGltfSceneToFile(&state.gltfModel, filename, false, true, true, true);
 	}
 	else
 	{
-		writer.WriteGltfSceneToFile(&state.gltfModel, filename, false, false, true, false);
+		res = writer.WriteGltfSceneToFile(&state.gltfModel, filename, false, false, true, false);
 	}
 
+	assert(res);
 	// Restore scene world orientation
 	FlipZAxis(state);
 	wiscene.Update(0.f);

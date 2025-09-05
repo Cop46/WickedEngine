@@ -66,7 +66,7 @@ inline void ForwardLighting(inout Surface surface, inout Lighting lighting)
 			TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(probeTexture)];
 			
 			const half3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
-			const half3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+			const half3 uvw = box_to_uv(clipSpacePos.xyz);
 			[branch]
 			if (is_saturated(uvw))
 			{
@@ -153,6 +153,11 @@ inline void ForwardLighting(inout Surface surface, inout Lighting lighting)
 					light_spot(light, surface, lighting);
 				}
 				break;
+				case ENTITY_TYPE_RECTLIGHT:
+				{
+					light_rect(light, surface, lighting);
+				}
+				break;
 				}
 			}
 		}
@@ -198,7 +203,7 @@ inline void ForwardDecals(inout Surface surface, inout half4 surfaceMap, Sampler
 		if ((decal.layerMask & surface.layerMask) == 0)
 			continue;
 		const float3 clipSpacePos = mul(decalProjection, float4(surface.P, 1)).xyz;
-		float3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+		float3 uvw = box_to_uv(clipSpacePos.xyz);
 		[branch]
 		if (is_saturated(uvw))
 		{
@@ -313,7 +318,7 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 				TextureCube<half4> cubemap = bindless_cubemaps_half4[descriptor_index(probeTexture)];
 					
 				const half3 clipSpacePos = mul(probeProjection, float4(surface.P, 1)).xyz;
-				const half3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+				const half3 uvw = box_to_uv(clipSpacePos.xyz);
 				[branch]
 				if (is_saturated(uvw))
 				{
@@ -386,7 +391,7 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 		
 		SurfaceToLight surface_to_light;
 		surface_to_light.create(surface, surface.dominant_lightdir);
-		lighting.indirect.specular += max(0, BRDF_GetSpecular(surface, surface_to_light) * surface.dominant_lightcolor);
+		lighting.indirect.specular += max(0, BRDF_GetSpecular(surface, surface_to_light) * (float3)surface.dominant_lightcolor); // casting dominant_lightcolor to float3 fixes DDGI color overblown in DX12 when sky is black, I don't know why!
 	}
 	
 	[branch]
@@ -508,16 +513,12 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 		}
 	}
 
-	// Capsule shadows:
 	[branch]
-	if ((GetFrame().options & OPTION_BIT_CAPSULE_SHADOW_ENABLED) && !surface.IsCapsuleShadowDisabled() && !forces().empty()) // capsule shadows are contained in forces array for now...
+	if (!rectlights().empty())
 	{
-		half4 cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
-		half capsuleshadow = 1;
-		
 		// Loop through light buckets in the tile:
-		ShaderEntityIterator iterator = forces();
-		for (uint bucket = iterator.first_bucket(); (bucket <= iterator.last_bucket()) && (capsuleshadow > 0); ++bucket)
+		ShaderEntityIterator iterator = rectlights();
+		for(uint bucket = iterator.first_bucket(); bucket <= iterator.last_bucket(); ++bucket)
 		{
 			uint bucket_bits = load_entitytile(flatTileIndex + bucket);
 			bucket_bits = iterator.mask_entity(bucket, bucket_bits);
@@ -528,7 +529,57 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 #endif // ENTITY_TILE_UNIFORM
 
 			[loop]
-			while ((bucket_bits != 0) && (capsuleshadow > 0))
+			while (bucket_bits != 0)
+			{
+				// Retrieve global entity index from local bucket, then remove bit from local bucket:
+				const uint bucket_bit_index = firstbitlow(bucket_bits);
+				const uint entity_index = bucket * 32 + bucket_bit_index;
+				bucket_bits ^= 1u << bucket_bit_index;
+				
+				ShaderEntity light = load_entity(entity_index);
+
+				half shadow_mask = 1;
+#if defined(SHADOW_MASK_ENABLED) && !defined(TRANSPARENT)
+				[branch]
+				if (light.IsCastingShadow() && (GetFrame().options & OPTION_BIT_SHADOW_MASK) && (GetCamera().options & SHADERCAMERA_OPTION_USE_SHADOW_MASK) && GetCamera().texture_rtshadow_index >= 0)
+				{
+					uint shadow_index = entity_index - lights().first_item();
+					if (shadow_index < 16)
+					{
+						shadow_mask = bindless_textures2DArray_half4[descriptor_index(GetCamera().texture_rtshadow_index)][uint3(surface.pixel, shadow_index)].r;
+					}
+				}
+#endif // SHADOW_MASK_ENABLED && !TRANSPARENT
+
+				light_rect(light, surface, lighting, shadow_mask);
+
+			}
+		}
+	}
+
+	// Capsule shadows and capsule reflection blockers:
+	[branch]
+	if ((GetFrame().options & OPTION_BIT_CAPSULE_SHADOW_ENABLED) && !surface.IsCapsuleShadowDisabled() && !forces().empty()) // capsule shadows are contained in forces array for now...
+	{
+		half4 occlusion_cone = half4(surface.dominant_lightdir, GetCapsuleShadowAngle());
+		half4 reflection_cone = half4(surface.R, max(0.01, surface.roughness));
+		half capsuleshadow = 1;
+		half capsulereflection = 1;
+		
+		// Loop through light buckets in the tile:
+		ShaderEntityIterator iterator = forces();
+		for (uint bucket = iterator.first_bucket(); (bucket <= iterator.last_bucket()) && (capsuleshadow > 0 || capsulereflection > 0); ++bucket)
+		{
+			uint bucket_bits = load_entitytile(flatTileIndex + bucket);
+			bucket_bits = iterator.mask_entity(bucket, bucket_bits);
+
+#ifndef ENTITY_TILE_UNIFORM
+			// Bucket scalarizer - Siggraph 2017 - Improved Culling [Michal Drobot]:
+			bucket_bits = WaveReadLaneFirst(WaveActiveBitOr(bucket_bits));
+#endif // ENTITY_TILE_UNIFORM
+
+			[loop]
+			while ((bucket_bits != 0) && (capsuleshadow > 0 || capsulereflection > 0))
 			{
 				// Retrieve global entity index from local bucket, then remove bit from local bucket:
 				const uint bucket_bit_index = firstbitlow(bucket_bits);
@@ -542,21 +593,31 @@ inline void TiledLighting(inout Surface surface, inout Lighting lighting, uint f
 				float3 A = entity.position;
 				float3 B = entity.GetColliderTip();
 				half radius = entity.GetRange() * CAPSULE_SHADOW_BOLDEN;
-				half occ = directionalOcclusionCapsule(surface.P, A, B, radius, cone);
+				half occ = directionalOcclusionCapsule(surface.P, A, B, radius, occlusion_cone);
+				half ref = directionalOcclusionCapsule(surface.P, A, B, radius, reflection_cone);
 
-				// attenutaion based on capsule-sphere:
+				// attenuation based on capsule-sphere:
 				float3 center = lerp(A, B, 0.5);
 				half range = distance(center, A) + radius + CAPSULE_SHADOW_AFFECTION_RANGE;
 				half range2 = range * range;
-				half dist2 = distance_squared(surface.P, center);
-				occ = 1 - saturate((1 - occ) * saturate(attenuation_pointlight(dist2, range, range2)));
+				occ = 1 - saturate((1 - occ) * saturate(attenuation_pointlight(distance_squared(surface.P, center), range, range2)));
+				ref = 1 - saturate((1 - ref) * saturate(attenuation_pointlight(distance_squared(closest_point_on_line(surface.P, surface.P + surface.R, center), center), range, range2)));
 			
 				capsuleshadow *= occ;
+				capsulereflection *= ref;
 			}
 		}
+		
 		capsuleshadow = lerp(capsuleshadow, 1, GetCapsuleShadowFade());
 		capsuleshadow = saturate(capsuleshadow);
 		surface.occlusion *= capsuleshadow;
+
+#ifndef PLANARREFLECTION
+		capsulereflection = sqr(capsulereflection);
+		capsulereflection = lerp(capsulereflection, 1, GetCapsuleShadowFade());
+		lighting.direct.specular *= capsulereflection;
+		lighting.indirect.specular *= capsulereflection;
+#endif // PLANARREFLECTION
 	}
 
 }
@@ -615,7 +676,7 @@ inline void TiledDecals(inout Surface surface, uint flatTileIndex, inout half4 s
 			if ((decal.layerMask & surface.layerMask) == 0)
 				continue;
 			const float3 clipSpacePos = mul(decalProjection, float4(surface.P, 1)).xyz;
-			float3 uvw = clipspace_to_uv(clipSpacePos.xyz);
+			float3 uvw = box_to_uv(clipSpacePos.xyz);
 			[branch]
 			if (is_saturated(uvw))
 			{
@@ -704,33 +765,49 @@ inline void ApplyAerialPerspective(float2 uv, float3 P, inout half4 color)
 	}
 }
 
-inline uint AlphaToCoverage(half alpha, half alphaTest, float4 svposition)
+// Handle transparency effects in opaque render pass:
+//	alpha		: the transparency value of the surface
+//	alphaTest	: user specified alpha cutoff value
+//	dithering	: additional transparency that will be used for dithering or multisampled coverage modifier
+//	svposition	: SV_Position system value pixel shader input
+//
+//	returns bitmask that can be used for SV_Coverage output from pixel shader
+inline uint AlphaToCoverage(half alpha, half alphaTest, half dithering, float4 svposition)
 {
-	if (alphaTest == 0)
-	{
-		// No alpha test, force full coverage:
-		return ~0u;
-	}
-
 	if (GetFrame().options & OPTION_BIT_TEMPORALAA_ENABLED)
 	{
 		// When Temporal AA is enabled, dither the alpha mask with animated blue noise:
-		alpha -= blue_noise(svposition.xy, svposition.w).x / GetCamera().sample_count;
+		alpha -= dithering + blue_noise(svposition.xy, svposition.w).x / GetCamera().sample_count;
 	}
 	else if (GetCamera().sample_count > 1)
 	{
-		// Without Temporal AA, use static dithering:
-		alpha -= dither(svposition.xy) / GetCamera().sample_count;
+		// Multisampled transparency:
+		//	alphaTest is not made, pure alpha is used for sample mask
+		//	dithering is modifying final alpha
+		alpha -= dithering;
 	}
 	else
 	{
 		// Without Temporal AA and MSAA, regular alpha test behaviour will be used:
+		//	emulate clip() behaviour with combined alpha test and dithering
+		const half cutout_pattern = dither(svposition.xy) - dithering;
+		if (cutout_pattern < 0)
+		{
+			alpha = 0;
+		}
 		alpha -= alphaTest;
 	}
 
 	if (alpha > 0)
 	{
+#ifdef TRANSPARENT
+		// Transparent render pass:
+		//	still clips alpha = 0 but for any alpha it will use blending and full coverage
+		//	otherwise the alpha would do blending and coverage which doubles the alpha effect in multisampling
+		return ~0u;
+#else
 		return ~0u >> (31u - uint(alpha * GetCamera().sample_count));
+#endif // TRANSPARENT
 	}
 	return 0;
 }

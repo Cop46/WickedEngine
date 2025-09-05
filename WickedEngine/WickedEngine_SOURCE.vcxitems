@@ -308,14 +308,18 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)Jolt\TriangleSplitter\TriangleSplitter.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Jolt\TriangleSplitter\TriangleSplitterBinning.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Jolt\TriangleSplitter\TriangleSplitterMean.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)LUA\ljumptab.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)LUA\lopnames.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\dds.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\dxva.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\h264.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\lodepng.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\meshoptimizer\meshoptimizer.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\minimp4.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Utility\offsetAllocator.hpp" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\pugiconfig.hpp" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\pugixml.hpp" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)Utility\win32ico.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)Utility\WinAdapter.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiAsync_BindLua.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiBVH.h" />
@@ -455,6 +459,7 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)wiVector.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiVersion.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiVideo.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)wiVideo_BindLua.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiVoxelGrid.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiVoxelGrid_BindLua.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)wiXInput.h" />
@@ -610,6 +615,7 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)Utility\meshoptimizer\vertexfilter.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)Utility\meshoptimizer\vfetchanalyzer.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)Utility\meshoptimizer\vfetchoptimizer.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)Utility\offsetAllocator.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)Utility\pugixml.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiAsync_BindLua.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiConfig.cpp" />
@@ -659,9 +665,6 @@
       <CompileAsWinRT>false</CompileAsWinRT>
     </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)LUA\lbaselib.c">
-      <CompileAsWinRT>false</CompileAsWinRT>
-    </ClCompile>
-    <ClCompile Include="$(MSBuildThisFileDirectory)LUA\lbitlib.c">
       <CompileAsWinRT>false</CompileAsWinRT>
     </ClCompile>
     <ClCompile Include="$(MSBuildThisFileDirectory)LUA\lcode.c">
@@ -809,6 +812,7 @@
     <ClCompile Include="$(MSBuildThisFileDirectory)wiTrailRenderer_BindLua.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiVersion.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiVideo.cpp" />
+    <ClCompile Include="$(MSBuildThisFileDirectory)wiVideo_BindLua.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiVoxelGrid.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiVoxelGrid_BindLua.cpp" />
     <ClCompile Include="$(MSBuildThisFileDirectory)wiXInput.cpp" />

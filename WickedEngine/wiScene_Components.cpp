@@ -6,7 +6,6 @@
 #include "wiJobSystem.h"
 #include "wiSpinLock.h"
 #include "wiHelper.h"
-#include "wiRenderer.h"
 #include "wiBacklog.h"
 #include "wiTimer.h"
 #include "wiUnorderedMap.h"
@@ -174,6 +173,12 @@ namespace wi::scene
 
 		XMStoreFloat4(&rotation_local, quat);
 	}
+	void TransformComponent::RotateRollPitchYaw(const XMVECTOR& value)
+	{
+		XMFLOAT3 v;
+		XMStoreFloat3(&v, value);
+		RotateRollPitchYaw(v);
+	}
 	void TransformComponent::Rotate(const XMFLOAT4& quaternion)
 	{
 		SetDirty();
@@ -323,7 +328,7 @@ namespace wi::scene
 			_blend_with_terrain_height_rcp = 1.0f / blend_with_terrain_height;
 		}
 		material.aniso_anisosin_anisocos_terrainblend = pack_half4(_anisotropy_strength, _anisotropy_rotation_sin, _anisotropy_rotation_cos, _blend_with_terrain_height_rcp);
-		material.shaderType = (uint)shaderType;
+		material.shaderType_meshblend = ((uint)shaderType & 0xFFFF) | (XMConvertFloatToHalf(mesh_blend) << 16u);
 		material.userdata = userdata;
 
 		if (shaderType == SHADERTYPE_INTERIORMAPPING)
@@ -586,6 +591,7 @@ namespace wi::scene
 
 	void MeshComponent::DeleteRenderData()
 	{
+		generalBufferOffsetAllocation = {};
 		generalBuffer = {};
 		streamoutBuffer = {};
 		ib = {};
@@ -1291,9 +1297,25 @@ namespace wi::scene
 			}
 		};
 
-		bool success = device->CreateBuffer2(&bd, init_callback, &generalBuffer);
-		assert(success);
-		device->SetName(&generalBuffer, "MeshComponent::generalBuffer");
+		// The suballocation strategy is used to have all mesh buffers reside in a global buffer
+		//	With this we can avoid rebinding the index buffer for every mesh and can work with purely offsets
+		//	Though the index buffer will still need to be rebound if the index format changes, but that happens less frequently
+		wi::renderer::BufferSuballocation suballoc = wi::renderer::SuballocateGPUBuffer(bd.size);
+		if (suballoc.allocation.IsValid())
+		{
+			bool success = device->CreateBuffer2(&bd, init_callback, &generalBuffer, &suballoc.alias, suballoc.allocation.byte_offset);
+			assert(success);
+			device->SetName(&generalBuffer, "MeshComponent::generalBuffer (suballocated)");
+			generalBufferOffsetAllocation = std::move(suballoc.allocation);
+			generalBufferOffsetAllocationAlias = std::move(suballoc.alias);
+		}
+		else
+		{
+			// If suballocation was not successful, a standalone buffer can be created instead:
+			bool success = device->CreateBuffer2(&bd, init_callback, &generalBuffer);
+			assert(success);
+			device->SetName(&generalBuffer, "MeshComponent::generalBuffer");
+		}
 
 		assert(ib.IsValid());
 		const Format ib_format = GetIndexFormat() == IndexBufferFormat::UINT32 ? Format::R32_UINT : Format::R16_UINT;
@@ -2694,6 +2716,17 @@ namespace wi::scene
 		wi::audio::CreateSoundInstance(&soundResource.GetSound(), &soundinstance);
 	}
 
+	float VideoComponent::GetLength() const
+	{
+		if (!videoResource.IsValid())
+			return 0;
+		return videoResource.GetVideo().duration_seconds;
+	}
+	void VideoComponent::Seek(float timerSeconds)
+	{
+		wi::video::Seek(&videoinstance, timerSeconds);
+	}
+
 	bool HumanoidComponent::IsValid() const
 	{
 		if (bones[size_t(HumanoidBone::Hips)] == INVALID_ENTITY)
@@ -2758,6 +2791,14 @@ namespace wi::scene
 	{
 		leaning_next = amount;
 	}
+	void CharacterComponent::Shake(float horizontal, float vertical, float frequency, float decay)
+	{
+		shake_horizontal = horizontal;
+		shake_vertical = vertical;
+		shake_frequency = frequency;
+		shake_decay = decay;
+		shake_timer = 0;
+	}
 	void CharacterComponent::AddAnimation(Entity entity)
 	{
 		animations.push_back(entity);
@@ -2768,11 +2809,15 @@ namespace wi::scene
 		{
 			reset_anim = true;
 			currentAnimation = entity;
+			anim_timer = 0;
+			anim_ended = false;
 		}
 	}
 	void CharacterComponent::StopAnimation()
 	{
 		currentAnimation = INVALID_ENTITY;
+		anim_timer = 0;
+		anim_ended = true;
 	}
 	void CharacterComponent::SetAnimationAmount(float amount)
 	{
@@ -2781,6 +2826,10 @@ namespace wi::scene
 	float CharacterComponent::GetAnimationAmount() const
 	{
 		return anim_amount;
+	}
+	float CharacterComponent::GetAnimationTimer() const
+	{
+		return anim_timer;
 	}
 	bool CharacterComponent::IsAnimationEnded() const
 	{

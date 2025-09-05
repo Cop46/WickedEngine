@@ -87,8 +87,9 @@ void MaterialPickerWindow::ResizeLayout()
 		return;
 	}
 
-	zoomSlider.SetPos(XMFLOAT2(55, 0));
-	zoomSlider.SetSize(XMFLOAT2(GetWidgetAreaSize().x - 100 - 5, 20));
+	layout.margin_left = 55;
+
+	layout.add(zoomSlider);
 
 	wi::gui::Theme theme;
 	theme.image.CopyFrom(sprites[wi::gui::IDLE].params);

@@ -12,6 +12,7 @@
 #include "shaders/ShaderInterop_SurfelGI.h"
 #include "wiVector.h"
 #include "wiSpinLock.h"
+#include "wiAllocator.h"
 
 #include <memory>
 #include <limits>
@@ -30,6 +31,7 @@ namespace wi::renderer
 	constexpr wi::graphics::Format format_idbuffer = wi::graphics::Format::R32_UINT;
 	constexpr wi::graphics::Format format_rendertarget_shadowmap = wi::graphics::Format::R16G16B16A16_FLOAT;
 	constexpr wi::graphics::Format format_depthbuffer_shadowmap = wi::graphics::Format::D16_UNORM;
+	//constexpr wi::graphics::Format format_depthbuffer_shadowmap = wi::graphics::Format::D32_FLOAT;
 	constexpr wi::graphics::Format format_rendertarget_envprobe = wi::graphics::Format::R11G11B10_FLOAT;
 	constexpr wi::graphics::Format format_depthbuffer_envprobe = wi::graphics::Format::D16_UNORM;
 
@@ -66,7 +68,20 @@ namespace wi::renderer
 
 	// Returns a buffer preinitialized for quad index buffer laid out as:
 	//	vertexID * 4 + [0, 1, 2, 2, 1, 3]
+	//	Note: it will return 16-bit or 32-bit index buffer depending on max_quad_count
 	const wi::graphics::GPUBuffer& GetIndexBufferForQuads(uint32_t max_quad_count);
+
+	struct BufferSuballocation
+	{
+		wi::graphics::GPUBuffer alias;
+		wi::allocator::PageAllocator::Allocation allocation;
+	};
+	// Sub-allocate (thread-safe) from a global GPU buffer for memory aliasing purpose:
+	//	The buffer will be DEFAULT usage, useable as vertex buffer, index buffer and shader resource
+	//	The purpose is to suballocate smaller GPUBuffers inside a larger GPUBuffer and bind the large GPUBuffer once as index buffer,
+	//	while the small buffers can be allocated/deallocated from it with memory aliasing and also used regularly by themselves
+	BufferSuballocation SuballocateGPUBuffer(uint64_t size);
+	void UpdateGPUSuballocator(); // called every frame for deferred release of GPU suballocations
 
 	void ModifyObjectSampler(const wi::graphics::SamplerDesc& desc);
 
@@ -100,8 +115,8 @@ namespace wi::renderer
 		const wi::vector<std::string>& permutation_defines = {}
 	);
 
-	// Whether background pipeline compilations are active
-	bool IsPipelineCreationActive();
+	// Whether background pipeline compilations are active (returns number of active jobs)
+	int IsPipelineCreationActive();
 
 	struct Visibility
 	{
@@ -149,6 +164,7 @@ namespace wi::renderer
 		XMFLOAT4 reflectionPlane = XMFLOAT4(0, 1, 0, 0);
 		std::atomic_bool volumetriclight_request{ false };
 		std::atomic_bool transparents_visible{ false };
+		std::atomic_bool mesh_blend_visible{ false };
 
 		void Clear()
 		{
@@ -167,6 +183,7 @@ namespace wi::renderer
 			planar_reflection_visible = false;
 			volumetriclight_request.store(false);
 			transparents_visible.store(false);
+			mesh_blend_visible.store(false);
 		}
 
 		bool IsRequestedPlanarReflections() const
@@ -180,6 +197,10 @@ namespace wi::renderer
 		bool IsTransparentsVisible() const
 		{
 			return transparents_visible.load();
+		}
+		bool IsMeshBlendVisible() const
+		{
+			return mesh_blend_visible.load();
 		}
 	};
 
@@ -307,9 +328,11 @@ namespace wi::renderer
 		wi::graphics::CommandList cmd
 	);
 	// Draw simple light visualizer geometries
+	//	instance_replication is used to render them into multiple texture slices
 	void DrawLightVisualizers(
 		const Visibility& vis,
-		wi::graphics::CommandList cmd
+		wi::graphics::CommandList cmd,
+		uint32_t instance_replication = 1
 	);
 	// Draw volumetric light scattering effects
 	void DrawVolumeLights(
@@ -353,10 +376,9 @@ namespace wi::renderer
 
 	struct LuminanceResources
 	{
-		wi::graphics::GPUBuffer luminance;
+		wi::graphics::GPUBuffer luminance; // result luminance value
 	};
 	void CreateLuminanceResources(LuminanceResources& res, XMUINT2 resolution);
-	// Compute the luminance for the source image and return the texture containing the luminance value in pixel [0,0]
 	void ComputeLuminance(
 		const LuminanceResources& res,
 		const wi::graphics::Texture& sourceImage,
@@ -403,7 +425,6 @@ namespace wi::renderer
 
 		inline bool IsValid() const { return bins.IsValid(); }
 	};
-	void CreateVisibilityResourcesLightWeight(VisibilityResources& res, XMUINT2 resolution);
 	void CreateVisibilityResources(VisibilityResources& res, XMUINT2 resolution);
 	void Visibility_Prepare(
 		const VisibilityResources& res,
@@ -950,6 +971,26 @@ namespace wi::renderer
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd
 	);
+	struct MeshBlendResources
+	{
+		wi::graphics::Texture mask;
+		wi::graphics::Texture tmp;
+		wi::graphics::Texture expand[2];
+
+		bool IsValid() const { return mask.IsValid(); }
+	};
+	void CreateMeshBlendResources(MeshBlendResources& res, XMUINT2 resolution);
+	void PostProcess_MeshBlend_EdgeProcess( // this part can be run on async compute, it doesn't need color buffer, only the primID
+		const MeshBlendResources& res,
+		wi::graphics::CommandList cmd
+	);
+	void PostProcess_MeshBlend_Resolve( // this part can only be run on gfx queue, it will use renderpass internally (to support MSAA)
+		const MeshBlendResources& res,
+		const wi::graphics::Texture& output,
+		const wi::graphics::RenderPassImage* renderpass_images,
+		uint32_t renderpass_image_count,
+		wi::graphics::CommandList cmd
+	);
 	void Postprocess_Custom(
 		const wi::graphics::Shader& computeshader,
 		const wi::graphics::Texture& input,
@@ -1062,6 +1103,9 @@ namespace wi::renderer
 	);
 
 	void DrawWaterRipples(const Visibility& vis, wi::graphics::CommandList cmd);
+
+
+	void DrawWaveEffect(const XMFLOAT4& color, wi::graphics::CommandList cmd);
 
 
 

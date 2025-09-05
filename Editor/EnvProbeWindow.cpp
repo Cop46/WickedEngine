@@ -26,161 +26,123 @@ void EnvProbeWindow::Create(EditorComponent* _editor)
 		editor->componentsWnd.RefreshEntityTree();
 	});
 
-	float x = 5, y = 0, step = 35;
-
 	infoLabel.Create("");
-	infoLabel.SetSize(XMFLOAT2(300, 120));
-	infoLabel.SetPos(XMFLOAT2(x, y));
 	infoLabel.SetColor(wi::Color::Transparent());
+	infoLabel.SetFitTextEnabled(true);
 	AddWidget(&infoLabel);
-	y += infoLabel.GetScale().y + 5;
+
+	auto forEachSelected = [this] (auto func) {
+		return [this, func] (auto args) {
+			wi::scene::Scene& scene = editor->GetCurrentScene();
+			for (auto& x : editor->translator.selected)
+			{
+				EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
+				if (probe != nullptr)
+				{
+					func(probe, args);
+				}
+			}
+		};
+	};
 
 	realTimeCheckBox.Create("RealTime: ");
 	realTimeCheckBox.SetTooltip("Enable continuous rendering of the probe in every frame.");
-	realTimeCheckBox.SetPos(XMFLOAT2(x + 100, y));
 	realTimeCheckBox.SetEnabled(false);
-	realTimeCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			probe->SetRealTime(args.bValue);
-			probe->SetDirty();
-		}
-	});
+	realTimeCheckBox.OnClick(forEachSelected([] (auto probe, auto args) {
+		probe->SetRealTime(args.bValue);
+		probe->SetDirty();
+	}));
 	AddWidget(&realTimeCheckBox);
 
 	msaaCheckBox.Create("MSAA: ");
 	msaaCheckBox.SetTooltip("Enable Multi Sampling Anti Aliasing for the probe, this will improve its quality.");
-	msaaCheckBox.SetPos(XMFLOAT2(x + 200, y));
 	msaaCheckBox.SetEnabled(false);
-	msaaCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			probe->SetMSAA(args.bValue);
-			probe->SetDirty();
-		}
-	});
+	msaaCheckBox.OnClick(forEachSelected([] (auto probe, auto args) {
+		probe->SetMSAA(args.bValue);
+		probe->SetDirty();
+	}));
 	AddWidget(&msaaCheckBox);
 
 	refreshButton.Create("Refresh");
 	refreshButton.SetTooltip("Re-renders the selected probe.");
-	refreshButton.SetPos(XMFLOAT2(x, y+= step));
 	refreshButton.SetEnabled(false);
-	refreshButton.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			probe->SetDirty();
-		}
-	});
+	refreshButton.OnClick(forEachSelected([] (auto probe, auto args) {
+		probe->SetDirty();
+	}));
 	AddWidget(&refreshButton);
 
 	refreshAllButton.Create("Refresh All");
 	refreshAllButton.SetTooltip("Re-renders all probes in the scene.");
-	refreshAllButton.SetPos(XMFLOAT2(x + 120, y));
 	refreshAllButton.SetEnabled(true);
-	refreshAllButton.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			probe->SetDirty();
-		}
-	});
+	refreshAllButton.OnClick(forEachSelected([] (auto probe, auto args) {
+		probe->SetDirty();
+	}));
 	AddWidget(&refreshAllButton);
 
 	importButton.Create("Import Cubemap");
 	importButton.SetTooltip("Import a DDS texture file into the selected environment probe.");
-	importButton.SetPos(XMFLOAT2(x, y += step));
 	importButton.SetEnabled(false);
-	importButton.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	importButton.OnClick(forEachSelected([] (auto probe, auto args) {
+		if (probe != nullptr && probe->texture.IsValid())
 		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			if (probe != nullptr && probe->texture.IsValid())
-			{
-				wi::helper::FileDialogParams params;
-				params.type = wi::helper::FileDialogParams::OPEN;
-				params.description = "DDS";
-				params.extensions = { "DDS" };
-				wi::helper::FileDialog(params, [=](std::string fileName) {
-					wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
+			wi::helper::FileDialogParams params;
+			params.type = wi::helper::FileDialogParams::OPEN;
+			params.description = "DDS";
+			params.extensions = { "DDS" };
+			wi::helper::FileDialog(params, [=](std::string fileName) {
+				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 
-						wi::Resource resource = wi::resourcemanager::Load(fileName);
-						if (has_flag(resource.GetTexture().GetDesc().misc_flags, wi::graphics::ResourceMiscFlag::TEXTURECUBE))
-						{
-							probe->textureName = fileName;
-							probe->CreateRenderData();
-						}
-						else
-						{
-							wi::helper::messageBox("Error!", "The texture you tried to open is not a cubemap texture, so it won't be imported!");
-						}
+					wi::Resource resource = wi::resourcemanager::Load(fileName);
+					if (has_flag(resource.GetTexture().GetDesc().misc_flags, wi::graphics::ResourceMiscFlag::TEXTURECUBE))
+					{
+						probe->textureName = fileName;
+						probe->CreateRenderData();
+					}
+					else
+					{
+						wi::helper::messageBox("Error!", "The texture you tried to open is not a cubemap texture, so it won't be imported!");
+					}
 
-						});
 					});
+				});
 
-			}
 		}
-	});
+	}));
 	AddWidget(&importButton);
 
 	exportButton.Create("Export Cubemap");
 	exportButton.SetTooltip("Export the selected probe into a DDS cubemap texture file.");
-	exportButton.SetPos(XMFLOAT2(x, y += step));
 	exportButton.SetEnabled(false);
-	exportButton.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	exportButton.OnClick(forEachSelected([this] (auto probe, auto args) {
+		if (probe != nullptr && probe->texture.IsValid())
 		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			if (probe != nullptr && probe->texture.IsValid())
-			{
-				wi::helper::FileDialogParams params;
-				params.type = wi::helper::FileDialogParams::SAVE;
-				params.description = "DDS";
-				params.extensions = { "DDS" };
-				wi::helper::FileDialog(params, [=](std::string fileName) {
-					wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
+			wi::helper::FileDialogParams params;
+			params.type = wi::helper::FileDialogParams::SAVE;
+			params.description = "DDS";
+			params.extensions = { "DDS" };
+			wi::helper::FileDialog(params, [this, probe](std::string fileName) {
+				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 
-						std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(fileName));
-						std::string filename_replaced = fileName;
-						if (extension != "DDS")
-						{
-							filename_replaced = wi::helper::ReplaceExtension(fileName, "DDS");
-						}
+					std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(fileName));
+					std::string filename_replaced = fileName;
+					if (extension != "DDS")
+					{
+						filename_replaced = wi::helper::ReplaceExtension(fileName, "DDS");
+					}
 
-						bool success = wi::helper::saveTextureToFile(probe->texture, filename_replaced);
-						assert(success);
+					bool success = wi::helper::saveTextureToFile(probe->texture, filename_replaced);
+					assert(success);
 
-						if (success)
-						{
-							editor->PostSaveText("Exported environment cubemap: ", filename_replaced);
-						}
+					if (success)
+					{
+						editor->PostSaveText("Exported environment cubemap: ", filename_replaced);
+					}
 
-						});
 					});
+				});
 
-			}
 		}
-	});
+	}));
 	AddWidget(&exportButton);
 
 
@@ -193,17 +155,10 @@ void EnvProbeWindow::Create(EditorComponent* _editor)
 	resolutionCombo.AddItem("512", 512);
 	resolutionCombo.AddItem("1024", 1024);
 	resolutionCombo.AddItem("2048", 2048);
-	resolutionCombo.OnSelect([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			EnvironmentProbeComponent* probe = scene.probes.GetComponent(x.entity);
-			if (probe == nullptr)
-				continue;
-			probe->resolution = (uint32_t)args.userdata;
-			probe->CreateRenderData();
-		}
-	});
+	resolutionCombo.OnSelect(forEachSelected([] (auto probe, auto args) {
+		probe->resolution = (uint32_t)args.userdata;
+		probe->CreateRenderData();
+	}));
 	AddWidget(&resolutionCombo);
 
 
@@ -255,66 +210,31 @@ void EnvProbeWindow::SetEntity(Entity entity)
 void EnvProbeWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 80;
 
-	const float margin_left = 80;
-	const float margin_right = padding;
+	layout.add_fullwidth(infoLabel);
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add_fullwidth(infoLabel);
-
-	refreshButton.SetSize(XMFLOAT2(width * 0.5f - padding * 1.5f, refreshButton.GetSize().y));
+	refreshButton.SetSize(XMFLOAT2(layout.width * 0.5f - layout.padding * 1.5f, refreshButton.GetSize().y));
 	refreshAllButton.SetSize(refreshButton.GetSize());
-	refreshAllButton.SetPos(XMFLOAT2(width - padding - refreshButton.GetSize().x, y));
-	refreshButton.SetPos(XMFLOAT2(refreshAllButton.GetPos().x - padding - refreshButton.GetSize().x, y));
-	y += refreshAllButton.GetSize().y;
-	y += padding;
+	refreshAllButton.SetPos(XMFLOAT2(layout.width - layout.padding - refreshButton.GetSize().x, layout.y));
+	refreshButton.SetPos(XMFLOAT2(refreshAllButton.GetPos().x - layout.padding - refreshButton.GetSize().x, layout.y));
+	layout.y += refreshAllButton.GetSize().y;
+	layout.y += layout.padding;
 
-	importButton.SetSize(XMFLOAT2(width - padding * 2, importButton.GetSize().y));
-	importButton.SetPos(XMFLOAT2(padding, y));
-	y += importButton.GetSize().y;
-	y += padding;
+	importButton.SetSize(XMFLOAT2(layout.width - layout.padding * 2, importButton.GetSize().y));
+	importButton.SetPos(XMFLOAT2(layout.padding, layout.y));
+	layout.y += importButton.GetSize().y;
+	layout.y += layout.padding;
 
-	exportButton.SetSize(XMFLOAT2(width - padding * 2, exportButton.GetSize().y));
-	exportButton.SetPos(XMFLOAT2(padding, y));
-	y += exportButton.GetSize().y;
-	y += padding;
+	exportButton.SetSize(XMFLOAT2(layout.width - layout.padding * 2, exportButton.GetSize().y));
+	exportButton.SetPos(XMFLOAT2(layout.padding, layout.y));
+	layout.y += exportButton.GetSize().y;
+	layout.y += layout.padding;
 
-	resolutionCombo.SetSize(XMFLOAT2(width - 100 - resolutionCombo.GetSize().y - padding, resolutionCombo.GetSize().y));
-	resolutionCombo.SetPos(XMFLOAT2(100, y));
-	y += resolutionCombo.GetSize().y;
-	y += padding;
+	layout.add(resolutionCombo);
 
-	add_right(realTimeCheckBox);
-	add_right(msaaCheckBox);
+	layout.add_right(realTimeCheckBox);
+	layout.add_right(msaaCheckBox);
 
 
 }

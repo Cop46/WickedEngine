@@ -19,7 +19,7 @@ ModifierWindow::ModifierWindow(const std::string& name)
 	blendCombo.OnSelect([=](wi::gui::EventArgs args) {
 		modifier->blend = (wi::terrain::Modifier::BlendMode)args.userdata;
 		generation_callback();
-		});
+	});
 	AddWidget(&blendCombo);
 
 	weightSlider.Create(0, 1, 0.5f, 10000, "Weight: ");
@@ -28,31 +28,31 @@ ModifierWindow::ModifierWindow(const std::string& name)
 	weightSlider.OnSlide([=](wi::gui::EventArgs args) {
 		modifier->weight = args.fValue;
 		generation_callback();
-		});
+	});
 	AddWidget(&weightSlider);
 
-	frequencySlider.Create(0.0001f, 0.01f, 0.0008f, 10000, "Frequency: ");
-	frequencySlider.SetSize(XMFLOAT2(100, 20));
-	frequencySlider.SetTooltip("Frequency for the tiling");
-	frequencySlider.OnSlide([=](wi::gui::EventArgs args) {
-		modifier->frequency = args.fValue;
+	scaleSlider.Create(0.1f, 10000, 1000, 10000, "Scale: ");
+	scaleSlider.SetSize(XMFLOAT2(100, 20));
+	scaleSlider.SetTooltip("Horizontal world scale of the modifier");
+	scaleSlider.OnSlide([=](wi::gui::EventArgs args) {
+		modifier->SetScale(args.fValue);
 		generation_callback();
-		});
-	AddWidget(&frequencySlider);
+	});
+	AddWidget(&scaleSlider);
 }
 void ModifierWindow::Bind(wi::terrain::Modifier* ptr)
 {
 	modifier = ptr;
 	modifier->blend = (wi::terrain::Modifier::BlendMode)blendCombo.GetItemUserData(blendCombo.GetSelected());
 	modifier->weight = weightSlider.GetValue();
-	modifier->frequency = frequencySlider.GetValue();
+	modifier->SetScale(scaleSlider.GetValue());
 }
 void ModifierWindow::From(wi::terrain::Modifier* ptr)
 {
 	modifier = ptr;
 	blendCombo.SetSelectedByUserdataWithoutCallback((uint64_t)ptr->blend);
 	weightSlider.SetValue(ptr->weight);
-	frequencySlider.SetValue(ptr->frequency);
+	scaleSlider.SetValue(ptr->GetScale());
 }
 
 PerlinModifierWindow::PerlinModifierWindow() : ModifierWindow("Perlin Noise")
@@ -72,24 +72,13 @@ PerlinModifierWindow::PerlinModifierWindow() : ModifierWindow("Perlin Noise")
 void PerlinModifierWindow::ResizeLayout()
 {
 	ModifierWindow::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 100;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		const float margin_left = 100;
-		const float margin_right = 50;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add(blendCombo);
+	layout.add(weightSlider);
+	layout.add(scaleSlider);
 
-	add(blendCombo);
-	add(weightSlider);
-	add(frequencySlider);
-
-	add(octavesSlider);
+	layout.add(octavesSlider);
 }
 void PerlinModifierWindow::Bind(wi::terrain::PerlinModifier* ptr)
 {
@@ -146,27 +135,16 @@ VoronoiModifierWindow::VoronoiModifierWindow() : ModifierWindow("Voronoi Noise")
 void VoronoiModifierWindow::ResizeLayout()
 {
 	ModifierWindow::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 100;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		const float margin_left = 100;
-		const float margin_right = 50;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add(blendCombo);
+	layout.add(weightSlider);
+	layout.add(scaleSlider);
 
-	add(blendCombo);
-	add(weightSlider);
-	add(frequencySlider);
-
-	add(fadeSlider);
-	add(shapeSlider);
-	add(falloffSlider);
-	add(perturbationSlider);
+	layout.add(fadeSlider);
+	layout.add(shapeSlider);
+	layout.add(falloffSlider);
+	layout.add(perturbationSlider);
 }
 void VoronoiModifierWindow::Bind(wi::terrain::VoronoiModifier* ptr)
 {
@@ -188,15 +166,15 @@ void VoronoiModifierWindow::From(wi::terrain::VoronoiModifier* ptr)
 HeightmapModifierWindow::HeightmapModifierWindow() : ModifierWindow("Heightmap")
 {
 	weightSlider.SetValue(1);
-	frequencySlider.SetValue(1);
+	amountSlider.SetValue(1000);
 
-	scaleSlider.Create(0, 1, 0.1f, 1000, "Scale: ");
-	scaleSlider.SetSize(XMFLOAT2(100, 20));
-	scaleSlider.OnSlide([=](wi::gui::EventArgs args) {
-		((wi::terrain::HeightmapModifier*)modifier)->scale = args.fValue;
+	amountSlider.Create(0, 1, 0.1f, 1000, "Amount: ");
+	amountSlider.SetSize(XMFLOAT2(100, 20));
+	amountSlider.OnSlide([=](wi::gui::EventArgs args) {
+		((wi::terrain::HeightmapModifier*)modifier)->amount = args.fValue;
 		generation_callback();
 		});
-	AddWidget(&scaleSlider);
+	AddWidget(&amountSlider);
 
 	loadButton.Create("Load Heightmap...");
 	loadButton.SetTooltip("Load a heightmap texture, where the red channel corresponds to terrain height and the resolution to dimensions.\nThe heightmap will be placed in the world center.\nIt is recommended to use a 16-bit PNG for heightmaps.");
@@ -260,35 +238,24 @@ HeightmapModifierWindow::HeightmapModifierWindow() : ModifierWindow("Heightmap")
 void HeightmapModifierWindow::ResizeLayout()
 {
 	ModifierWindow::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 100;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		const float margin_left = 100;
-		const float margin_right = 50;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add(blendCombo);
+	layout.add(weightSlider);
+	layout.add(scaleSlider);
 
-	add(blendCombo);
-	add(weightSlider);
-	add(frequencySlider);
-
-	add(scaleSlider);
-	add(loadButton);
+	layout.add(amountSlider);
+	layout.add(loadButton);
 }
 void HeightmapModifierWindow::Bind(wi::terrain::HeightmapModifier* ptr)
 {
 	ModifierWindow::Bind(ptr);
-	ptr->scale = scaleSlider.GetValue();
+	ptr->amount = amountSlider.GetValue();
 }
 void HeightmapModifierWindow::From(wi::terrain::HeightmapModifier* ptr)
 {
 	ModifierWindow::From(ptr);
-	scaleSlider.SetValue(ptr->scale);
+	amountSlider.SetValue(ptr->amount);
 }
 
 PropWindow::PropWindow(wi::terrain::Terrain* terrain, wi::terrain::Prop* prop, wi::scene::Scene* scene)
@@ -494,31 +461,20 @@ void PropWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
 
-	constexpr float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 150;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		constexpr float margin_left = 150;
-		constexpr float margin_right = 50;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add(meshCombo);
-	add(minCountPerChunkInput);
-	add(maxCountPerChunkInput);
-	add(regionCombo);
-	add(regionPowerSlider);
-	add(noiseFrequencySlider);
-	add(noisePowerSlider);
-	add(thresholdSlider);
-	add(minSizeSlider);
-	add(maxSizeSlider);
-	add(minYOffsetInput);
-	add(maxYOffsetInput);
+	layout.add(meshCombo);
+	layout.add(minCountPerChunkInput);
+	layout.add(maxCountPerChunkInput);
+	layout.add(regionCombo);
+	layout.add(regionPowerSlider);
+	layout.add(noiseFrequencySlider);
+	layout.add(noisePowerSlider);
+	layout.add(thresholdSlider);
+	layout.add(minSizeSlider);
+	layout.add(maxSizeSlider);
+	layout.add(minYOffsetInput);
+	layout.add(maxYOffsetInput);
 }
 
 PropsWindow::PropsWindow(EditorComponent* editor)
@@ -568,14 +524,14 @@ void PropsWindow::AddWindow(wi::terrain::Prop& prop)
 {
 	PropWindow* wnd = new PropWindow(terrain, &prop, &editor->GetCurrentScene());
 	wnd->generation_callback = generation_callback;
-	wnd->OnClose([&, wnd](wi::gui::EventArgs args) {
+	wnd->OnClose([this, wnd](wi::gui::EventArgs args) {
 		windows_to_remove.push_back(wnd);
 	});
 	AddWidget(wnd);
 
 	windows.emplace_back().reset(wnd);
 
-	editor->generalWnd.themeCombo.SetSelected(editor->generalWnd.themeCombo.GetSelected()); // theme refresh
+	editor->generalWnd.RefreshTheme();
 }
 
 void PropsWindow::Update(const wi::Canvas& canvas, float dt)
@@ -621,48 +577,17 @@ void PropsWindow::Update(const wi::Canvas& canvas, float dt)
 
 void PropsWindow::ResizeLayout()
 {
-	constexpr float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 150;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		constexpr float margin_left = 150;
-		constexpr float margin_right = 50;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-		};
-
-	auto add_window = [&](wi::gui::Window& widget) {
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-		widget.SetEnabled(true);
-	};
-
-	add_fullwidth(addButton);
+	layout.add_fullwidth(addButton);
 
 	for(auto& window : windows)
 	{
-		add_window(*window);
+		layout.add_fullwidth(*window);
+		window->SetEnabled(true);
 	}
 
-	SetSize(XMFLOAT2(GetScale().x, control_size + y));
+	SetSize(XMFLOAT2(GetScale().x, control_size + layout.y));
 
 	wi::gui::Window::ResizeLayout();
 }
@@ -751,13 +676,12 @@ void TerrainWindow::Create(EditorComponent* _editor)
 	AddWidget(&grassCheckBox);
 
 	physicsCheckBox.Create("Physics: ");
-	physicsCheckBox.SetTooltip("Specify whether physics is enabled for newly generated terrain chunks.");
+	physicsCheckBox.SetTooltip("Specify whether physics is enabled for terrain chunks.");
 	physicsCheckBox.SetSize(XMFLOAT2(hei, hei));
 	physicsCheckBox.SetPos(XMFLOAT2(x, y += step));
 	physicsCheckBox.SetCheck(true);
 	physicsCheckBox.OnClick([=](wi::gui::EventArgs args) {
 		terrain->SetPhysicsEnabled(args.bValue);
-		generate_callback();
 		});
 	AddWidget(&physicsCheckBox);
 
@@ -899,10 +823,10 @@ void TerrainWindow::Create(EditorComponent* _editor)
 			bottomLevelSlider.SetValue(-60);
 			topLevelSlider.SetValue(380);
 			perlin->weightSlider.SetValue(0.5f);
-			perlin->frequencySlider.SetValue(0.0008f);
+			perlin->scaleSlider.SetValue(1250);
 			perlin->octavesSlider.SetValue(6);
 			voronoi->weightSlider.SetValue(0.5f);
-			voronoi->frequencySlider.SetValue(0.001f);
+			voronoi->scaleSlider.SetValue(1000);
 			voronoi->fadeSlider.SetValue(2.59f);
 			voronoi->shapeSlider.SetValue(0.7f);
 			voronoi->falloffSlider.SetValue(6);
@@ -917,10 +841,10 @@ void TerrainWindow::Create(EditorComponent* _editor)
 			bottomLevelSlider.SetValue(-79);
 			topLevelSlider.SetValue(520);
 			perlin->weightSlider.SetValue(0.5f);
-			perlin->frequencySlider.SetValue(0.000991f);
+			perlin->scaleSlider.SetValue(500);
 			perlin->octavesSlider.SetValue(6);
 			voronoi->weightSlider.SetValue(0.5f);
-			voronoi->frequencySlider.SetValue(0.000317f);
+			voronoi->scaleSlider.SetValue(3154);
 			voronoi->fadeSlider.SetValue(8.2f);
 			voronoi->shapeSlider.SetValue(0.126f);
 			voronoi->falloffSlider.SetValue(1.392f);
@@ -935,17 +859,17 @@ void TerrainWindow::Create(EditorComponent* _editor)
 			bottomLevelSlider.SetValue(0);
 			topLevelSlider.SetValue(2960);
 			perlin->weightSlider.SetValue(0.5f);
-			perlin->frequencySlider.SetValue(0.00279f);
+			perlin->scaleSlider.SetValue(699);
 			perlin->octavesSlider.SetValue(8);
 			voronoi->weightSlider.SetValue(0.5f);
-			voronoi->frequencySlider.SetValue(0.000496f);
+			voronoi->scaleSlider.SetValue(2016);
 			voronoi->fadeSlider.SetValue(5.2f);
 			voronoi->shapeSlider.SetValue(0.412f);
 			voronoi->falloffSlider.SetValue(1.456f);
 			voronoi->perturbationSlider.SetValue(0.092f);
-			region1Slider.SetValue(1);
-			region2Slider.SetValue(1);
-			region3Slider.SetValue(0.8f);
+			region1Slider.SetValue(0.7f);
+			region2Slider.SetValue(2);
+			region3Slider.SetValue(0.2f);
 			break;
 		case PRESET_ARCTIC:
 			terrain->weather.SetOceanEnabled(false);
@@ -953,10 +877,10 @@ void TerrainWindow::Create(EditorComponent* _editor)
 			bottomLevelSlider.SetValue(-50);
 			topLevelSlider.SetValue(40);
 			perlin->weightSlider.SetValue(1);
-			perlin->frequencySlider.SetValue(0.002f);
+			perlin->scaleSlider.SetValue(500);
 			perlin->octavesSlider.SetValue(4);
 			voronoi->weightSlider.SetValue(1);
-			voronoi->frequencySlider.SetValue(0.004f);
+			voronoi->scaleSlider.SetValue(250);
 			voronoi->fadeSlider.SetValue(1.8f);
 			voronoi->shapeSlider.SetValue(0.518f);
 			voronoi->falloffSlider.SetValue(0.2f);
@@ -971,10 +895,10 @@ void TerrainWindow::Create(EditorComponent* _editor)
 			bottomLevelSlider.SetValue(-50);
 			topLevelSlider.SetValue(40);
 			perlin->weightSlider.SetValue(1);
-			perlin->frequencySlider.SetValue(0.002f);
+			perlin->scaleSlider.SetValue(500);
 			perlin->octavesSlider.SetValue(4);
 			voronoi->weightSlider.SetValue(1);
-			voronoi->frequencySlider.SetValue(0.004f);
+			voronoi->scaleSlider.SetValue(250);
 			voronoi->fadeSlider.SetValue(1.8f);
 			voronoi->shapeSlider.SetValue(0.518f);
 			voronoi->falloffSlider.SetValue(0.2f);
@@ -1027,7 +951,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 				PerlinModifierWindow* ptr = new PerlinModifierWindow;
 				std::shared_ptr<wi::terrain::PerlinModifier> modifier = std::make_shared<wi::terrain::PerlinModifier>();
 				terrain->modifiers.push_back(modifier);
-				ptr->Bind(modifier.get());
+				ptr->From(modifier.get());
 				AddModifier(ptr);
 			}
 			break;
@@ -1036,7 +960,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 				VoronoiModifierWindow* ptr = new VoronoiModifierWindow;
 				std::shared_ptr<wi::terrain::VoronoiModifier> modifier = std::make_shared<wi::terrain::VoronoiModifier>();
 				terrain->modifiers.push_back(modifier);
-				ptr->Bind(modifier.get());
+				ptr->From(modifier.get());
 				AddModifier(ptr);
 			}
 			break;
@@ -1045,7 +969,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 				HeightmapModifierWindow* ptr = new HeightmapModifierWindow;
 				std::shared_ptr<wi::terrain::HeightmapModifier> modifier = std::make_shared<wi::terrain::HeightmapModifier>();
 				terrain->modifiers.push_back(modifier);
-				ptr->Bind(modifier.get());
+				ptr->From(modifier.get());
 				AddModifier(ptr);
 			}
 			break;
@@ -1147,7 +1071,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 		materialCombos[i].SetTooltip("Select material entity");
 		materialCombos[i].SetSize(XMFLOAT2(wid, hei));
 		materialCombos[i].SetPos(XMFLOAT2(x, y += step));
-		materialCombos[i].OnSelect([&, i](wi::gui::EventArgs args) {
+		materialCombos[i].OnSelect([this, i](wi::gui::EventArgs args) {
 			const Scene& scene = editor->GetCurrentScene();
 			wi::ecs::Entity entity = static_cast<wi::ecs::Entity>(args.userdata);
 			if (entity != INVALID_ENTITY && scene.materials.Contains(entity))
@@ -1172,7 +1096,7 @@ void TerrainWindow::Create(EditorComponent* _editor)
 	materialCombo_GrassParticle.SetTooltip("Select material entity");
 	materialCombo_GrassParticle.SetSize(XMFLOAT2(wid, hei));
 	materialCombo_GrassParticle.SetPos(XMFLOAT2(x, y += step));
-	materialCombo_GrassParticle.OnSelect([&](wi::gui::EventArgs args) {
+	materialCombo_GrassParticle.OnSelect([this](wi::gui::EventArgs args) {
 		const Scene& scene = editor->GetCurrentScene();
 		wi::ecs::Entity entity = static_cast<wi::ecs::Entity>(args.userdata);
 		if (entity != INVALID_ENTITY && scene.materials.Contains(entity))
@@ -1371,7 +1295,6 @@ void TerrainWindow::SetEntity(Entity entity)
 		modifiers_to_remove.push_back(x.get());
 	}
 
-
 	centerToCamCheckBox.SetCheck(terrain->IsCenterToCamEnabled());
 	removalCheckBox.SetCheck(terrain->IsRemovalEnabled());
 	grassCheckBox.SetCheck(terrain->IsGrassEnabled());
@@ -1393,34 +1316,7 @@ void TerrainWindow::SetEntity(Entity entity)
 	region2Slider.SetValue(terrain->region2);
 	region3Slider.SetValue(terrain->region3);
 
-	auto fillMaterialCombo = [&](wi::gui::ComboBox& comboBox, Entity selected) {
-		comboBox.ClearItems();
-		comboBox.AddItem("NO MATERIAL", INVALID_ENTITY);
-		for (size_t i = 0; i < scene.materials.GetCount(); ++i)
-		{
-			Entity entity = scene.materials.GetEntity(i);
-			if (scene.names.Contains(entity))
-			{
-				const NameComponent& name = *scene.names.GetComponent(entity);
-				comboBox.AddItem(name.name, entity);
-			}
-			else
-			{
-				comboBox.AddItem(std::to_string(entity), entity);
-			}
-
-			if (selected == entity)
-			{
-				comboBox.SetSelectedWithoutCallback(int(i + 1));
-			}
-		}
-	};
-
-	for (size_t i = 0; i < arraysize(materialCombos); ++i)
-	{
-		fillMaterialCombo(materialCombos[i], terrain->materialEntities[i]);
-	}
-	fillMaterialCombo(materialCombo_GrassParticle, terrain->grassEntity);
+	RefreshMaterialComboBoxes();
 
 	for (auto& x : terrain->modifiers)
 	{
@@ -1455,6 +1351,38 @@ void TerrainWindow::SetEntity(Entity entity)
 
 	editor->paintToolWnd.RecreateTerrainMaterialButtons();
 }
+void TerrainWindow::RefreshMaterialComboBoxes()
+{
+	wi::scene::Scene& scene = editor->GetCurrentScene();
+	auto fillMaterialCombo = [&](wi::gui::ComboBox& comboBox, Entity selected) {
+		comboBox.ClearItems();
+		comboBox.AddItem("NO MATERIAL", INVALID_ENTITY);
+		for (size_t i = 0; i < scene.materials.GetCount(); ++i)
+		{
+			Entity entity = scene.materials.GetEntity(i);
+			if (scene.names.Contains(entity))
+			{
+				const NameComponent& name = *scene.names.GetComponent(entity);
+				comboBox.AddItem(name.name, entity);
+			}
+			else
+			{
+				comboBox.AddItem(std::to_string(entity), entity);
+			}
+
+			if (selected == entity)
+			{
+				comboBox.SetSelectedWithoutCallback(int(i + 1));
+			}
+		}
+	};
+
+	for (size_t i = 0; i < arraysize(materialCombos); ++i)
+	{
+		fillMaterialCombo(materialCombos[i], terrain->materialEntities[i]);
+	}
+	fillMaterialCombo(materialCombo_GrassParticle, terrain->grassEntity);
+}
 void TerrainWindow::AddModifier(ModifierWindow* modifier_window)
 {
 	modifier_window->generation_callback = [=]() {
@@ -1469,7 +1397,7 @@ void TerrainWindow::AddModifier(ModifierWindow* modifier_window)
 		modifiers_to_remove.push_back(modifier_window);
 		});
 
-	editor->generalWnd.themeCombo.SetSelected(editor->generalWnd.themeCombo.GetSelected()); // theme refresh
+	editor->generalWnd.RefreshTheme();
 }
 void TerrainWindow::SetupAssets()
 {
@@ -1488,6 +1416,21 @@ void TerrainWindow::SetupAssets()
 	{
 		terrain_preset.materialEntities[i] = CreateEntity();
 		currentScene.materials.Create(terrain_preset.materialEntities[i]);
+		switch (i)
+		{
+		case wi::terrain::MATERIAL_BASE:
+			currentScene.names.Create(terrain_preset.materialEntities[i]) = "Base";
+			break;
+		case wi::terrain::MATERIAL_SLOPE:
+			currentScene.names.Create(terrain_preset.materialEntities[i]) = "Slope";
+			break;
+		case wi::terrain::MATERIAL_LOW_ALTITUDE:
+			currentScene.names.Create(terrain_preset.materialEntities[i]) = "LowAltitude";
+			break;
+		case wi::terrain::MATERIAL_HIGH_ALTITUDE:
+			currentScene.names.Create(terrain_preset.materialEntities[i]) = "HighAltitude";
+			break;
+		}
 		currentScene.Component_Attach(terrain_preset.materialEntities[i], entity);
 	}
 
@@ -1833,6 +1776,8 @@ void TerrainWindow::SetupAssets()
 	presetCombo.SetSelected(0);
 
 	editor->paintToolWnd.RecreateTerrainMaterialButtons();
+
+	RefreshMaterialComboBoxes();
 }
 
 void TerrainWindow::Update(const wi::Canvas& canvas, float dt)
@@ -1859,72 +1804,48 @@ void TerrainWindow::Update(const wi::Canvas& canvas, float dt)
 }
 void TerrainWindow::ResizeLayout()
 {
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
+	layout.margin_left = 150;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		const float margin_left = 150;
-		const float margin_right = 45;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_checkbox = [&](wi::gui::CheckBox& widget) {
-		const float margin_right = 45;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_window = [&](wi::gui::Window& widget) {
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-		widget.SetEnabled(true);
-	};
-
-	add_checkbox(removalCheckBox);
+	layout.add_right(removalCheckBox);
 	centerToCamCheckBox.SetPos(XMFLOAT2(removalCheckBox.GetPos().x - 100, removalCheckBox.GetPos().y));
-	add_checkbox(grassCheckBox);
+	layout.add_right(grassCheckBox);
 	physicsCheckBox.SetPos(XMFLOAT2(grassCheckBox.GetPos().x - 100, grassCheckBox.GetPos().y));
-	add_checkbox(tessellationCheckBox);
-	add(lodSlider);
-	add(generationSlider);
-	add(propGenerationSlider);
-	add(physicsGenerationSlider);
-	add(propDensitySlider);
-	add(grassDensitySlider);
-	add(grassLengthSlider);
-	add(grassDistanceSlider);
-	add(presetCombo);
-	add(scaleSlider);
-	add(seedSlider);
-	add(bottomLevelSlider);
-	add(topLevelSlider);
-	add(region1Slider);
-	add(region2Slider);
-	add(region3Slider);
+	layout.add_right(tessellationCheckBox);
+	layout.add(lodSlider);
+	layout.add(generationSlider);
+	layout.add(propGenerationSlider);
+	layout.add(physicsGenerationSlider);
+	layout.add(propDensitySlider);
+	layout.add(grassDensitySlider);
+	layout.add(grassLengthSlider);
+	layout.add(grassDistanceSlider);
+	layout.add(presetCombo);
+	layout.add(scaleSlider);
+	layout.add(seedSlider);
+	layout.add(bottomLevelSlider);
+	layout.add(topLevelSlider);
+	layout.add(region1Slider);
+	layout.add(region2Slider);
+	layout.add(region3Slider);
 	for (size_t i = 0; i < arraysize(materialCombos); ++i)
 	{
-		add(materialCombos[i]);
+		layout.add(materialCombos[i]);
 	}
-	add(materialCombo_GrassParticle);
-	add(saveHeightmapButton);
-	add(saveRegionButton);
-	add(addModifierCombo);
+	layout.add(materialCombo_GrassParticle);
+	layout.add(saveHeightmapButton);
+	layout.add(saveRegionButton);
+	layout.add(addModifierCombo);
 
 	for (auto& modifier : modifiers)
 	{
-		add_window(*modifier);
+		layout.add_fullwidth(*modifier);
+		modifier->SetEnabled(true);
 	}
 
-	add_window(*propsWindow.get());
+	layout.add_fullwidth(*propsWindow.get());
+	propsWindow->SetEnabled(true);
 
-	SetSize(XMFLOAT2(GetScale().x, y + control_size));
+	SetSize(XMFLOAT2(GetScale().x, layout.y + control_size));
 
 	wi::gui::Window::ResizeLayout();
 }

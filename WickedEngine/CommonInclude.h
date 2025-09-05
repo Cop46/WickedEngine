@@ -16,6 +16,12 @@
 
 // Simple common math helpers:
 
+template<typename T>
+constexpr T align(T value, T alignment)
+{
+	return ((value + alignment - T(1)) / alignment) * alignment;
+}
+
 template <typename T>
 constexpr T sqr(T x) { return x * x; }
 
@@ -82,6 +88,28 @@ struct StackString
 	constexpr unsigned size() const { return capacity; }
 	constexpr unsigned length() const { return cnt; }
 	constexpr bool empty() const { return cnt == 0; }
+};
+
+// Stack allocated simplified vector container:
+template<typename T, unsigned count>
+struct StackVector
+{
+	T items[count] = {};
+	unsigned last = 0;
+	constexpr unsigned size() const { return last; }
+	constexpr bool empty() const { return last == 0; }
+	constexpr void push_back(const T& item) { items[last++] = item; }
+	constexpr void push_back(T&& item) { items[last++] = static_cast<T&&>(item); }
+	constexpr void pop_back() { if (!empty()) items[--last] = {}; }
+	constexpr void clear() { for (unsigned i = 0; i < count; ++i) items[i] = {}; last = 0; }
+	constexpr T* begin() { return items; }
+	constexpr T* end() { return items + last; }
+	constexpr const T& back() const { return items[last - 1]; }
+	constexpr T& back() { return items[0]; }
+	constexpr const T& front() const { return items[last - 1]; }
+	constexpr T& front() { return items[0]; }
+	constexpr const T& operator[](unsigned index) const { return items[index]; }
+	constexpr T& operator[](unsigned index) { return items[index]; }
 };
 
 // CPU intrinsics:
@@ -155,7 +183,7 @@ inline unsigned long firstbithigh(unsigned long long value)
 	unsigned long bit_index;
 	if (_BitScanReverse64(&bit_index, value))
 	{
-		return 31ull - bit_index;
+		return 63ull - bit_index;
 	}
 	return 0;
 }

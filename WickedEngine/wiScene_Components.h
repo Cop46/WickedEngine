@@ -15,6 +15,7 @@
 #include "wiUnorderedSet.h"
 #include "wiBVH.h"
 #include "wiPathQuery.h"
+#include "wiAllocator.h"
 
 namespace wi::scene
 {
@@ -56,7 +57,7 @@ namespace wi::scene
 		XMFLOAT3 translation_local = XMFLOAT3(0, 0, 0);
 
 		// Non-serialized attributes:
-		float padding = 0;
+		float _padding = 0;
 
 		// The world matrix can be computed from local scale, rotation, translation
 		//	- by calling UpdateTransform()
@@ -94,6 +95,7 @@ namespace wi::scene
 		void Translate(const XMFLOAT3& value);
 		void Translate(const XMVECTOR& value);
 		void RotateRollPitchYaw(const XMFLOAT3& value);
+		void RotateRollPitchYaw(const XMVECTOR& value);
 		void Rotate(const XMFLOAT4& quaternion);
 		void Rotate(const XMVECTOR& quaternion);
 		void Scale(const XMFLOAT3& value);
@@ -182,7 +184,7 @@ namespace wi::scene
 		XMFLOAT4 emissiveColor = XMFLOAT4(1, 1, 1, 0);
 		XMFLOAT4 subsurfaceScattering = XMFLOAT4(1, 1, 1, 0);
 		XMFLOAT4 extinctionColor = XMFLOAT4(0, 0.9f, 1, 1);
-		XMFLOAT4 texMulAdd = XMFLOAT4(1, 1, 0, 0);
+		XMFLOAT4 texMulAdd = XMFLOAT4(1, 1, 0, 0); // dynamic multiplier (.xy) and addition (.zw) for UV coordinates
 		float roughness = 0.2f;
 		float reflectance = 0.02f;
 		float metalness = 0.0f;
@@ -198,6 +200,7 @@ namespace wi::scene
 		float cloak = 0;
 		float chromatic_aberration = 0;
 		float saturation = 1;
+		float mesh_blend = 0;
 
 		XMFLOAT4 sheenColor = XMFLOAT4(1, 1, 1, 1);
 		float sheenRoughness = 0;
@@ -372,6 +375,8 @@ namespace wi::scene
 		constexpr bool IsCapsuleShadowDisabled() const { return _flags & DISABLE_CAPSULE_SHADOW; }
 		constexpr void SetCapsuleShadowDisabled(bool value = true) { if (value) { _flags |= DISABLE_CAPSULE_SHADOW; } else { _flags &= ~DISABLE_CAPSULE_SHADOW; } }
 
+		constexpr void SetMeshBlend(float value) { mesh_blend = value; SetDirty(); }
+		constexpr float GetMeshBlend() const { return mesh_blend; }
 
 		void SetPreferUncompressedTexturesEnabled(bool value = true) { if (value) { _flags |= PREFER_UNCOMPRESSED_TEXTURES; } else { _flags &= ~PREFER_UNCOMPRESSED_TEXTURES; } CreateRenderData(true); }
 
@@ -402,10 +407,11 @@ namespace wi::scene
 			KINEMATIC = 1 << 1,
 			START_DEACTIVATED = 1 << 2,
 			REFRESH_PARAMETERS_REQUEST = 1 << 3,
+			CHARACTER_PHYSICS = 1 << 4,
 		};
 		uint32_t _flags = EMPTY;
 
-		enum CollisionShape
+		enum CollisionShape : uint32_t
 		{
 			BOX,
 			SPHERE,
@@ -414,7 +420,6 @@ namespace wi::scene
 			TRIANGLE_MESH,
 			CYLINDER,
 			HEIGHTFIELD,
-			ENUM_FORCE_UINT32 = 0xFFFFFFFF
 		};
 		CollisionShape shape = BOX;
 		float mass = 1.0f; // Set to 0 to make body static
@@ -507,6 +512,12 @@ namespace wi::scene
 
 		} vehicle;
 
+		struct Character
+		{
+			float maxSlopeAngle = wi::math::DegreesToRadians(50.0f);	// Maximum angle of slope that character can still walk on (radians).
+			float gravityFactor = 1.0f;
+		} character;
+
 		// Non-serialized attributes:
 		std::shared_ptr<void> physicsobject = nullptr; // You can set to null to recreate the physics object the next time phsyics system will be running.
 
@@ -523,6 +534,9 @@ namespace wi::scene
 
 		constexpr void SetRefreshParametersNeeded(bool value = true) { if (value) { _flags |= REFRESH_PARAMETERS_REQUEST; } else { _flags &= ~REFRESH_PARAMETERS_REQUEST; } }
 		constexpr bool IsRefreshParametersNeeded() const { return _flags & REFRESH_PARAMETERS_REQUEST; }
+
+		constexpr void SetCharacterPhysics(bool value = true) { if (value) { _flags |= CHARACTER_PHYSICS; } else { _flags &= ~CHARACTER_PHYSICS; } }
+		constexpr bool IsCharacterPhysics() const { return _flags & CHARACTER_PHYSICS; }
 
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
@@ -615,6 +629,8 @@ namespace wi::scene
 			float max_force = 0; // N
 		} slider_constraint;
 
+		float break_distance = FLT_MAX; // how much the constraint is allowed to be exerted before breaking, calculated as relative distance
+
 		// Non-serialized attributes:
 		std::shared_ptr<void> physicsobject = nullptr; // You can set to null to recreate the physics object the next time phsyics system will be running.
 
@@ -645,7 +661,7 @@ namespace wi::scene
 			BVH_ENABLED = 1 << 8,
 			QUANTIZED_POSITIONS_DISABLED = 1 << 9,
 		};
-		uint32_t _flags = RENDERABLE;
+		// *uint32_t _flags is moved down for better struct padding...
 
 		wi::vector<XMFLOAT3> vertex_positions;
 		wi::vector<XMFLOAT3> vertex_normals;
@@ -704,6 +720,8 @@ namespace wi::scene
 		wi::primitive::AABB aabb;
 		wi::graphics::GPUBuffer generalBuffer; // index buffer + all static vertex buffers
 		wi::graphics::GPUBuffer streamoutBuffer; // all dynamic vertex buffers
+		wi::allocator::PageAllocator::Allocation generalBufferOffsetAllocation;
+		wi::graphics::GPUBuffer generalBufferOffsetAllocationAlias;
 		struct BufferView
 		{
 			uint64_t offset = ~0ull;
@@ -741,13 +759,6 @@ namespace wi::scene
 		XMFLOAT2 uv_range_max = XMFLOAT2(1, 1);
 
 		wi::vector<wi::graphics::RaytracingAccelerationStructure> BLASes; // one BLAS per LOD
-		enum BLAS_STATE
-		{
-			BLAS_STATE_NEEDS_REBUILD,
-			BLAS_STATE_NEEDS_REFIT,
-			BLAS_STATE_COMPLETE,
-		};
-		mutable BLAS_STATE BLAS_state = BLAS_STATE_NEEDS_REBUILD;
 
 		wi::vector<wi::primitive::AABB> bvh_leaf_aabbs;
 		wi::BVH bvh;
@@ -760,6 +771,16 @@ namespace wi::scene
 		wi::vector<SubsetClusterRange> cluster_ranges;
 
 		RigidBodyPhysicsComponent precomputed_rigidbody_physics_shape; // you can precompute a physics shape here if you need without using a real rigid body component yet
+
+		uint32_t _flags = RENDERABLE; // *this is serialized but put here for better struct padding
+
+		enum BLAS_STATE
+		{
+			BLAS_STATE_NEEDS_REBUILD,
+			BLAS_STATE_NEEDS_REFIT,
+			BLAS_STATE_COMPLETE,
+		};
+		mutable BLAS_STATE BLAS_state = BLAS_STATE_NEEDS_REBUILD;
 
 		constexpr void SetRenderable(bool value) { if (value) { _flags |= RENDERABLE; } else { _flags &= ~RENDERABLE; } }
 		constexpr void SetDoubleSided(bool value) { if (value) { _flags |= DOUBLE_SIDED; } else { _flags &= ~DOUBLE_SIDED; } }
@@ -1161,6 +1182,7 @@ namespace wi::scene
 
 		uint16_t lod = 0;
 		mutable bool wetmap_cleared = false;
+		bool mesh_blend_required = false;
 
 		// these will only be valid for a single frame:
 		uint32_t mesh_index = ~0u;
@@ -1299,17 +1321,13 @@ namespace wi::scene
 		};
 		uint32_t _flags = EMPTY;
 
-		enum LightType
+		enum LightType : uint32_t
 		{
-			DIRECTIONAL = ENTITY_TYPE_DIRECTIONALLIGHT,
-			POINT = ENTITY_TYPE_POINTLIGHT,
-			SPOT = ENTITY_TYPE_SPOTLIGHT,
-			//SPHERE = ENTITY_TYPE_SPHERELIGHT,
-			//DISC = ENTITY_TYPE_DISCLIGHT,
-			//RECTANGLE = ENTITY_TYPE_RECTANGLELIGHT,
-			//TUBE = ENTITY_TYPE_TUBELIGHT,
+			DIRECTIONAL,
+			POINT,
+			SPOT,
+			RECTANGLE,
 			LIGHTTYPE_COUNT,
-			ENUM_FORCE_UINT32 = 0xFFFFFFFF,
 		};
 		LightType type = POINT;
 
@@ -1319,13 +1337,16 @@ namespace wi::scene
 		float outerConeAngle = XM_PIDIV4;
 		float innerConeAngle = 0; // default value is 0, means only outer cone angle is used
 		float radius = 0.025f;
-		float length = 0;
+		float length = 0; // point lights: line/capsule length; rect light: width
+		float height = 0; // rect light only
 		float volumetric_boost = 0; // increase the strength of volumetric fog only for this light
 
 		wi::vector<float> cascade_distances = { 8,80,800 };
 		wi::vector<std::string> lensFlareNames;
 
 		int forced_shadow_resolution = -1; // -1: disabled, greater: fixed shadow map resolution
+
+		wi::ecs::Entity cameraSource = wi::ecs::INVALID_ENTITY; // take texture from camera render
 
 		// Non-serialized attributes:
 		XMFLOAT3 position = XMFLOAT3(0, 0, 0);
@@ -1741,7 +1762,7 @@ namespace wi::scene
 
 		XMVECTOR rootPrevTranslation = XMVectorSet(-69, 420, 69, -420);
 		XMVECTOR rootPrevRotation = XMVectorSet(-69, 420, 69, -420);
-		XMVECTOR INVALID_VECTOR = XMVectorSet(-69, 420, 69, -420);
+		inline static const XMVECTOR INVALID_VECTOR = XMVectorSet(-69, 420, 69, -420);
 		float prevLocTimer;
 		float prevRotTimer;
 		// Root Motion
@@ -1897,13 +1918,21 @@ namespace wi::scene
 		std::string filename;
 		wi::Resource videoResource;
 		wi::video::VideoInstance videoinstance;
+		float currentTimer = 0; // The current playback timer is reflected in this
 
 		constexpr bool IsPlaying() const { return _flags & PLAYING; }
 		constexpr bool IsLooped() const { return _flags & LOOPED; }
 
 		constexpr void Play() { _flags |= PLAYING; }
-		constexpr void Stop() { _flags &= ~PLAYING; }
+		constexpr void Pause() { _flags &= ~PLAYING; }
+		void Stop() { Pause(); Seek(0); }
 		constexpr void SetLooped(bool value = true) { if (value) { _flags |= LOOPED; } else { _flags &= ~LOOPED; } }
+
+		// Get total length of video in seconds
+		float GetLength() const;
+
+		// seek to timestamp (approximate)
+		void Seek(float timerSeconds);
 
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
@@ -1957,7 +1986,7 @@ namespace wi::scene
 
 		// These are maintained for top-down chained update by spring dependency system:
 		wi::vector<SpringComponent*> children;
-		wi::ecs::Entity entity;
+		wi::ecs::Entity entity = wi::ecs::INVALID_ENTITY;
 		TransformComponent* transform = nullptr;
 		TransformComponent* parent_transform = nullptr;
 
@@ -2009,6 +2038,8 @@ namespace wi::scene
 		wi::primitive::Plane plane;
 		uint32_t layerMask = ~0u;
 		float dist = 0;
+		uint32_t cpu_index = 0;
+		uint32_t gpu_index = 0;
 
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
@@ -2271,6 +2302,9 @@ namespace wi::scene
 
 		wi::ecs::Entity lookAtEntity = wi::ecs::INVALID_ENTITY; // lookAt can be fixed to specific entity
 
+		float arm_spacing = 0;
+		float leg_spacing = 0;
+
 		// Non-serialized attributes:
 		XMFLOAT3 lookAt = {}; // lookAt target pos, can be set by user
 		XMFLOAT4 lookAtDeltaRotationState_Head = XMFLOAT4(0, 0, 0, 1);
@@ -2378,6 +2412,12 @@ namespace wi::scene
 					values.erase(values.begin() + lookup[name]);
 					names.erase(names.begin() + lookup[name]);
 					lookup.erase(name);
+
+					// reorder lookup
+					for (size_t i = 0; i < names.size(); ++i)
+					{
+						lookup[names[i]] = i;
+					}
 				}
 			}
 		};
@@ -2395,7 +2435,8 @@ namespace wi::scene
 		enum FLAGS
 		{
 			NONE = 0,
-			CHARACTER_TO_CHARACTER_COLLISION_DISABLED = 1 << 0
+			CHARACTER_TO_CHARACTER_COLLISION_DISABLED = 1 << 0,
+			DEDICATED_SHADOW = 1 << 1,
 		};
 		uint32_t _flags = NONE;
 
@@ -2438,6 +2479,7 @@ namespace wi::scene
 		wi::PathQuery pathquery; // completed
 		wi::vector<wi::ecs::Entity> animations;
 		wi::ecs::Entity currentAnimation = wi::ecs::INVALID_ENTITY;
+		float anim_timer = 0;
 		float anim_amount = 1;
 		bool reset_anim = true;
 		bool anim_ended = true;
@@ -2455,6 +2497,11 @@ namespace wi::scene
 		};
 		std::shared_ptr<PathfindingThreadContext> pathfinding_thread; // separate allocation, mustn't be reallocated while path finding thread is running
 		const wi::VoxelGrid* voxelgrid = nullptr;
+		float shake_horizontal = 0;
+		float shake_vertical = 0;
+		float shake_frequency = 0;
+		float shake_decay = 0;
+		float shake_timer = 0;
 
 		// Apply movement to the character in the next update
 		void Move(const XMFLOAT3& direction);
@@ -2466,12 +2513,18 @@ namespace wi::scene
 		void Turn(const XMFLOAT3& direction);
 		// Lean sideways, negative values mean left, positive values mean right
 		void Lean(float amount);
+		// Apply shaking to the character
+		//	horizontal, vertical: movement amount in directions
+		//	frequency: speed of movement
+		//	decay: speed of slowing down
+		void Shake(float horizontal, float vertical = 0, float frequency = 100, float decay = 10);
 
 		void AddAnimation(wi::ecs::Entity entity);
 		void PlayAnimation(wi::ecs::Entity entity);
 		void StopAnimation();
 		void SetAnimationAmount(float amount);
 		float GetAnimationAmount() const;
+		float GetAnimationTimer() const;
 		bool IsAnimationEnded() const;
 
 		// Teleport character to position immediately
@@ -2535,6 +2588,9 @@ namespace wi::scene
 		bool IsCharacterToCharacterCollisionDisabled() const { return _flags & CHARACTER_TO_CHARACTER_COLLISION_DISABLED; }
 		void SetCharacterToCharacterCollisionDisabled(bool value = true) { if (value) { _flags |= CHARACTER_TO_CHARACTER_COLLISION_DISABLED; } else { _flags &= ~CHARACTER_TO_CHARACTER_COLLISION_DISABLED; } }
 
+		bool IsDedicatedShadow() const { return _flags & DEDICATED_SHADOW; }
+		void SetDedicatedShadow(bool value = true) { if (value) { _flags |= DEDICATED_SHADOW; } else { _flags &= ~DEDICATED_SHADOW; } }
+
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};
 
@@ -2553,7 +2609,9 @@ namespace wi::scene
 		float rotation = 0; // rotation of nodes in radians around the spline axis (affects mesh generation)
 		int mesh_generation_subdivision = 0; // increase this above 0 to request mesh generation
 		int mesh_generation_vertical_subdivision = 0; // can create vertically subdivided mesh (corridoor, tunnel, etc. with this)
-		float terrain_modifier_amount = 0; // increase above 0 to affect terrain generation
+		float terrain_modifier_amount = 0; // increase above 0 to affect terrain generation (greater values increase the strength of the terrain trying to match the spline plane)
+		float terrain_pushdown = 0; // push down the terrain below the spline plane (or above if negative value)
+		float terrain_texture_falloff = 0.8f; // texture blend falloff for terrain modifier spline
 
 		wi::vector<wi::ecs::Entity> spline_node_entities;
 
@@ -2567,10 +2625,14 @@ namespace wi::scene
 		int prev_mesh_generation_vertical_subdivision = 0;
 		int prev_mesh_generation_nodes = 0;
 		mutable float prev_terrain_modifier_amount = 0;
+		mutable float prev_terrain_pushdown = 0;
+		mutable float prev_terrain_texture_falloff = 0;
 		mutable int prev_terrain_generation_nodes = 0;
 		mutable bool dirty_terrain = false;
 		bool prev_looped = false;
 		wi::primitive::AABB aabb;
+		wi::ecs::Entity materialEntity = wi::ecs::INVALID_ENTITY; // temp for terrain usage
+		mutable wi::ecs::Entity materialEntity_terrainPrev = wi::ecs::INVALID_ENTITY; // temp for terrain usage
 
 		// Evaluate an interpolated location on the spline at t which in range [0,1] on the spline
 		//	the result matrix is oriented to look towards the spline direction and face upwards along the spline normal

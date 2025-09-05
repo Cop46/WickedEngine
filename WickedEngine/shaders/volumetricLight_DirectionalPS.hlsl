@@ -55,12 +55,12 @@ float4 main(VertexToPixel input) : SV_Target
 		for (uint cascade = 0; cascade < light.GetShadowCascadeCount(); ++cascade)
 		{
 			float3 shadow_pos = mul(load_entitymatrix(light.GetMatrixIndex() + cascade), float4(P, 1)).xyz; // ortho matrix, no divide by .w
-			float3 shadow_uv = shadow_pos.xyz * float3(0.5f, -0.5f, 0.5f) + 0.5f;
+			float3 shadow_uv = clipspace_to_uv(shadow_pos.xyz);
 
 			[branch]
 			if (is_saturated(shadow_uv))
 			{
-				shadow *= shadow_2D(light, shadow_pos, shadow_uv.xy, cascade, input.pos.xy);
+				shadow *= shadow_2D(light, shadow_pos.z, shadow_uv.xy, cascade, input.pos.xy);
 				break;
 			}
 		}
@@ -87,5 +87,5 @@ float4 main(VertexToPixel input) : SV_Target
 		atmosphere_transmittance = GetAtmosphericLightTransmittance(GetWeather().atmosphere, P, L, texture_transmittancelut);
 	}
 
-	return max(0, half4(accumulation * light.GetColor().rgb * atmosphere_transmittance, 1));
+	return saturateMediump(max(0, half4(accumulation * light.GetColor().rgb * atmosphere_transmittance, 1)));
 }

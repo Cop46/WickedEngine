@@ -22,12 +22,17 @@ This is a reference and explanation of Lua scripting features in Wicked Engine.
 		1. [Sound](#sound)
 		2. [SoundInstance](#soundinstance)
 		3. [SoundInstance3D](#soundinstance3d)
+	6. [Video](#video)
+		1. [Video](#video)
+		2. [VideoInstance](#videoinstance)
 	7. [Vector](#vector)
 	8. [Matrix](#matrix)
 	8. [Async](#async)
 	9. [Scene](#scene)
 		1. [Entity](#entity)
 		2. [Scene](#scene)
+		2. [RayIntersectionResult](#rayintersectionresult)
+		2. [SphereIntersectionResult](#sphereintersectionresult)
 		3. [NameComponent](#namecomponent)
 		4. [LayerComponent](#layercomponent)
 		5. [TransformComponent](#transformcomponent)
@@ -45,6 +50,7 @@ This is a reference and explanation of Lua scripting features in Wicked Engine.
 		16. [ForceFieldComponent](#forcefieldcomponent)
 		17. [WeatherComponent](#weathercomponent)
 		18. [SoundComponent](#soundcomponent)
+		18. [VideoComponent](#videocomponent)
 		19. [ColliderComponent](#collidercomponent)
 		19. [ExpressionComponent](#expressioncomponent)
 		19. [HumanoidComponent](#humanoidcomponent)
@@ -106,6 +112,8 @@ This section describes the common tools for scripting which are not necessarily 
 - render()  -- wait for a render step to be called (to be used from inside a process)
 - getDeltaTime()  -- returns the delta time in seconds (time passed sice previous update())
 - math.lerp(float a,b,t)  -- linear interpolation
+- math.inverse_lerp(float a,b,t)  -- inverse linear interpolation
+- math.inverselerp(float a,b,t)  -- inverse linear interpolation
 - math.clamp(float x,min,max)  -- clamp x between min and max
 - math.saturate(float x)  -- clamp x between 0 and 1
 - math.round(float x)  -- round x to nearest integer
@@ -292,6 +300,13 @@ Specify Sprite properties, like position, size, etc.
 - DisableDistortionMask()
 - SetMaskAlphaRange(float start, end)
 - GetMaskAlphaRange() : float start, end
+- SetAngularSoftnessDirection(Vector value)
+- SetAngularSoftnessInnerAngle(float value)
+- SetAngularSoftnessOuterAngle(float value)
+- EnableAngularSoftnessDoubleSided()
+- EnableAngularSoftnessInverse()
+- DisableAngularSoftnessDoubleSided()
+- DisableAngularSoftnessInverse()
 
 - [outer]STENCILMODE_DISABLED : int
 - [outer]STENCILMODE_EQUAL : int
@@ -488,7 +503,7 @@ A texture image data.
 	float squish = 1,
 	float blend = 1,
 	float edge_smoothness = 0.04) -- creates a lens distortion normal map (16-bit precision)
-- Save(string filename) -- saves texture into a file. Provide the extension in the filename, it should be one of the following: .JPG, .PNG, .TGA, .BMP, .DDS, .KTX2, .BASIS
+- Save(string filename) -- saves texture into a file. Provide the extension in the filename, it should be one of the following: .JPG, .PNG, .TGA, .BMP, .DDS
 
 ```lua
 GradientType = {
@@ -513,7 +528,7 @@ texture = texturehelper.CreateGradientTexture(
 	256, 256, -- resolution of the texture
 	Vector(0.5, 0.5), Vector(0.5, 0), -- start and end uv coordinates will specify the gradient direction and extents
 	GradientFlags.Inverse | GradientFlags.Smoothstep | GradientFlags.PerlinNoise, -- modifier flags bitwise combination
-	"rrr1", -- for each channel ,you can specify one of the following characters: 0, 1, r, g, b, a
+	"rrr1", -- for each channel, you can specify one of the following characters: 0, 1, r, g, b, a, x, y, z, w (lower or upper case)
 	2, -- perlin noise scale
 	123, -- perlin noise seed
 	6, -- perlin noise octaves
@@ -578,6 +593,27 @@ Describes the relation between a sound instance and a listener in a 3D world
 - SetEmitterFront(Vector value)
 - SetEmitterVelocity(Vector value)
 - SetEmitterRadius(float radius)
+
+### Video
+The video interface consists of two types of objects: Video and VideoInstance. Note: these are the underlying objects that VideoComponents use in the scene, to easily set videos to materials or lights, look at the [VideoComponent](#videocomponent) object that you can use with the scene's entity component system.
+
+#### Video
+The Video object stores the compressed video data in a GPU buffer
+- [constructor]Video(string filename)	-- loads an MP4 video file (currently only the H264 internal compression format is supported)
+- IsValid() : bool	-- returns true if the video was successfully created
+- GetDurationSeconds() : float
+
+#### VideoInstance
+The VideoInstance object is responsible to decode the video frames and output them to textures. One Video can be decoded with multiple VideoInstances to display frames of the video at different timings. Normally yout would use one VideoInstance for a video, unless you want to show the video multiple times at once at different locations.
+- [constructor]VideoInstance(Video video)	-- creates a decoder instance for the video data
+- IsValid() : bool	-- returns true if the video instance was successfully created
+- Play()
+- Pause()
+- Stop()
+- SetLooped(opt bool looped = true)
+- Seek(float timerSeconds)
+- GetCurrentTimer() : float 	-- returns current video playback timer for this decoder instance in seconds
+- IsEnded() : bool		-- returns true if the video playback has ended
 
 #### Submix Types
 The submix types group sound instances together to be controlled together
@@ -741,6 +777,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - [outer]FILTER_ALL : uint	-- include everything
 - Intersects(Ray|Sphere|Capsule primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) : int entity, Vector position,normal, float distance, Vector velocity, int subsetIndex, Matrix orientation, Vector uv, HumanoidBone humanoid_bone	-- intersects a primitive with the scene and returns collision parameters. If humanoid_bone is not `HumanoidBone.Count` then the intersection is a ragdoll, and entity refers to the humanoid entity
 - IntersectsFirst(Ray primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) : bool	-- intersects a primitive with the scene and returns true immediately on intersection, false if there was no intersection. This can be faster for occlusion check than regular `Intersects` that searches for closest intersection.
+- IntersectsAll(Ray|Sphere|Capsule primitive, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) results[] -- intersects the scene with a primitive and returns array of results. In case of Ray, [RayIntersectionResult](#rayintersectionresult) will be returned, for Sphere and Capsule [SphereIntersectionResult](#sphereintersectionresult) will be returned
 - Update()  -- updates the scene and every entity and component inside the scene
 - Clear()  -- deletes every entity and component inside the scene
 - Merge(Scene other)  -- moves contents from an other scene into this one. The other scene will be empty after this operation (contents are moved, not copied)
@@ -769,6 +806,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - Component_CreateForceField(Entity entity) : ForceFieldComponent result  -- attach a ForceFieldComponent to an entity. The returned component is associated with the entity and can be manipulated
 - Component_CreateWeather(Entity entity) : WeatherComponent result  -- attach a WeatherComponent to an entity. The returned component is associated with the entity and can be manipulated
 - Component_CreateSound(Entity entity) : SoundComponent result  -- attach a SoundComponent to an entity. The returned component is associated with the entity and can be manipulated
+- Component_CreateVideo(Entity entity) : VideoComponent result  -- attach a VideoComponent to an entity. The returned component is associated with the entity and can be manipulated
 - Component_CreateCollider(Entity entity) : ColliderComponent result  -- attach a ColliderComponent to an entity. The returned component is associated with the entity and can be manipulated
 - Component_CreateExpression(Entity entity) : ExpressionComponent result  -- attach a ExpressionComponent to an entity. The returned component is associated with the entity and can be manipulated
 - Component_CreateHumanoid(Entity entity) : HumanoidComponent result  -- attach a HumanoidComponent to an entity. The returned component is associated with the entity and can be manipulated
@@ -795,6 +833,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - Component_GetForceField(Entity entity) : ForceFieldComponent? result  -- query the ForceFieldComponent of the entity (if exists)
 - Component_GetWeather(Entity entity) : WeatherComponent? result  -- query the WeatherComponent of the entity (if exists)
 - Component_GetSound(Entity entity) : SoundComponent? result  -- query the SoundComponent of the entity (if exists)
+- Component_GetVideo(Entity entity) : VideoComponent? result  -- query the VideoComponent of the entity (if exists)
 - Component_GetCollider(Entity entity) : ColliderComponent? result  -- query the ColliderComponent of the entity (if exists)
 - Component_GetExpression(Entity entity) : ExpressionComponent? result  -- query the ExpressionComponent of the entity (if exists)
 - Component_GetHumanoid(Entity entity) : HumanoidComponent? result  -- query the HumanoidComponent of the entity (if exists)
@@ -821,6 +860,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - Component_GetForceFieldArray() : ForceFieldComponent[] result  -- returns the array of all components of this type
 - Component_GetWeatherArray() : WeatherComponent[] result  -- returns the array of all components of this type
 - Component_GetSoundArray() : SoundComponent[] result  -- returns the array of all components of this type
+- Component_GetVideoArray() : VideoComponent[] result  -- returns the array of all components of this type
 - Component_GetColliderArray() : ColliderComponent[] result  -- returns the array of all components of this type
 - Component_GetExpressionArray() : ExpressionComponent[] result  -- returns the array of all components of this type
 - Component_GetHumanoidArray() : HumanoidComponent[] result  -- returns the array of all components of this type
@@ -849,6 +889,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - Entity_GetForceFieldArray() : Entity[] result  -- returns the array of all entities that have this component type
 - Entity_GetWeatherArray() : Entity[] result  -- returns the array of all entities that have this component type
 - Entity_GetSoundArray() : Entity[] result  -- returns the array of all entities that have this component type
+- Entity_GetVideoArray() : Entity[] result  -- returns the array of all entities that have this component type
 - Entity_GetColliderArray() : Entity[] result  -- returns the array of all entities that have this component type
 - Entity_GetExpressionArray() : Entity[] result  -- returns the array of all entities that have this component type
 - Entity_GetHumanoidArray() : Entity[] result  -- returns the array of all entities that have this component type
@@ -876,6 +917,7 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - Component_RemoveForceField(Entity entity)  -- remove the ForceFieldComponent of the entity (if exists)
 - Component_RemoveWeather(Entity entity) -- remove the WeatherComponent of the entity (if exists)
 - Component_RemoveSound(Entity entity)  -- remove the SoundComponent of the entity (if exists)
+- Component_RemoveVideo(Entity entity)  -- remove the VideoComponent of the entity (if exists)
 - Component_RemoveCollider(Entity entity)  -- remove the ColliderComponent of the entity (if exists)
 - Component_RemoveExpression(Entity entity)  -- remove the ExpressionComponent of the entity (if exists)
 - Component_RemoveHumanoid(Entity entity)  -- remove the HumanoidComponent of the entity (if exists)
@@ -903,6 +945,33 @@ The scene holds components. Entity handles can be used to retrieve associated co
 - VoxelizeScene(VoxelGrid voxelgrid, opt bool subtract = false, opt uint filterMask = ~0u, opt uint layerMask = ~0u, opt uint lod = 0) -- voxelizes all entities in the scene which intersect the voxel grid volume and match the filterMask and layerMask. Subtract parameter controls whether the voxels are added (true) or removed (false). Lod argument selects object's level of detail
 
 - FixupNans()	-- maintenance utility to help fix Nan issues in TransformComponents. Transforms containing nans will be cleared and renamed with _nanfix postfix
+
+#### RayIntersectionResult
+Result of one hit in scene.IntersectsAll
+- GetEntity() : Entity
+- GetPosition() : Vector
+- GetNormal() : Vector
+- GetUV() : Vector
+- GetVelocity() : Vector
+- GetDistance() : float
+- GetSubsetIndex() : int
+- GetVertexID0() : int
+- GetVertexID1() : int
+- GetVertexID2() : int
+- GetBarycentrics() : Vector
+- GetOrientation() : Vector
+- GetHumanoidBone() : int
+
+#### SphereIntersectionResult
+Result of one hit in scene.IntersectsAll
+- GetEntity() : Entity
+- GetPosition() : Vector
+- GetNormal() : Vector
+- GetVelocity() : Vector
+- GetDepth() : float
+- GetSubsetIndex() : int
+- GetOrientation() : Vector
+- GetHumanoidBone() : int
 
 #### NameComponent
 Holds a string that can more easily identify an entity to humans than an entity ID. 
@@ -989,6 +1058,7 @@ Describes an orientation in 3D space.
 - IsOrtho() : bool	-- returns true if the camera is using orthographic projection, false otherwise
 - GetOrthoVerticalSize() : float result
 - SetOrthoVerticalSize(float value)	-- Sets the vertical size of the camera in world space, used only in orthographic projection mode
+- ProjectToScreen(Vector point, Canvas canvas)	-- projects the world-space point to screen space within the canvas logical width and height units (sceen width and height). If the Z coordinate is positive that means that it is in front of the camera, otherwise it is behind (can be considered to be clipped)
 
 #### AnimationComponent
 - Timer : float
@@ -1292,6 +1362,8 @@ Describes a Rigid Body Physics object.
 - CapsuleParams_Radius : float
 - CapsuleParams_Height : float
 - TargetMeshLOD : int
+- MaxSlopeAngle : float		-- character physics max slope angle in radians
+- GravityFactor : float		- character physics gravity factor
 
 </br>
 
@@ -1304,6 +1376,8 @@ Describes a Rigid Body Physics object.
 - SetDisableDeactivation(bool value) -- Sets if the rigidbody is able to deactivate after inactivity
 - SetKinematic(bool value) -- Set the rigid body to be kinematic (which means it is optimized for being moved by the system or user logic, not the physics engine)
 - SetStartDeactivated(bool value) -- If true, rigid body will be deactivated when added to the simulation (if it's dynamic, it won't fall)
+- SetCharacterPhysics(bool value)	-- enable character physics that is driven by the physics engine
+- IsCharacterPhysics() : bool	-- returns true if this rigid body has character physics enabled
 
 #### SoftBodyPhysicsComponent
 Describes a Soft Body Physics object.
@@ -1400,6 +1474,25 @@ Describes a Sound object.
 - GetSound() : Sound
 - GetSoundInstance() : SoundInstance
 
+#### VideoComponent
+Describes a video object
+- Filename : string
+
+</br>
+
+- Play()
+- Stop()
+- SetLooped(bool value)
+- IsPlaying() : bool
+- IsLooped() : bool
+- GetLength() : float	-- returns video length in seconds
+- GetCurrentTimer() : float	-- returns the current timer in seconds
+- Seek(float timerSeconds) -- sets the decoder state to be decoding from specific time in seconds (approximately)
+- SetVideo(Video video)
+- SetVideoInstance(VideoInstance instance)
+- GetVideo() : Video
+- GetVideoInstance() : VideoInstance
+
 #### ColliderComponent
 Describes a Collider object.
 - Shape : int -- Shape of the collider
@@ -1475,6 +1568,10 @@ Describes a Collider object.
 - SetRagdollHeadSize(float value) -- Control the overall size of the ragdoll head (default: 1)
 - GetRagdollFatness() : float
 - GetRagdollHeadSize() : float
+- SetArmSpacing(float value) -- dynamically modify arm spacing after animation (negative: pull together, positive: push apart)
+- GetArmSpacing() : float
+- SetLegSpacing(float value) -- dynamically modify leg spacing after animation (negative: pull together, positive: push apart)
+- GetLegSpacing() : float
 
 ```lua
 [outer] HumanoidBone = {
@@ -1489,11 +1586,11 @@ Describes a Collider object.
 	Jaw = 8,
 	LeftUpperLeg = 9,	-- included in ragdoll
 	LeftLowerLeg = 10,	-- included in ragdoll
-	LeftFoot = 11,
+	LeftFoot = 11,		-- included in ragdoll
 	LeftToes = 12,
 	RightUpperLeg = 13,	-- included in ragdoll
 	RightLowerLeg = 14,	-- included in ragdoll
-	RightFoot = 15,
+	RightFoot = 15,		-- included in ragdoll
 	RightToes = 16,
 	LeftShoulder = 17,
 	LeftUpperArm = 18,	-- included in ragdoll
@@ -1579,6 +1676,7 @@ The metadata component can store and retrieve an arbitrary amount of named user 
 
 #### CharacterComponent
 Implementation of basic character controller features such as movement in the scene, inverse kinematics for legs, swimming, water ripples, etc.
+Note that CharacterComponent is NOT using physics, but a custom character logic. The character will collide with other characters, objects that are tagged as Navmesh, and colliders that are tagged with CPU enabled.
 
 - SetActive(bool value)	-- Enable/disable character processing (enabled by default)
 - IsActive() : bool	-- Returns whether the character processing is active or not
@@ -1588,12 +1686,14 @@ Implementation of basic character controller features such as movement in the sc
 - Jump(float amount)	-- Jump upwards by an amount. The jump will be executed in the next scene update, with collisions.
 - Turn(Vector value)	-- Turn towards a direction continuously.
 - Lean(float value)	-- Lean sideways, negative values mean left, positive values mean right
+- Shake(float horizontal, opt float vertical = 0, opt float frequency = 100, opt float decay = 10)	-- Apply shaking to the character. horizontal, vertical: movement amount in directions; frequency: speed of movement; decay: speed of slowing down
 
 - AddAnimation(Entity entity)	-- Adds animation for tracking blending state. The simple animation blending will perform blend-out for each animation except the currenttly active one
 - PlayAnimation(Entity entity)	-- Play the animation. This will be blended in as primary animation, others will be belnded out.
 - StopAnimation()	-- stops current animation
 - SetAnimationAmount(float value)	-- Set target blend amount of current animation
-- GetAnimatioNAmount() : float	-- returns target blend amount of current animation
+- GetAnimationAmount() : float	-- returns target blend amount of current animation
+- GetAnimationTimer() : float	-- returns the timer of current animation
 - IsAnimationEnded() : bool	--returns true if the current animation is ended, false otherwise
 
 - SetGroundFriction(float value)	-- velocity multiplier when moving on ground, default: 0.92
@@ -1705,6 +1805,7 @@ A RenderPath is a high level system that represents a part of the whole applicat
 It can hold Sprites and SpriteFonts and can sort them by layers, update and render them.
 - [constructor]RenderPath2D()
 - AddSprite(Sprite sprite, opt string layer)
+- AddVideoSprite(VideoInstance videoinstance, Sprite sprite, opt string layer)
 - AddFont(SpriteFont font, opt string layer)
 - RemoveFont(SpriteFont font)
 - ClearSprites()
@@ -1716,6 +1817,8 @@ It can hold Sprites and SpriteFonts and can sort them by layers, update and rend
 - SetLayerOrder(string name, int order)
 - SetSpriteOrder(Sprite sprite, int order)
 - SetFontOrder(SpriteFont font, int order)
+- GetHDRScaling() : float	-- returns HDR scaling value used for SDR to HDR linear output mapping conversion (default: 9.0)
+- SetHDRScaling(float value)	-- sets HDR scaling value used for SDR to HDR linear output mapping conversion (default: 9.0)
 - CopyFrom(RenderPath other) -- copies everything from other renderpath into this
 
 #### RenderPath3D
@@ -2089,7 +2192,16 @@ Playstation button codes:
 - GetAccuracy() : int
 - SetFrameRate(float value)	-- Set the frames per second resolution of physics simulation (default = 120 FPS)
 - GetFrameRate() : float
-- GetVelocity() : Vector-- returns linear velocity of a body
+- GetVelocity(RigidBodyPhysicsComponent component) : Vector	-- returns linear velocity of the body in the latest simulation step
+- GetPosition(RigidBodyPhysicsComponent component) : Vector	-- returns current position of the body in the latest simulation step
+- GetRotation(RigidBodyPhysicsComponent component) : Vector	-- returns current rotation of the body in the latest simulation step
+- GetCharacterGroundPosition(RigidBodyPhysicsComponent component) : Vector		-- returns the ground position of the rigidbody if it has character physics enabled
+- GetCharacterGroundNormal(RigidBodyPhysicsComponent component) : Vector		-- returns the ground normal of the rigidbody if it has character physics enabled
+- GetCharacterGroundVelocity(RigidBodyPhysicsComponent component) : Vector		-- returns the ground velocity of the rigidbody if it has character physics enabled
+- IsCharacterGroundSupported(RigidBodyPhysicsComponent component) : bool		-- returns true if the character physics is supported by normal or steep ground
+- GetCharacterGroundState(RigidBodyPhysicsComponent component) : CharacterGroundStates			-- returns the `CharacterGroundStates` of the character physics
+- ChangeCharacterShape(RigidBodyPhysicsComponent component, float height, float radius) : bool		-- changes the physics character's shape into a capsule with specified height and radius. Returns true if successful, false otherwise. Failure means that something is blocking the character.
+- MoveCharacter(RigidBodyPhysicsComponent component, Vector movement_direction, opt float movement_speed = 6, opt float jump = 0, opt bool controlMovementDuringJump = false)	-- applies movement logic to physics character
 - SetGhostMode(RigidBodyPhysicsComponent|HumanoidComponent component, bool value)	-- enable/disable ghost mode for rigid body or ragdoll (all collision disabled)
 - SetRagdollGhostMode(HumanoidComponent humanoid, bool value)	-- enable/disable ghost mode for a ragdoll. In ghost mode, the ragdoll will not collide with anything. Enable this if the humanoid sits inside a vehicle for example.
 - SetPosition(RigidBodyPhysicsComponent component, Vector position)	-- teleport a dynamic body
@@ -2110,12 +2222,28 @@ Playstation button codes:
 - [outer]ACTIVATION_STATE_ACTIVE : int
 - [outer]ACTIVATION_STATE_INACTIVE : int
 
+```lua
+CharacterGroundStates = {
+	OnGround = 0,		-- Character is on the ground and can move freely.
+	OnSteepGround = 1,	-- Character is on a slope that is too steep and can't climb up any further. The caller should start applying downward velocity if sliding from the slope is desired.
+	NotSupported = 2,	-- Character is touching an object, but is not supported by it and should fall. The GetGroundXXX functions will return information about the touched object.
+	InAir = 3,			-- Character is in the air and is not touching anything.
+}
+```
+
 - Intersects(Scene scene, Ray ray) : Entity entity, Vector position,normal, Entity humanoid_ragdoll_entity, HumanoidBone humanoid_bone, Vector position_local	-- Performns physics scene intersection for closest hit with a ray
 
 - DriveVehicle(RigidBodyPhysicsComponent rigidbody, opt float forward = 0, opt float right = 0, opt float brake = 0, opt float handbrake = 0)	-- set input from driver: forward and right values are values between -1 and 1 to indicate reverse/forward or left/right. brake and handbrake (handbrake = back brake for motorcycles) are values between 0 and 1.
 - GetVehicleForwardVelocity(RigidBodyPhysicsComponent rigidbody) : float	-- Signed velocity amount in forward direction
 
-- PickDrag(Scene scene, Ray, ray, PickDragOperation op) -- pick and drag physics objects such as ragdolls and rigid bodies.
+- PickDrag(Scene scene, Ray, ray, PickDragOperation op, opt ConstraintType constraint, opt float break_distance = FLT_MAX) -- pick and drag physics objects such as ragdolls and rigid bodies.
+
+```lua
+ConstraintType = {
+	Fixed = 0,
+	Point = 1
+}
+```
 
 #### PickDragOperation
 Tracks a physics pick drag operation. Use it with `phyiscs.PickDrag()` function. When using this object first time to PickDrag, the operation will be started and the operation will end when you call Finish() or when the object is destroyed

@@ -25,6 +25,27 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 		editor->componentsWnd.RefreshEntityTree();
 	});
 
+	auto forEachSelectedPhysicsComponent = [this](auto /* void(RigidBodyPhysicsComponent*, wi::gui::EventArgs) */ func) {
+		return [this, func](wi::gui::EventArgs args) {
+			wi::scene::Scene& scene = editor->GetCurrentScene();
+			for (auto& x : editor->translator.selected)
+			{
+				RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
+				if (physicscomponent != nullptr)
+				{
+					func(physicscomponent, args);
+				}
+			}
+		};
+	};
+
+	auto forEachSelectedPhysicsComponentWithRefresh = [forEachSelectedPhysicsComponent](auto /* void(RigidBodyPhysicsComponent*, wi::gui::EventArgs) */ func) {
+		return forEachSelectedPhysicsComponent([func](auto physicscomponent, auto args) {
+			func(physicscomponent, args);
+			physicscomponent->SetRefreshParametersNeeded();
+		});
+	};
+
 	collisionShapeComboBox.Create("Collision Shape: ");
 	collisionShapeComboBox.AddItem("Box", RigidBodyPhysicsComponent::CollisionShape::BOX);
 	collisionShapeComboBox.AddItem("Sphere", RigidBodyPhysicsComponent::CollisionShape::SPHERE);
@@ -33,321 +54,175 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 	collisionShapeComboBox.AddItem("Convex Hull", RigidBodyPhysicsComponent::CollisionShape::CONVEX_HULL);
 	collisionShapeComboBox.AddItem("Triangle Mesh", RigidBodyPhysicsComponent::CollisionShape::TRIANGLE_MESH);
 	collisionShapeComboBox.AddItem("Height Field", RigidBodyPhysicsComponent::CollisionShape::HEIGHTFIELD);
-	collisionShapeComboBox.OnSelect([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
+	collisionShapeComboBox.OnSelect([=](wi::gui::EventArgs args) {
+		forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+			RigidBodyPhysicsComponent::CollisionShape shape = (RigidBodyPhysicsComponent::CollisionShape)args.userdata;
+			if (physicscomponent->shape != shape)
 			{
-				RigidBodyPhysicsComponent::CollisionShape shape = (RigidBodyPhysicsComponent::CollisionShape)args.userdata;
-				if (physicscomponent->shape != shape)
-				{
-					physicscomponent->physicsobject = nullptr;
-					physicscomponent->shape = shape;
-				}
+				physicscomponent->physicsobject = nullptr;
+				physicscomponent->shape = shape;
 			}
-		}
+		})(args);
 		RefreshShapeType();
 	});
+
 	collisionShapeComboBox.SetSelected(0);
 	collisionShapeComboBox.SetEnabled(true);
 	collisionShapeComboBox.SetTooltip("Set rigid body collision shape.");
 	AddWidget(&collisionShapeComboBox);
 
-	XSlider.Create(0, 10, 1, 100000, "X: ");
-	XSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	XSlider.Create(0, 10, 1, 100000, "XSlider");
+	XSlider.OnSlide(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		switch (physicscomponent->shape)
 		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				switch (physicscomponent->shape)
-				{
-				default:
-				case RigidBodyPhysicsComponent::CollisionShape::BOX:
-					physicscomponent->box.halfextents.x = args.fValue;
-					break;
-				case RigidBodyPhysicsComponent::CollisionShape::SPHERE:
-					physicscomponent->sphere.radius = args.fValue;
-					break;
-				case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
-				case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
-					physicscomponent->capsule.height = args.fValue;
-					break;
-				}
-				physicscomponent->physicsobject = nullptr;
-			}
+		default:
+		case RigidBodyPhysicsComponent::CollisionShape::BOX:
+			physicscomponent->box.halfextents.x = args.fValue;
+			break;
+		case RigidBodyPhysicsComponent::CollisionShape::SPHERE:
+			physicscomponent->sphere.radius = args.fValue;
+			break;
+		case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
+		case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
+			physicscomponent->capsule.height = args.fValue;
+			break;
 		}
-	});
+		physicscomponent->physicsobject = nullptr;
+	}));
+
+	ZSlider.SetLocalizationEnabled(false);
 	AddWidget(&XSlider);
 
-	YSlider.Create(0, 10, 1, 100000, "Y: ");
-	YSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	YSlider.Create(0, 10, 1, 100000, "YSlider");
+	YSlider.OnSlide(forEachSelectedPhysicsComponent([](auto physicsComponent, auto args) {
+		switch (physicsComponent->shape)
 		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				switch (physicscomponent->shape)
-				{
-				default:
-				case RigidBodyPhysicsComponent::CollisionShape::BOX:
-					physicscomponent->box.halfextents.y = args.fValue;
-					break;
-				case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
-				case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
-					physicscomponent->capsule.radius = args.fValue;
-					break;
-				}
-				physicscomponent->physicsobject = nullptr;
-			}
+		default:
+		case RigidBodyPhysicsComponent::CollisionShape::BOX:
+			physicsComponent->box.halfextents.y = args.fValue;
+			break;
+		case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
+		case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
+			physicsComponent->capsule.radius = args.fValue;
+			break;
 		}
-	});
+		physicsComponent->physicsobject = nullptr;
+	}));
+	ZSlider.SetLocalizationEnabled(false);
 	AddWidget(&YSlider);
 
-	ZSlider.Create(0, 10, 1, 100000, "Z: ");
-	ZSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	ZSlider.Create(0, 10, 1, 100000, "ZSlider");
+	ZSlider.OnSlide(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		switch (physicscomponent->shape)
 		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				switch (physicscomponent->shape)
-				{
-				default:
-				case RigidBodyPhysicsComponent::CollisionShape::BOX:
-				case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
-					physicscomponent->box.halfextents.z = args.fValue;
-					break;
-				}
-				physicscomponent->physicsobject = nullptr;
-			}
+		default:
+		case RigidBodyPhysicsComponent::CollisionShape::BOX:
+		case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
+			physicscomponent->box.halfextents.z = args.fValue;
+			break;
 		}
-	});
+		physicscomponent->physicsobject = nullptr;
+	}));
+	ZSlider.SetLocalizationEnabled(false);
 	AddWidget(&ZSlider);
-
-	XSlider.SetText("Width");
-	YSlider.SetText("Height");
-	ZSlider.SetText("Depth");
 
 	massSlider.Create(0, 10, 1, 100000, "Mass: ");
 	massSlider.SetTooltip("Set the mass amount for the physics engine.");
-	massSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->mass = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	massSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->mass = args.fValue;
+	}));
 	AddWidget(&massSlider);
 
 	frictionSlider.Create(0, 1, 0.5f, 100000, "Friction: ");
 	frictionSlider.SetTooltip("Set the friction amount for the physics engine.");
-	frictionSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->friction = args.fValue;
-			}
-		}
-	});
+	frictionSlider.OnSlide(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->friction = args.fValue;
+	}));
 	AddWidget(&frictionSlider);
 
 	restitutionSlider.Create(0, 1, 0, 100000, "Restitution: ");
 	restitutionSlider.SetTooltip("Set the restitution amount for the physics engine.");
-	restitutionSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->restitution = args.fValue;
-			}
-		}
-	});
+	restitutionSlider.OnSlide(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->restitution = args.fValue;
+	}));
 	AddWidget(&restitutionSlider);
 
 	lineardampingSlider.Create(0, 1, 0, 100000, "Linear Damping: ");
 	lineardampingSlider.SetTooltip("Set the linear damping amount for the physics engine.");
-	lineardampingSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->damping_linear = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	lineardampingSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->damping_linear = args.fValue;
+	}));
 	AddWidget(&lineardampingSlider);
 
 	angulardampingSlider.Create(0, 1, 0, 100000, "Angular Damping: ");
 	angulardampingSlider.SetTooltip("Set the angular damping amount for the physics engine.");
-	angulardampingSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->damping_angular = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	angulardampingSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->damping_angular = args.fValue;
+	}));
 	AddWidget(&angulardampingSlider);
 
 	buoyancySlider.Create(0, 2, 0, 1000, "Buoyancy: ");
 	buoyancySlider.SetTooltip("Higher buoyancy will make the bodies float up faster in water.");
-	buoyancySlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->buoyancy = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	buoyancySlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->buoyancy = args.fValue;
+	}));
 	AddWidget(&buoyancySlider);
 
 	physicsMeshLODSlider.Create(0, 6, 0, 6, "Use Mesh LOD: ");
 	physicsMeshLODSlider.SetTooltip("Specify which LOD to use for triangle mesh physics.");
-	physicsMeshLODSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
+	physicsMeshLODSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		if (physicscomponent->mesh_lod != uint32_t(args.iValue))
 		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				if (physicscomponent->mesh_lod != uint32_t(args.iValue))
-				{
-					physicscomponent->physicsobject = nullptr; // will be recreated automatically
-					physicscomponent->mesh_lod = uint32_t(args.iValue);
-				}
-				physicscomponent->mesh_lod = uint32_t(args.iValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
+			physicscomponent->physicsobject = nullptr; // will be recreated automatically
+			physicscomponent->mesh_lod = uint32_t(args.iValue);
 		}
-	});
+		physicscomponent->mesh_lod = uint32_t(args.iValue);
+	}));
 	AddWidget(&physicsMeshLODSlider);
 
 	kinematicCheckBox.Create("Kinematic: ");
 	kinematicCheckBox.SetTooltip("Toggle kinematic behaviour.");
 	kinematicCheckBox.SetCheck(false);
-	kinematicCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->SetKinematic(args.bValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	kinematicCheckBox.OnClick(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->SetKinematic(args.bValue);
+	}));
 	AddWidget(&kinematicCheckBox);
 
 	disabledeactivationCheckBox.Create("Disable Deactivation: ");
 	disabledeactivationCheckBox.SetTooltip("Toggle kinematic behaviour.");
 	disabledeactivationCheckBox.SetCheck(false);
-	disabledeactivationCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->SetDisableDeactivation(args.bValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	disabledeactivationCheckBox.OnClick(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->SetDisableDeactivation(args.bValue);
+	}));
 	AddWidget(&disabledeactivationCheckBox);
 
 	startDeactivatedCheckBox.Create("Start deactivated: ");
 	startDeactivatedCheckBox.SetTooltip("If enabled, the rigid body will start in a deactivated state.\nEven if the body is dynamic (non-kinematic, mass > 0), it will not fall unless interacted with.");
 	startDeactivatedCheckBox.SetCheck(false);
-	startDeactivatedCheckBox.OnClick([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->SetStartDeactivated(args.bValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	startDeactivatedCheckBox.OnClick(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->SetStartDeactivated(args.bValue);
+	}));
 	AddWidget(&startDeactivatedCheckBox);
-
-
 
 	offsetXSlider.Create(-10, 10, 0, 100000, "Local Offset X: ");
 	offsetXSlider.SetTooltip("Set a local offset relative to the object transform");
-	offsetXSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->local_offset.x = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	offsetXSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->local_offset.x = args.fValue;
+	}));
 	AddWidget(&offsetXSlider);
 
 	offsetYSlider.Create(-10, 10, 0, 100000, "Local Offset Y: ");
 	offsetYSlider.SetTooltip("Set a local offset relative to the object transform");
-	offsetYSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->local_offset.y = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	offsetYSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->local_offset.y = args.fValue;
+	}));
 	AddWidget(&offsetYSlider);
 
 	offsetZSlider.Create(-10, 10, 0, 100000, "Local Offset Z: ");
 	offsetZSlider.SetTooltip("Set a local offset relative to the object transform");
-	offsetZSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->local_offset.z = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	offsetZSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->local_offset.z = args.fValue;
+	}));
 	AddWidget(&offsetZSlider);
 
 	physicsDebugCheckBox.Create(ICON_EYE " Physics visualizer: ");
@@ -361,6 +236,35 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 	AddWidget(&physicsDebugCheckBox);
 
 
+
+	characterCheckBox.Create(ICON_PHYSICS_CHARACTER " Character physics: ");
+	characterCheckBox.SetTooltip("Enable physics-driven character");
+	characterCheckBox.OnClick(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+				physicscomponent->SetCharacterPhysics(args.bValue);
+	}));
+	AddWidget(&characterCheckBox);
+
+	characterLabel.Create("CharacterLabel");
+	characterLabel.SetText("Notes about physics-driven character:\n- The capsule shape is recommended for a physics character.\n- The friction and mass of the physics character are taken from the standard rigid body parameters.\n- This is different from CharacterComponent which uses custom character movement logic.");
+	characterLabel.SetFitTextEnabled(true);
+	AddWidget(&characterLabel);
+
+	characterSlopeSlider.Create(0, 90, 50, 90, "Max slope angle: ");
+	characterSlopeSlider.SetTooltip("Specify the slope angle that the character can stand on.");
+	characterSlopeSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->character.maxSlopeAngle = wi::math::DegreesToRadians(args.fValue);
+	}));
+	AddWidget(&characterSlopeSlider);
+
+	characterGravitySlider.Create(0, 4, 1, 100, "Gravity factor: ");
+	characterGravitySlider.SetTooltip("Specify the strength of gravity acting on the character.");
+	characterGravitySlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->character.gravityFactor = args.fValue;
+	}));
+	AddWidget(&characterGravitySlider);
+
+
+
 	vehicleLabel.Create("VehicleLabel");
 	std::string tips;
 	tips += "Vehicle physics tips:\n";
@@ -370,25 +274,16 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 	tips += "- Enable physics visualizer while editing vehicle parameters\n";
 	tips += "- You can reset vehicles by Ctrl + left click on the physics toggle button\n";
 	vehicleLabel.SetText(tips);
-	vehicleLabel.SetSize(XMFLOAT2(100, 240));
+	vehicleLabel.SetFitTextEnabled(true);
 	AddWidget(&vehicleLabel);
 
-	vehicleCombo.Create("Vehicle physics: ");
+	vehicleCombo.Create(ICON_VEHICLE " Vehicle physics: ");
 	vehicleCombo.AddItem("None", (uint64_t)RigidBodyPhysicsComponent::Vehicle::Type::None);
 	vehicleCombo.AddItem("Car", (uint64_t)RigidBodyPhysicsComponent::Vehicle::Type::Car);
 	vehicleCombo.AddItem("Motorcycle", (uint64_t)RigidBodyPhysicsComponent::Vehicle::Type::Motorcycle);
-	vehicleCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.type = (RigidBodyPhysicsComponent::Vehicle::Type)args.userdata;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	vehicleCombo.OnSelect(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.type = (RigidBodyPhysicsComponent::Vehicle::Type)args.userdata;
+	}));
 	AddWidget(&vehicleCombo);
 
 
@@ -396,379 +291,156 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 	vehicleCollisionCombo.AddItem("Ray", (uint64_t)RigidBodyPhysicsComponent::Vehicle::CollisionMode::Ray);
 	vehicleCollisionCombo.AddItem("Sphere", (uint64_t)RigidBodyPhysicsComponent::Vehicle::CollisionMode::Sphere);
 	vehicleCollisionCombo.AddItem("Cylinder", (uint64_t)RigidBodyPhysicsComponent::Vehicle::CollisionMode::Cylinder);
-	vehicleCollisionCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.collision_mode = (RigidBodyPhysicsComponent::Vehicle::CollisionMode)args.userdata;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	vehicleCollisionCombo.OnSelect(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.collision_mode = (RigidBodyPhysicsComponent::Vehicle::CollisionMode)args.userdata;
+	}));
 	AddWidget(&vehicleCollisionCombo);
 
 
 	wheelRadiusSlider.Create(0.001f, 10, 1, 1000, "Wheel radius: ");
-	wheelRadiusSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_radius = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	wheelRadiusSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_radius = args.fValue;
+	}));
 	AddWidget(&wheelRadiusSlider);
 
 	wheelWidthSlider.Create(0.001f, 10, 1, 1000, "Wheel width: ");
-	wheelWidthSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_width = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	wheelWidthSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_width = args.fValue;
+	}));
 	AddWidget(&wheelWidthSlider);
 
 	chassisHalfWidthSlider.Create(0, 10, 1, 1000, "Chassis width: ");
-	chassisHalfWidthSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.chassis_half_width = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	chassisHalfWidthSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.chassis_half_width = args.fValue;
+	}));
 	AddWidget(&chassisHalfWidthSlider);
 
 	chassisHalfHeightSlider.Create(-10, 10, 1, 1000, "Chassis height: ");
-	chassisHalfHeightSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.chassis_half_height = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	chassisHalfHeightSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.chassis_half_height = args.fValue;
+	}));
 	AddWidget(&chassisHalfHeightSlider);
 
 	chassisHalfLengthSlider.Create(0, 10, 1, 1000, "Chassis length: ");
-	chassisHalfLengthSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.chassis_half_length = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	chassisHalfLengthSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.chassis_half_length = args.fValue;
+	}));
 	AddWidget(&chassisHalfLengthSlider);
 
 	frontWheelOffsetSlider.Create(-10, 10, 0, 1000, "Front wheel offset: ");
-	frontWheelOffsetSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.front_wheel_offset = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	frontWheelOffsetSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.front_wheel_offset = args.fValue;
+	}));
 	AddWidget(&frontWheelOffsetSlider);
 
 	rearWheelOffsetSlider.Create(-10, 10, 0, 1000, "Rear wheel offset: ");
-	rearWheelOffsetSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.rear_wheel_offset = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	rearWheelOffsetSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.rear_wheel_offset = args.fValue;
+	}));
 	AddWidget(&rearWheelOffsetSlider);
 
 	maxTorqueSlider.Create(0, 1000, 0, 1000, "Max Torque: ");
-	maxTorqueSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.max_engine_torque = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	maxTorqueSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.max_engine_torque = args.fValue;
+	}));
 	AddWidget(&maxTorqueSlider);
 
 	clutchStrengthSlider.Create(0, 100, 0, 1000, "Clutch Strength: ");
-	clutchStrengthSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.clutch_strength = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	clutchStrengthSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.clutch_strength = args.fValue;
+	}));
 	AddWidget(&clutchStrengthSlider);
 
 	maxRollAngleSlider.Create(0, 180, 0, 180, "Max Roll Angle: ");
-	maxRollAngleSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.max_roll_angle = wi::math::DegreesToRadians(args.fValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	maxRollAngleSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.max_roll_angle = wi::math::DegreesToRadians(args.fValue);
+	}));
 	AddWidget(&maxRollAngleSlider);
 
 	maxSteeringAngleSlider.Create(0, 90, 0, 90, "Max Steering Angle: ");
-	maxSteeringAngleSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.max_steering_angle = wi::math::DegreesToRadians(args.fValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	maxSteeringAngleSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.max_steering_angle = wi::math::DegreesToRadians(args.fValue);
+	}));
 	AddWidget(&maxSteeringAngleSlider);
 
 	fSuspensionMinSlider.Create(0, 2, 0, 200, "F. Susp. Min Length: ");
-	fSuspensionMinSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.front_suspension.min_length;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	fSuspensionMinSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.front_suspension.min_length = args.fValue;
+	}));
 	AddWidget(&fSuspensionMinSlider);
 
 	fSuspensionMaxSlider.Create(0, 2, 0, 200, "F. Susp. Max Length: ");
-	fSuspensionMaxSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.front_suspension.max_length;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	fSuspensionMaxSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.front_suspension.max_length = args.fValue;
+		physicscomponent->SetRefreshParametersNeeded();
+	}));
 	AddWidget(&fSuspensionMaxSlider);
 
 	fSuspensionFrequencySlider.Create(0, 2, 0, 200, "F. Susp. Frequency: ");
-	fSuspensionFrequencySlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.front_suspension.frequency;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	fSuspensionFrequencySlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.front_suspension.frequency = args.fValue;
+	}));
 	AddWidget(&fSuspensionFrequencySlider);
 
 	fSuspensionDampingSlider.Create(0, 2, 0, 200, "F. Susp. Damping: ");
-	fSuspensionDampingSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.front_suspension.damping;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	fSuspensionDampingSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.front_suspension.damping = args.fValue;
+	}));
 	AddWidget(&fSuspensionDampingSlider);
 
 	rSuspensionMinSlider.Create(0, 2, 0, 200, "R. Susp. Min Length: ");
-	rSuspensionMinSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.rear_suspension.min_length;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	rSuspensionMinSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.rear_suspension.min_length = args.fValue;
+	}));
 	AddWidget(&rSuspensionMinSlider);
 
 	rSuspensionMaxSlider.Create(0, 2, 0, 200, "R. Susp. Max Length: ");
-	rSuspensionMaxSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.rear_suspension.max_length;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	rSuspensionMaxSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.rear_suspension.max_length = args.fValue;
+	}));
 	AddWidget(&rSuspensionMaxSlider);
 
 	rSuspensionFrequencySlider.Create(0, 2, 0, 200, "R. Susp. Frequency: ");
-	rSuspensionFrequencySlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.rear_suspension.frequency;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	rSuspensionFrequencySlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.rear_suspension.frequency = args.fValue;
+	}));
 	AddWidget(&rSuspensionFrequencySlider);
 
 	rSuspensionDampingSlider.Create(0, 2, 0, 200, "R. Susp. Damping: ");
-	rSuspensionDampingSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.rear_suspension.damping;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	rSuspensionDampingSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.rear_suspension.damping = args.fValue;
+	}));
 	AddWidget(&rSuspensionDampingSlider);
 
 	motorcycleFBrakeSuspensionAngleSlider.Create(0, 90, 0, 90, "F. Brake Susp. Angle: ");
-	motorcycleFBrakeSuspensionAngleSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.motorcycle.front_suspension_angle = wi::math::DegreesToRadians(args.fValue);
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	motorcycleFBrakeSuspensionAngleSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.motorcycle.front_suspension_angle = wi::math::DegreesToRadians(args.fValue);
+	}));
 	AddWidget(&motorcycleFBrakeSuspensionAngleSlider);
 
 	motorcycleFBrakeTorqueSlider.Create(0, 2000, 0, 2000, "F. Brake Torque: ");
-	motorcycleFBrakeTorqueSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.motorcycle.front_brake_torque = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	motorcycleFBrakeTorqueSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.motorcycle.front_brake_torque = args.fValue;
+	}));
 	AddWidget(&motorcycleFBrakeTorqueSlider);
 
 	motorcycleRBrakeTorqueSlider.Create(0, 2000, 0, 2000, "R. Brake Torque: ");
-	motorcycleRBrakeTorqueSlider.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.motorcycle.rear_brake_torque = args.fValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-		});
+	motorcycleRBrakeTorqueSlider.OnSlide(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.motorcycle.rear_brake_torque = args.fValue;
+	}));
 	AddWidget(&motorcycleRBrakeTorqueSlider);
 
 	fourwheelCheckbox.Create("4-wheel drive: ");
-	fourwheelCheckbox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.car.four_wheel_drive = args.bValue;
-				physicscomponent->SetRefreshParametersNeeded();
-			}
-		}
-	});
+	fourwheelCheckbox.OnClick(forEachSelectedPhysicsComponentWithRefresh([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.car.four_wheel_drive = args.bValue;
+	}));
 	AddWidget(&fourwheelCheckbox);
 
 	motorleanCheckbox.Create("Motorcycle lean control: ");
-	motorleanCheckbox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.motorcycle.lean_control = args.bValue;
-				// Here we don't need to recreate physics!!
-			}
-		}
-	});
+	// Here we don't need to recreate physics!!
+	motorleanCheckbox.OnClick(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.motorcycle.lean_control = args.bValue;
+	}));
 	AddWidget(&motorleanCheckbox);
 
 	driveCheckbox.Create(ICON_VEHICLE " Drive in Editor: ");
@@ -788,62 +460,30 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 
 	wheelEntityFrontLeftCombo.Create("Front Left Wheel: ");
 	wheelEntityFrontLeftCombo.SetTooltip("Map an entity transform to this wheel, so the wheel graphics can be animated by physics (optional).\nThe entity name must contain the word wheel to be displayed here.");
-	wheelEntityFrontLeftCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_entity_front_left = args.userdata;
-			}
-		}
-	});
+	wheelEntityFrontLeftCombo.OnSelect(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_entity_front_left = args.userdata;
+	}));
 	AddWidget(&wheelEntityFrontLeftCombo);
 
 	wheelEntityFrontRightCombo.Create("Front Right Wheel: ");
 	wheelEntityFrontRightCombo.SetTooltip("Map an entity transform to this wheel, so the wheel graphics can be animated by physics (optional).\nThe entity name must contain the word wheel to be displayed here.");
-	wheelEntityFrontRightCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_entity_front_right = args.userdata;
-			}
-		}
-		});
+	wheelEntityFrontRightCombo.OnSelect(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_entity_front_right = args.userdata;
+	}));
 	AddWidget(&wheelEntityFrontRightCombo);
 
 	wheelEntityRearLeftCombo.Create("Rear Left Wheel: ");
 	wheelEntityRearLeftCombo.SetTooltip("Map an entity transform to this wheel, so the wheel graphics can be animated by physics (optional).\nThe entity name must contain the word wheel to be displayed here.");
-	wheelEntityRearLeftCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_entity_rear_left = args.userdata;
-			}
-		}
-		});
+	wheelEntityRearLeftCombo.OnSelect(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_entity_rear_left = args.userdata;
+	}));
 	AddWidget(&wheelEntityRearLeftCombo);
 
 	wheelEntityRearRightCombo.Create("Rear Right Wheel: ");
 	wheelEntityRearRightCombo.SetTooltip("Map an entity transform to this wheel, so the wheel graphics can be animated by physics (optional).\nThe entity name must contain the word wheel to be displayed here.");
-	wheelEntityRearRightCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(x.entity);
-			if (physicscomponent != nullptr)
-			{
-				physicscomponent->vehicle.wheel_entity_rear_right = args.userdata;
-			}
-		}
-		});
+	wheelEntityRearRightCombo.OnSelect(forEachSelectedPhysicsComponent([](auto physicscomponent, auto args) {
+		physicscomponent->vehicle.wheel_entity_rear_right = args.userdata;
+	}));
 	AddWidget(&wheelEntityRearRightCombo);
 
 
@@ -855,13 +495,6 @@ void RigidBodyWindow::Create(EditorComponent* _editor)
 
 void RigidBodyWindow::RefreshShapeType()
 {
-	XSlider.SetEnabled(false);
-	YSlider.SetEnabled(false);
-	ZSlider.SetEnabled(false);
-	XSlider.SetText("-");
-	YSlider.SetText("-");
-	ZSlider.SetText("-");
-
 	Scene& scene = editor->GetCurrentScene();
 
 	const RigidBodyPhysicsComponent* physicscomponent = scene.rigidbodies.GetComponent(entity);
@@ -871,36 +504,39 @@ void RigidBodyWindow::RefreshShapeType()
 	switch (physicscomponent->shape)
 	{
 	case RigidBodyPhysicsComponent::CollisionShape::BOX:
-		XSlider.SetEnabled(true);
-		YSlider.SetEnabled(true);
-		ZSlider.SetEnabled(true);
-		XSlider.SetText("Width");
-		YSlider.SetText("Height");
-		ZSlider.SetText("Depth");
+		XSlider.SetVisible(true);
+		YSlider.SetVisible(true);
+		ZSlider.SetVisible(true);
+		XSlider.SetText("Width: ");
+		YSlider.SetText("Height: ");
+		ZSlider.SetText("Depth: ");
 		XSlider.SetValue(physicscomponent->box.halfextents.x);
 		YSlider.SetValue(physicscomponent->box.halfextents.y);
 		ZSlider.SetValue(physicscomponent->box.halfextents.z);
 		break;
 	case RigidBodyPhysicsComponent::CollisionShape::SPHERE:
-		XSlider.SetEnabled(true);
-		XSlider.SetText("Radius");
-		YSlider.SetText("-");
-		ZSlider.SetText("-");
+		XSlider.SetVisible(true);
+		YSlider.SetVisible(false);
+		ZSlider.SetVisible(false);
+		XSlider.SetText("Radius: ");
 		XSlider.SetValue(physicscomponent->sphere.radius);
 		break;
 	case RigidBodyPhysicsComponent::CollisionShape::CAPSULE:
 	case RigidBodyPhysicsComponent::CollisionShape::CYLINDER:
-		XSlider.SetEnabled(true);
-		YSlider.SetEnabled(true);
-		XSlider.SetText("Height");
-		YSlider.SetText("Radius");
-		ZSlider.SetText("-");
+		XSlider.SetVisible(true);
+		YSlider.SetVisible(true);
+		ZSlider.SetVisible(false);
+		XSlider.SetText("Height: ");
+		YSlider.SetText("Radius: ");
 		XSlider.SetValue(physicscomponent->capsule.height);
 		YSlider.SetValue(physicscomponent->capsule.radius);
 		break;
 	case RigidBodyPhysicsComponent::CollisionShape::CONVEX_HULL:
 	case RigidBodyPhysicsComponent::CollisionShape::TRIANGLE_MESH:
 	default:
+		XSlider.SetVisible(false);
+		YSlider.SetVisible(false);
+		ZSlider.SetVisible(false);
 		break;
 	}
 }
@@ -933,6 +569,10 @@ void RigidBodyWindow::SetEntity(Entity entity)
 		startDeactivatedCheckBox.SetCheck(physicsComponent->IsStartDeactivated());
 
 		collisionShapeComboBox.SetSelectedByUserdataWithoutCallback((uint64_t)physicsComponent->shape);
+
+		characterCheckBox.SetCheck(physicsComponent->IsCharacterPhysics());
+		characterSlopeSlider.SetValue(wi::math::RadiansToDegrees(physicsComponent->character.maxSlopeAngle));
+		characterGravitySlider.SetValue(physicsComponent->character.gravityFactor);
 
 		vehicleCombo.SetSelectedByUserdataWithoutCallback((uint64_t)physicsComponent->vehicle.type);
 		vehicleCollisionCombo.SetSelectedByUserdataWithoutCallback((uint64_t)physicsComponent->vehicle.collision_mode);
@@ -1005,63 +645,52 @@ void RigidBodyWindow::SetEntity(Entity entity)
 
 void RigidBodyWindow::ResizeLayout()
 {
+	RefreshShapeType();
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 145;
 
-	const float margin_left = 145;
-	const float margin_right = 40;
+	layout.add(collisionShapeComboBox);
+	layout.add(XSlider);
+	layout.add(YSlider);
+	layout.add(ZSlider);
+	layout.add(massSlider);
+	layout.add(frictionSlider);
+	layout.add(restitutionSlider);
+	layout.add(lineardampingSlider);
+	layout.add(angulardampingSlider);
+	layout.add(buoyancySlider);
+	layout.add(physicsMeshLODSlider);
+	layout.add(offsetXSlider);
+	layout.add(offsetYSlider);
+	layout.add(offsetZSlider);
+	layout.add_right(startDeactivatedCheckBox);
+	layout.add_right(disabledeactivationCheckBox);
+	layout.add_right(kinematicCheckBox);
+	layout.add_right(physicsDebugCheckBox);
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
 
-	add(collisionShapeComboBox);
-	add(XSlider);
-	add(YSlider);
-	add(ZSlider);
-	add(massSlider);
-	add(frictionSlider);
-	add(restitutionSlider);
-	add(lineardampingSlider);
-	add(angulardampingSlider);
-	add(buoyancySlider);
-	add(physicsMeshLODSlider);
-	add(offsetXSlider);
-	add(offsetYSlider);
-	add(offsetZSlider);
-	add_right(startDeactivatedCheckBox);
-	add_right(disabledeactivationCheckBox);
-	add_right(kinematicCheckBox);
-	add_right(physicsDebugCheckBox);
+	layout.jump();
 
-	y += 20;
+	layout.add_right(characterCheckBox);
+	if (characterCheckBox.GetCheck())
+	{
+		characterLabel.SetVisible(true);
+		characterSlopeSlider.SetVisible(true);
+		characterGravitySlider.SetVisible(true);
+		layout.add_fullwidth(characterLabel);
+		layout.add(characterSlopeSlider);
+		layout.add(characterGravitySlider);
+	}
+	else
+	{
+		characterLabel.SetVisible(false);
+		characterSlopeSlider.SetVisible(false);
+		characterGravitySlider.SetVisible(false);
+	}
 
-	add(vehicleCombo);
+	layout.jump();
+
+	layout.add(vehicleCombo);
 	if (vehicleCombo.GetSelected() > 0)
 	{
 		vehicleLabel.SetVisible(true);
@@ -1088,32 +717,32 @@ void RigidBodyWindow::ResizeLayout()
 		rSuspensionFrequencySlider.SetVisible(true);
 		rSuspensionDampingSlider.SetVisible(true);
 
-		add_fullwidth(vehicleLabel);
+		layout.add_fullwidth(vehicleLabel);
 
-		add_right(driveCheckbox);
+		layout.add_right(driveCheckbox);
 
-		add(vehicleCollisionCombo);
-		add(wheelRadiusSlider);
-		add(wheelWidthSlider);
-		add(chassisHalfWidthSlider);
-		add(chassisHalfHeightSlider);
-		add(chassisHalfLengthSlider);
-		add(frontWheelOffsetSlider);
-		add(rearWheelOffsetSlider);
-		add(maxTorqueSlider);
-		add(clutchStrengthSlider);
-		add(maxRollAngleSlider);
-		add(maxSteeringAngleSlider);
+		layout.add(vehicleCollisionCombo);
+		layout.add(wheelRadiusSlider);
+		layout.add(wheelWidthSlider);
+		layout.add(chassisHalfWidthSlider);
+		layout.add(chassisHalfHeightSlider);
+		layout.add(chassisHalfLengthSlider);
+		layout.add(frontWheelOffsetSlider);
+		layout.add(rearWheelOffsetSlider);
+		layout.add(maxTorqueSlider);
+		layout.add(clutchStrengthSlider);
+		layout.add(maxRollAngleSlider);
+		layout.add(maxSteeringAngleSlider);
 
-		add(fSuspensionMinSlider);
-		add(fSuspensionMaxSlider);
-		add(fSuspensionFrequencySlider);
-		add(fSuspensionDampingSlider);
+		layout.add(fSuspensionMinSlider);
+		layout.add(fSuspensionMaxSlider);
+		layout.add(fSuspensionFrequencySlider);
+		layout.add(fSuspensionDampingSlider);
 
-		add(rSuspensionMinSlider);
-		add(rSuspensionMaxSlider);
-		add(rSuspensionFrequencySlider);
-		add(rSuspensionDampingSlider);
+		layout.add(rSuspensionMinSlider);
+		layout.add(rSuspensionMaxSlider);
+		layout.add(rSuspensionFrequencySlider);
+		layout.add(rSuspensionDampingSlider);
 
 		RigidBodyPhysicsComponent::Vehicle::Type type = (RigidBodyPhysicsComponent::Vehicle::Type)vehicleCombo.GetSelectedUserdata();
 		switch (type)
@@ -1127,31 +756,31 @@ void RigidBodyWindow::ResizeLayout()
 			wheelEntityFrontRightCombo.SetVisible(true);
 			wheelEntityRearLeftCombo.SetVisible(true);
 			wheelEntityRearRightCombo.SetVisible(true);
-			add(wheelEntityFrontLeftCombo);
-			add(wheelEntityFrontRightCombo);
-			add(wheelEntityRearLeftCombo);
-			add(wheelEntityRearRightCombo);
+			layout.add(wheelEntityFrontLeftCombo);
+			layout.add(wheelEntityFrontRightCombo);
+			layout.add(wheelEntityRearLeftCombo);
+			layout.add(wheelEntityRearRightCombo);
 			fourwheelCheckbox.SetVisible(true);
 			motorleanCheckbox.SetVisible(false);
-			add_right(fourwheelCheckbox);
+			layout.add_right(fourwheelCheckbox);
 			break;
 		case wi::scene::RigidBodyPhysicsComponent::Vehicle::Type::Motorcycle:
 			motorcycleFBrakeSuspensionAngleSlider.SetVisible(true);
 			motorcycleFBrakeTorqueSlider.SetVisible(true);
 			motorcycleRBrakeTorqueSlider.SetVisible(true);
-			add(motorcycleFBrakeSuspensionAngleSlider);
-			add(motorcycleFBrakeTorqueSlider);
-			add(motorcycleRBrakeTorqueSlider);
+			layout.add(motorcycleFBrakeSuspensionAngleSlider);
+			layout.add(motorcycleFBrakeTorqueSlider);
+			layout.add(motorcycleRBrakeTorqueSlider);
 
 			wheelEntityFrontLeftCombo.SetVisible(true);
 			wheelEntityFrontRightCombo.SetVisible(false);
 			wheelEntityRearLeftCombo.SetVisible(true);
 			wheelEntityRearRightCombo.SetVisible(false);
-			add(wheelEntityFrontLeftCombo);
-			add(wheelEntityRearLeftCombo);
+			layout.add(wheelEntityFrontLeftCombo);
+			layout.add(wheelEntityRearLeftCombo);
 			motorleanCheckbox.SetVisible(true);
 			fourwheelCheckbox.SetVisible(false);
-			add_right(motorleanCheckbox);
+			layout.add_right(motorleanCheckbox);
 			break;
 		default:
 			break;

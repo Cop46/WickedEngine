@@ -47,18 +47,10 @@ void VideoWindow::Create(EditorComponent* _editor)
 		editor->componentsWnd.RefreshEntityTree();
 		});
 
-	float x = 60;
-	float y = 0;
-	float hei = 18;
-	float step = hei + 2;
-	float wid = 200;
-
 
 	openButton.Create("Open File " ICON_OPEN);
 	openButton.SetTooltip("Open video file.\nSupported extensions: MP4");
-	openButton.SetPos(XMFLOAT2(x, y));
-	openButton.SetSize(XMFLOAT2(wid, hei));
-	openButton.OnClick([&](wi::gui::EventArgs args) {
+	openButton.OnClick([this](wi::gui::EventArgs args) {
 		VideoComponent* video = editor->GetCurrentScene().videos.GetComponent(entity);
 		if (video != nullptr)
 		{
@@ -70,8 +62,11 @@ void VideoWindow::Create(EditorComponent* _editor)
 				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 					video->filename = fileName;
 					video->videoResource = wi::resourcemanager::Load(fileName);
-					wi::video::CreateVideoInstance(&video->videoResource.GetVideo(), &video->videoinstance);
-					filenameLabel.SetText(wi::helper::GetFileNameFromPath(video->filename));
+					if (video->videoResource.IsValid())
+					{
+						wi::video::CreateVideoInstance(&video->videoResource.GetVideo(), &video->videoinstance);
+						filenameLabel.SetText(wi::helper::GetFileNameFromPath(video->filename));
+					}
 					});
 				});
 		}
@@ -79,21 +74,17 @@ void VideoWindow::Create(EditorComponent* _editor)
 	AddWidget(&openButton);
 
 	filenameLabel.Create("Filename");
-	filenameLabel.SetPos(XMFLOAT2(x, y += step));
-	filenameLabel.SetSize(XMFLOAT2(wid, hei));
 	AddWidget(&filenameLabel);
 
 	playpauseButton.Create(ICON_PLAY);
 	playpauseButton.SetTooltip("Play/Pause selected video instance.");
-	playpauseButton.SetPos(XMFLOAT2(x, y += step));
-	playpauseButton.SetSize(XMFLOAT2(wid, hei));
-	playpauseButton.OnClick([&](wi::gui::EventArgs args) {
+	playpauseButton.OnClick([this](wi::gui::EventArgs args) {
 		VideoComponent* video = editor->GetCurrentScene().videos.GetComponent(entity);
 		if (video != nullptr)
 		{
 			if (video->IsPlaying())
 			{
-				video->Stop();
+				video->Pause();
 				playpauseButton.SetText(ICON_PLAY);
 			}
 			else
@@ -107,26 +98,19 @@ void VideoWindow::Create(EditorComponent* _editor)
 
 	stopButton.Create(ICON_STOP);
 	stopButton.SetTooltip("Stop selected video instance.");
-	stopButton.SetPos(XMFLOAT2(x, y += step));
-	stopButton.SetSize(XMFLOAT2(hei, hei));
-	stopButton.OnClick([&](wi::gui::EventArgs args) {
+	stopButton.OnClick([this](wi::gui::EventArgs args) {
 		VideoComponent* video = editor->GetCurrentScene().videos.GetComponent(entity);
 		if (video != nullptr)
 		{
 			video->Stop();
-			video->videoinstance.current_frame = 0;
-			video->videoinstance.flags &= ~wi::video::VideoInstance::Flags::InitialFirstFrameDecoded;
-			video->videoinstance.flags &= ~wi::video::VideoInstance::Flags::Playing;
 		}
 		});
 	AddWidget(&stopButton);
 
 	loopedCheckbox.Create("Looped: ");
 	loopedCheckbox.SetTooltip("Enable looping for the selected video instance.");
-	loopedCheckbox.SetPos(XMFLOAT2(x, y += step));
-	loopedCheckbox.SetSize(XMFLOAT2(hei, hei));
 	loopedCheckbox.SetCheckText(ICON_LOOP);
-	loopedCheckbox.OnClick([&](wi::gui::EventArgs args) {
+	loopedCheckbox.OnClick([this](wi::gui::EventArgs args) {
 		VideoComponent* video = editor->GetCurrentScene().videos.GetComponent(entity);
 		if (video != nullptr)
 		{
@@ -135,35 +119,17 @@ void VideoWindow::Create(EditorComponent* _editor)
 		});
 	AddWidget(&loopedCheckbox);
 
-	timerSlider.Create(0, 1, 0, 100000, "Timer: ");
-	timerSlider.SetSize(XMFLOAT2(hei, hei));
-	timerSlider.OnSlide([&](wi::gui::EventArgs args) {
+	timerSlider.Create(0, 1, 0, 1000, "Timer: ");
+	timerSlider.OnSlide([this](wi::gui::EventArgs args) {
 		VideoComponent* video = editor->GetCurrentScene().videos.GetComponent(entity);
-		if (video != nullptr && video->videoResource.IsValid())
-		{
-			const wi::video::Video& videofile = video->videoResource.GetVideo();
-			int target_frame = int(float(args.fValue / videofile.duration_seconds) * videofile.frames_infos.size());
-			for (size_t i = 0; i < videofile.frames_infos.size(); ++i)
-			{
-				auto& frame_info = videofile.frames_infos[i];
-				if (i >= target_frame && frame_info.type == wi::graphics::VideoFrameType::Intra)
-				{
-					target_frame = (int)i;
-					break;
-				}
-			}
-			video->videoinstance.current_frame = target_frame;
-			video->videoinstance.flags |= wi::video::VideoInstance::Flags::DecoderReset;
-			video->videoinstance.flags &= ~wi::video::VideoInstance::Flags::InitialFirstFrameDecoded;
-		}
-		});
+		video->Seek(args.fValue);
+	});
 	AddWidget(&timerSlider);
 
-	preview.SetSize(XMFLOAT2(160, 90));
 	AddWidget(&preview);
 
 	infoLabel.Create("");
-	infoLabel.SetSize(XMFLOAT2(800, 500));
+	infoLabel.SetFitTextEnabled(true);
 	AddWidget(&infoLabel);
 
 
@@ -202,18 +168,38 @@ void VideoWindow::SetEntity(Entity entity)
 		{
 			const wi::video::Video& videofile = video->videoResource.GetVideo();
 			std::string str;
-			if (GetDevice()->CheckCapability(wi::graphics::GraphicsDeviceCapability::VIDEO_DECODE_H264))
+			if (videofile.profile == wi::graphics::VideoProfile::H264)
 			{
-				str += "GPU decode: Supported\n";
+				str += "Format: H264 (AVC)\n";
+				if (GetDevice()->CheckCapability(wi::graphics::GraphicsDeviceCapability::VIDEO_DECODE_H264))
+				{
+					str += "GPU decode: Supported\n";
+				}
+				else
+				{
+					str += "GPU decode: Not supported\n";
+				}
+			}
+			else if (videofile.profile == wi::graphics::VideoProfile::H265)
+			{
+				str += "Format: H265 (HEVC)\n";
+				if (GetDevice()->CheckCapability(wi::graphics::GraphicsDeviceCapability::VIDEO_DECODE_H265))
+				{
+					str += "GPU decode: Supported\n";
+				}
+				else
+				{
+					str += "GPU decode: Not supported\n";
+				}
 			}
 			else
 			{
-				str += "GPU decode: Not supported\n";
+				str += "Format: Unsupported\n";
 			}
 			str += "Audio track: not implemented\n";
-			str += "Display buffers in use: " + std::to_string(video->videoinstance.output_textures_used.size()) + "\n\n";
+			str += "Size: " + wi::helper::GetMemorySizeText(video->videoResource.GetVideo().data_stream.GetDesc().size) + "\n\n";
 
-			str += "Tip: if you have a material on this entity, the material textures will be replaced by video. This way you can set video textures into the 3D scene.\n\n";
+			str += "Tip: if you have a material on this entity, the material basecolor and emissive textures will be replaced by video. If it has light, then the video will be used as light multiplier. This way you can set video textures into the 3D scene.\n\n";
 
 			str += "title : " + videofile.title + "\n";
 			str += "album : " + videofile.album + "\n";
@@ -229,10 +215,13 @@ void VideoWindow::SetEntity(Entity entity)
 			str += "Picture Parameter Sets: " + std::to_string(videofile.pps_count) + "\n";
 			str += "Sequence Parameter Sets: " + std::to_string(videofile.sps_count) + "\n";
 			str += "Decode Picture Buffers: " + std::to_string(video->videoinstance.dpb.texture.desc.array_size) + "\n";
+			str += "Target display order: " + std::to_string(video->videoinstance.target_display_order) + "\n";
+			str += "Display buffers free: " + std::to_string(video->videoinstance.output_textures_free.size()) + "\n";
+			str += "Display buffers in use: " + std::to_string(video->videoinstance.output_textures_used.size()) + "\n\n";
 			infoLabel.SetText(str);
 
 			timerSlider.SetRange(0, videofile.duration_seconds);
-			timerSlider.SetValue(float(video->videoinstance.current_frame) / float(videofile.frames_infos.size()) * videofile.duration_seconds);
+			timerSlider.SetValue(video->currentTimer);
 		}
 	}
 	else
@@ -248,44 +237,12 @@ void VideoWindow::SetEntity(Entity entity)
 void VideoWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 80;
 
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = 80;
-		const float margin_right = 40;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_right = 40;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
+	layout.add_fullwidth(openButton);
+	layout.add_fullwidth(filenameLabel);
 
-	add_fullwidth(openButton);
-	add_fullwidth(filenameLabel);
-
-	add_fullwidth(preview);
+	layout.add_fullwidth(preview);
 	float h_aspect = 9.0f / 16.0f;
 	if (preview.video != nullptr && preview.video->videoResource.IsValid())
 	{
@@ -294,15 +251,16 @@ void VideoWindow::ResizeLayout()
 	}
 	preview.SetSize(XMFLOAT2(preview.GetSize().x, preview.GetSize().x * h_aspect));
 
-	add(playpauseButton);
+	layout.add(playpauseButton);
+	playpauseButton.SetSize(XMFLOAT2(layout.width - 140, playpauseButton.GetSize().y));
 	loopedCheckbox.SetPos(XMFLOAT2(playpauseButton.GetPos().x - loopedCheckbox.GetSize().x - 2, playpauseButton.GetPos().y));
 	stopButton.SetPos(XMFLOAT2(playpauseButton.GetPos().x + playpauseButton.GetSize().x + 2, playpauseButton.GetPos().y));
-	stopButton.SetSize(XMFLOAT2(width - stopButton.GetPos().x - padding, playpauseButton.GetSize().y));
+	stopButton.SetSize(XMFLOAT2(layout.width - stopButton.GetPos().x - layout.padding, playpauseButton.GetSize().y));
 
-	add(timerSlider);
+	layout.add(timerSlider);
 
-	y += jump;
+	layout.jump();
 
-	add_fullwidth(infoLabel);
+	layout.add_fullwidth(infoLabel);
 }
 

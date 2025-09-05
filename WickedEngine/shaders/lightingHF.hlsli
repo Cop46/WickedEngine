@@ -47,6 +47,7 @@ inline void ApplyLighting(in Surface surface, in Lighting lighting, inout half4 
 	color.rgb += surface.emissiveColor;
 }
 
+//#define CASCADE_DITHERING
 inline void light_directional(in ShaderEntity light, in Surface surface, inout Lighting lighting, in half shadow_mask = 1)
 {
 	if (shadow_mask <= 0.001)
@@ -82,23 +83,46 @@ inline void light_directional(in ShaderEntity light, in Surface surface, inout L
 			{
 				// Project into shadow map space (no need to divide by .w because ortho projection!):
 				const float4x4 cascade_projection = load_entitymatrix(light.GetMatrixIndex() + cascade);
-				const float3 shadow_pos = mul(cascade_projection, float4(surface.P, 1)).xyz;
-				const float3 shadow_uv = clipspace_to_uv(shadow_pos);
+				float3 shadow_pos = mul(cascade_projection, float4(surface.P, 1)).xyz;
+				float3 shadow_uv = clipspace_to_uv(shadow_pos);
 
 				// Determine if pixel is inside current cascade bounds and compute shadow if it is:
 				[branch]
 				if (is_saturated(shadow_uv))
 				{
-					const half2 cascade_edgefactor = saturate(saturate(abs(shadow_pos.xy)) - 0.8) * 5.0; // fade will be on edge and inwards 10%
-					const half cascade_fade = max(cascade_edgefactor.x, cascade_edgefactor.y);
+					const half3 shadow_box = half3(shadow_pos.xy, shadow_pos.z * 2 - 1);
+					const half3 cascade_edgefactor = saturate(saturate(abs(shadow_box)) - 0.8) * 5.0; // fade will be on edge and inwards 10%
+					const half cascade_fade = max3(cascade_edgefactor);
 						
+#ifdef CASCADE_DITHERING
 					// If we are on cascade edge threshold and not the last cascade, then fallback to a larger cascade:
 					[branch]
 					if (cascade_fade > 0 && dither(surface.pixel + GetTemporalAASampleRotation()) < cascade_fade)
 						continue;
 						
-					light_color *= shadow_2D(light, shadow_pos, shadow_uv.xy, cascade, surface.pixel);
+					light_color *= shadow_2D(light, shadow_pos.z, shadow_uv.xy, cascade);
 					break;
+#else
+					const half3 shadow_main = shadow_2D(light, shadow_pos.z, shadow_uv.xy, cascade, surface.pixel);
+					
+					// If we are on cascade edge threshold and not the last cascade, then fallback to a larger cascade:
+					[branch]
+					if (cascade_fade > 0 && cascade < light.GetShadowCascadeCount() - 1)
+					{
+						// Project into next shadow cascade (no need to divide by .w because ortho projection!):
+						cascade += 1;
+						shadow_pos = mul(load_entitymatrix(light.GetMatrixIndex() + cascade), float4(surface.P, 1)).xyz;
+						shadow_uv = clipspace_to_uv(shadow_pos);
+						const half3 shadow_fallback = shadow_2D(light, shadow_pos.z, shadow_uv.xy, cascade, surface.pixel);
+
+						light_color *= lerp(shadow_main, shadow_fallback, cascade_fade);
+					}
+					else
+					{
+						light_color *= shadow_main;
+					}
+					break;
+#endif // CASCADE_DITHERING
 				}
 			}
 		}
@@ -318,7 +342,7 @@ inline void light_spot(in ShaderEntity light, in Surface surface, inout Lighting
 			[branch]
 			if (is_saturated(shadow_uv))
 			{
-				light_color *= shadow_2D(light, shadow_pos.xyz, shadow_uv.xy, 0, surface.pixel);
+				light_color *= shadow_2D(light, shadow_pos.z, shadow_uv.xy, 0, surface.pixel);
 			}
 		}
 		
@@ -357,6 +381,148 @@ inline void light_spot(in ShaderEntity light, in Surface surface, inout Lighting
 
 	lighting.direct.specular = mad(light_color, BRDF_GetSpecular(surface, surface_to_light), lighting.direct.specular);
 					
+#ifdef LIGHTING_SCATTER
+	const half scattering = ComputeScattering(saturate(dot(L, -surface.V)));
+	lighting.indirect.specular += scattering * light_color * (1 - surface.extinction) * (1 - sqr(1 - saturate(1 - surface.N.y)));
+#endif // LIGHTING_SCATTER
+}
+
+inline void light_rect(in ShaderEntity light, in Surface surface, inout Lighting lighting, in half shadow_mask = 1)
+{
+	if (shadow_mask <= 0.001)
+		return; // shadow mask zero
+	if ((light.layerMask & surface.layerMask) == 0)
+		return; // layer mismatch
+	
+	const half4 quaternion = light.GetQuaternion();
+	const half3 right = rotate_vector(half3(1, 0, 0), quaternion);
+	const half3 up = rotate_vector(half3(0, 1, 0), quaternion);
+	const half3 forward = cross(up, right);
+	const half light_length = max(0.01, light.GetLength());
+	const half light_height = max(0.01, light.GetHeight());
+	const half light_area = light_length * light_height;
+	const float3 p0 = light.position - right * light_length * 0.5 + up * light_height * 0.5;
+	const float3 p1 = light.position + right * light_length * 0.5 + up * light_height * 0.5;
+	const float3 p2 = light.position + right * light_length * 0.5 - up * light_height * 0.5;
+	const float3 p3 = light.position - right * light_length * 0.5 - up * light_height * 0.5;
+	
+	if (dot(surface.P - light.position, forward) <= 0)
+		return; // behind light
+
+	// Determine closest point on rectangle to surface position:
+	const float3 closest_point_on_plane_to_surface = point_on_plane(surface.P, light.position, forward);
+	const float3 closest_vector_on_plane = closest_point_on_plane_to_surface - light.position;
+	const float2 plane_point = float2(dot(closest_vector_on_plane, right), dot(closest_vector_on_plane, up));
+	const float2 nearest_point = float2(clamp(plane_point.x, -light_length * 0.5, light_length * 0.5), clamp(plane_point.y, -light_height * 0.5, light_height * 0.5));
+	const float3 rectangle_point = light.position + nearest_point.x * right + nearest_point.y * up;
+		
+	float3 Lunnormalized = rectangle_point - surface.P;
+
+	const half dist2 = dot(Lunnormalized, Lunnormalized);
+	const half range = light.GetRange();
+	const half range2 = range * range;
+
+	if (dist2 > range2)
+		return; // outside range
+		
+	const half dist_rcp = rsqrt(dist2);
+	half3 L = Lunnormalized * dist_rcp;
+
+	SurfaceToLight surface_to_light;
+	surface_to_light.create(surface, L);
+	
+	// Solid angle based on the Frostbite presentation: Moving Frostbite to Physically Based Rendering by Sebastien Lagarde, Charles de Rousiers, Siggraph 2014
+	//	https://media.contentapi.ea.com/content/dam/eacom/frostbite/files/course-notes-moving-frostbite-to-pbr-v2.pdf
+	const float3 v0 = normalize(p0 - surface.P);
+	const float3 v1 = normalize(p1 - surface.P);
+	const float3 v2 = normalize(p2 - surface.P);
+	const float3 v3 = normalize(p3 - surface.P);
+	const float3 n0 = normalize(cross(v0, v1));
+	const float3 n1 = normalize(cross(v1, v2));
+	const float3 n2 = normalize(cross(v2, v3));
+	const float3 n3 = normalize(cross(v3, v0));
+	const float g0 = acosFast(dot(-n0, n1));
+	const float g1 = acosFast(dot(-n1, n2));
+	const float g2 = acosFast(dot(-n2, n3));
+	const float g3 = acosFast(dot(-n3, n0));
+	const float solid_angle = saturate(g0 + g1 + g2 + g3 - 2 * PI);
+	
+	surface_to_light.NdotL = solid_angle * 0.2 * (
+		saturate(dot(v0, surface.N)) +
+		saturate(dot(v1, surface.N)) +
+		saturate(dot(v2, surface.N)) +
+		saturate(dot(v3, surface.N)) +
+		surface_to_light.NdotL
+	);
+	surface_to_light.NdotL_sss = surface_to_light.NdotL;
+		
+	if (!any(surface_to_light.NdotL_sss))
+		return; // facing away from light
+		
+	half3 light_color = light.GetColor().rgb * shadow_mask;
+	
+	[branch]
+	if (light.IsCastingShadow() && surface.IsReceiveShadow())
+	{
+#if defined(SHADOW_MASK_ENABLED) && !defined(TRANSPARENT)
+		[branch]
+		if ((GetFrame().options & OPTION_BIT_RAYTRACED_SHADOWS) == 0 || GetCamera().texture_rtshadow_index < 0 || (GetCamera().options & SHADERCAMERA_OPTION_USE_SHADOW_MASK) == 0)
+#endif // SHADOW_MASK_ENABLED
+		{
+			float4 shadow_pos = mul(load_entitymatrix(light.GetMatrixIndex() + 0), float4(surface.P, 1));
+			shadow_pos.xyz /= shadow_pos.w;
+			float2 shadow_uv = clipspace_to_uv(shadow_pos.xy);
+			[branch]
+			if (is_saturated(shadow_uv))
+			{
+				light_color *= shadow_2D(light, shadow_pos.z, shadow_uv.xy, 0, surface.pixel);
+			}
+		}
+		
+		if (!any(light_color))
+			return; // light color lost after shadow
+	}
+		
+	light_color *= attenuation_pointlight(dist2, range, range2); // dist2 is the closest point on rectangle, so it will not be a falloff from light center, but as if a point light is placed on the closest rectangle point
+	
+	half3 light_color_diffuse = light_color * light_area * PI; // I increase the light color by the surface area, because I want larger lights to illuminate more.
+	
+	half3 light_color_specular = light_color;
+
+	// Intersects the plane of the rectangle with reflection ray, then computes closest point on rectangle, source: https://alextardif.com/arealights.html
+	const float3 intersectPoint = surface.P + surface.R * trace_plane(surface.P, surface.R, light.position, forward);
+	const float3 intersectionVector = intersectPoint - light.position;
+	const float2 intersectPlanePoint = float2(dot(intersectionVector,right), dot(intersectionVector,up));
+	const float2 nearest2DPoint = float2(clamp(intersectPlanePoint.x, -light_length * 0.5, light_length * 0.5), clamp(intersectPlanePoint.y, -light_height * 0.5, light_height * 0.5));
+	const float3 specular_rect = light.position + nearest2DPoint.x * right + nearest2DPoint.y * up;
+
+	const uint maskTex = light.GetTextureIndex();
+	[branch]
+	if (maskTex > 0)
+	{
+		Texture2D<half4> tex = bindless_textures_half4[descriptor_index(maskTex)];
+		uint2 dim;
+		uint mipcount;
+		tex.GetDimensions(0, dim.x, dim.y, mipcount);
+		
+		float4 shadow_pos = mul(load_entitymatrix(light.GetMatrixIndex() + 0), float4(surface.P, 1));
+		shadow_pos.xyz /= shadow_pos.w;
+		float2 diffuse_uv = clipspace_to_uv(shadow_pos.xy);
+		half4 diffuse_mask = tex.SampleLevel(sampler_linear_clamp, diffuse_uv, mipcount - 2);
+		light_color_diffuse *= diffuse_mask.rgb * diffuse_mask.a;
+
+		float2 specular_uv = clipspace_to_uv(nearest2DPoint / float2(light_length * 0.5, light_height * 0.5));
+		half4 specular_mask = tex.SampleLevel(sampler_linear_clamp, specular_uv, (1 - sqr(1 - saturate(surface.roughness))) * mipcount);
+		light_color_specular *= specular_mask.rgb * specular_mask.a;
+	}
+	
+	lighting.direct.diffuse = mad(light_color_diffuse, BRDF_GetDiffuse(surface, surface_to_light), lighting.direct.diffuse);
+	
+	Lunnormalized = specular_rect - surface.P;
+	L = normalize(Lunnormalized);
+	surface_to_light.create(surface, L); // recompute all surface-light vectors
+	lighting.direct.specular = mad(light_color_specular, BRDF_GetSpecular(surface, surface_to_light), lighting.direct.specular);
+				
 #ifdef LIGHTING_SCATTER
 	const half scattering = ComputeScattering(saturate(dot(L, -surface.V)));
 	lighting.indirect.specular += scattering * light_color * (1 - surface.extinction) * (1 - sqr(1 - saturate(1 - surface.N.y)));

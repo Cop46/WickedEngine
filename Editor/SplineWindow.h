@@ -18,6 +18,8 @@ public:
 	wi::gui::Slider subdivSlider;
 	wi::gui::Slider subdivVerticalSlider;
 	wi::gui::Slider terrainSlider;
+	wi::gui::Slider terrainTexSlider;
+	wi::gui::Slider terrainPushdownSlider;
 	wi::gui::Button addButton;
 
 	struct Entry
@@ -25,7 +27,7 @@ public:
 		wi::gui::Button removeButton;
 		wi::gui::Button entityButton;
 	};
-	wi::vector<Entry> entries;
+	std::deque<Entry> entries;
 
 	void RefreshEntries();
 

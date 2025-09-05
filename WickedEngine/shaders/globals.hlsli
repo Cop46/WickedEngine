@@ -498,62 +498,25 @@ StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[] : regi
 StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[] : register(space208);
 #endif // __spirv__
 
-inline FrameCB GetFrame()
-{
-	return g_xFrame;
-}
-inline ShaderCamera GetCamera(uint camera_index = 0)
-{
-	return g_xCamera.cameras[camera_index];
-}
-inline ShaderScene GetScene()
-{
-	return GetFrame().scene;
-}
-inline ShaderWeather GetWeather()
-{
-	return GetScene().weather;
-}
-inline ShaderMeshInstance load_instance(uint instanceIndex)
-{
-	return bindless_structured_meshinstance[descriptor_index(GetScene().instancebuffer)][instanceIndex];
-}
-inline ShaderGeometry load_geometry(uint geometryIndex)
-{
-	return bindless_structured_geometry[descriptor_index(GetScene().geometrybuffer)][geometryIndex];
-}
-inline ShaderMeshlet load_meshlet(uint meshletIndex)
-{
-	return bindless_structured_meshlet[descriptor_index(GetScene().meshletbuffer)][meshletIndex];
-}
-inline ShaderMaterial load_material(uint materialIndex)
-{
-	return bindless_structured_material[descriptor_index(GetScene().materialbuffer)][materialIndex];
-}
-uint load_entitytile(uint tileIndex)
-{
-	uint offset = 0;
+// Note: these are macros, the SPIRV compilation is a LOT slower and uses a LOT more memory when functions return large structs, issue: https://github.com/microsoft/DirectXShaderCompiler/issues/7493
+#define GetFrame() (g_xFrame)
+#define GetScene() (g_xFrame.scene)
+#define GetWeather() (g_xFrame.scene.weather)
+#define GetCamera() (g_xCamera.cameras[0])
+#define GetCameraIndexed(camera_index) (g_xCamera.cameras[camera_index])
+#define load_instance(instanceIndex) (bindless_structured_meshinstance[descriptor_index(GetScene().instancebuffer)][instanceIndex])
+#define load_geometry(geometryIndex) (bindless_structured_geometry[descriptor_index(GetScene().geometrybuffer)][geometryIndex])
+#define load_meshlet(meshletIndex) (bindless_structured_meshlet[descriptor_index(GetScene().meshletbuffer)][meshletIndex])
+#define load_material(materialIndex) (bindless_structured_material[descriptor_index(GetScene().materialbuffer)][materialIndex])
+#define load_entity(entityIndex) (GetFrame().entityArray[entityIndex])
+#define load_entitymatrix(matrixIndex) (GetFrame().matrixArray[matrixIndex])
 #ifdef TRANSPARENT
-	offset += GetCamera().entity_culling_tile_bucket_count_flat;
+#define load_entitytile(tileIndex) (bindless_structured_uint[GetCamera().buffer_entitytiles_index][GetCamera().entity_culling_tile_bucket_count_flat + tileIndex])
+#else
+#define load_entitytile(tileIndex) (bindless_structured_uint[GetCamera().buffer_entitytiles_index][tileIndex])
 #endif // TRANSPARENT
-	return bindless_structured_uint[GetCamera().buffer_entitytiles_index][offset + tileIndex];
-}
-inline ShaderEntity load_entity(uint entityIndex)
-{
-	return GetFrame().entityArray[entityIndex];
-}
-inline ShaderEntity load_entity(min16uint entityIndex)
-{
-	return GetFrame().entityArray[entityIndex];
-}
-inline float4x4 load_entitymatrix(uint matrixIndex)
-{
-	return GetFrame().matrixArray[matrixIndex];
-}
-inline float4x4 load_entitymatrix(min16uint matrixIndex)
-{
-	return GetFrame().matrixArray[matrixIndex];
-}
+
+
 inline void write_mipmap_feedback(uint materialIndex, float4 uvsets_dx, float4 uvsets_dy)
 {
 	[branch]
@@ -603,6 +566,12 @@ inline ShaderEntityIterator pointlights()
 {
 	ShaderEntityIterator iter;
 	iter.value = GetFrame().pointlights;
+	return iter;
+}
+inline ShaderEntityIterator rectlights()
+{
+	ShaderEntityIterator iter;
+	iter.value = GetFrame().rectlights;
 	return iter;
 }
 inline ShaderEntityIterator probes()
@@ -744,6 +713,7 @@ struct PrimitiveID
 #define HEMISPHERE_SAMPLING_PDF rcp(2 * PI)
 
 #define sqr(a) ((a)*(a))
+#define pow3(a) ((a)*(a)*(a))
 #define pow4(a) ((a)*(a)*(a)*(a))
 #define pow5(a) ((a)*(a)*(a)*(a)*(a))
 #define pow8(a) ((a)*(a)*(a)*(a)*(a)*(a)*(a)*(a))
@@ -873,33 +843,63 @@ inline uint4 align(uint4 value, uint4 alignment)
 	return ((value + alignment - 1) / alignment) * alignment;
 }
 
+// UV [0,1] -> projection matrix clip space [-1,1]
 inline float2 uv_to_clipspace(in float2 uv)
 {
-	float2 clipspace = uv * 2 - 1;
+	float2 clipspace = mad(uv, 2, -1);
 	clipspace.y *= -1;
 	return clipspace;
 }
 inline half2 uv_to_clipspace(in half2 uv)
 {
-	half2 clipspace = uv * 2 - 1;
+	half2 clipspace = mad(uv, 2, -1);
 	clipspace.y *= -1;
 	return clipspace;
 }
+
+// projection matrix clip space [-1,1] on XY and [0,1] on Z -> UV [0,1]
 inline float2 clipspace_to_uv(in float2 clipspace)
 {
-	return clipspace * float2(0.5, -0.5) + 0.5;
+	return mad(clipspace, float2(0.5, -0.5), 0.5);
 }
 inline float3 clipspace_to_uv(in float3 clipspace)
 {
-	return clipspace * float3(0.5, -0.5, 0.5) + 0.5;
+	return mad(clipspace, float3(0.5, -0.5, 1), float3(0.5, 0.5, 0));
 }
 inline half2 clipspace_to_uv(in half2 clipspace)
 {
-	return clipspace * half2(0.5, -0.5) + 0.5;
+	return mad(clipspace, half2(0.5, -0.5), 0.5);
 }
 inline half3 clipspace_to_uv(in half3 clipspace)
 {
-	return clipspace * half3(0.5, -0.5, 0.5) + 0.5;
+	return mad(clipspace, half3(0.5, -0.5, 1), half3(0.5, 0.5, 0));
+}
+
+// box matrix projection [-1,1] -> UV [0,1]
+inline float3 box_to_uv(in float3 box)
+{
+	return mad(box, float3(0.5, -0.5, 0.5), float3(0.5, 0.5, 0.5));
+}
+inline half3 box_to_uv(in half3 box)
+{
+	return mad(box, half3(0.5, -0.5, 0.5), half3(0.5, 0.5, 0.5));
+}
+
+float acosFast(float x)
+{
+    // Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
+    // This is the approximation of degree 1, with a max absolute error of 9.0x10^-3
+    float y = abs(x);
+    float p = -0.1565827 * y + 1.570796;
+    p *= sqrt(1.0 - y);
+    return x >= 0.0 ? p : PI - p;
+}
+
+float acosFastPositive(float x)
+{
+    // Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
+    float p = -0.1565827 * x + 1.570796;
+    return p * sqrt(1.0 - x);
 }
 
 inline half3 GetSunColor() { return unpack_half3(GetWeather().sun_color); } // sun color with intensity applied
@@ -1807,10 +1807,31 @@ inline half distance_squared(half3 a, half3 b)
 	return dot(diff, diff);
 }
 
+// Angle between normalized vectors [-PI, PI]
+template <typename T>
+inline half get_angle(T a, T b)
+{
+    half ret = dot(a, b);
+    ret = clamp(ret, -1, 1);
+    ret = acos(ret);
+    return ret;
+}
 
 float plane_point_distance(float3 planeOrigin, float3 planeNormal, float3 P)
 {
 	return dot(planeNormal, P - planeOrigin);
+}
+// Projects a point onto a plane defined by a normal and a point on the plane
+float3 point_on_plane(float3 P, float3 planeOrigin, float3 planeNormal)
+{
+    // Ensure the plane normal is normalized
+    planeNormal = normalize(planeNormal);
+    
+    // Compute the distance from the point to the plane
+    float distance = dot(P - planeOrigin, planeNormal);
+    
+    // Project the point onto the plane
+    return P - distance * planeNormal;
 }
 
 // o		: ray origin
@@ -1875,17 +1896,19 @@ float trace_disk(float3 o, float3 d, float3 diskCenter, float diskRadius, float3
 	return dot(diff, diff) < sqr(diskRadius);
 }
 
-// Return the closest point on the line (without limit) 
-float3 closest_point_on_line(float3 a, float3 b, float3 c)
+// Return the closest point on the line (without limit)
+template <typename T>
+T closest_point_on_line(T a, T b, T c)
 {
-	float3 ab = b - a;
+	T ab = b - a;
 	float t = dot(c - a, ab) / dot(ab, ab);
 	return a + t * ab;
 }
 // Return the closest point on the segment (with limit) 
-float3 closest_point_on_segment(float3 a, float3 b, float3 c)
+template <typename T>
+T closest_point_on_segment(T a, T b, T c)
 {
-	float3 ab = b - a;
+	T ab = b - a;
 	float t = dot(c - a, ab) / dot(ab, ab);
 	return a + saturate(t) * ab;
 }

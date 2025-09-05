@@ -10,6 +10,7 @@
 #include "wiTexture_BindLua.h"
 #include "wiRenderer_BindLua.h"
 #include "wiAudio_BindLua.h"
+#include "wiVideo_BindLua.h"
 #include "wiSprite_BindLua.h"
 #include "wiImageParams_BindLua.h"
 #include "wiSpriteAnim_BindLua.h"
@@ -298,6 +299,8 @@ namespace wi::lua
 		Texture_BindLua::Bind();
 		renderer::Bind();
 		Audio_BindLua::Bind();
+		Video_BindLua::Bind();
+		VideoInstance_BindLua::Bind();
 		Sprite_BindLua::Bind();
 		ImageParams_BindLua::Bind();
 		SpriteAnim_BindLua::Bind();
@@ -313,7 +316,7 @@ namespace wi::lua
 		TrailRenderer_BindLua::Bind();
 		Async_BindLua::Bind();
 
-		wilog("wi::lua Initialized [Lua %s.%s] (%d ms)", LUA_VERSION_MAJOR, LUA_VERSION_MINOR, (int)std::round(timer.elapsed()));
+		wilog("wi::lua Initialized [Lua %s.%s.%s] (%d ms)", LUA_VERSION_MAJOR, LUA_VERSION_MINOR, LUA_VERSION_RELEASE, (int)std::round(timer.elapsed()));
 	}
 
 	lua_State* GetLuaState()

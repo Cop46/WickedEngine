@@ -33,37 +33,35 @@ void ColliderWindow::Create(EditorComponent* _editor)
 
 	infoLabel.Create("");
 	infoLabel.SetText("Colliders are used for simple fake physics, without using the physics engine. They are only used in specific CPU/GPU systems.");
-	infoLabel.SetSize(XMFLOAT2(100, 50));
+	infoLabel.SetFitTextEnabled(true);
 	AddWidget(&infoLabel);
 
+	auto forEachSelectedCollider = [this](auto func) {
+		return [this, func](wi::gui::EventArgs args) {
+			wi::scene::Scene& scene = editor->GetCurrentScene();
+			for (auto& x : editor->translator.selected)
+			{
+				ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
+				if (collider == nullptr)
+					continue;
+				func(collider, args);
+			}
+		};
+	};
 	cpuCheckBox.Create("CPU: ");
 	cpuCheckBox.SetTooltip("Enable for use on the CPU. CPU usage includes: springs.");
 	cpuCheckBox.SetSize(XMFLOAT2(hei, hei));
-	cpuCheckBox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->SetCPUEnabled(args.bValue);
-		}
-	});
+	cpuCheckBox.OnClick(forEachSelectedCollider([](auto collider, auto args) {
+		collider->SetCPUEnabled(args.bValue);
+	}));
 	AddWidget(&cpuCheckBox);
 
 	gpuCheckBox.Create("GPU: ");
 	gpuCheckBox.SetTooltip("Enable for use on the GPU. GPU usage includes: emitter and hair particle systems.\nNote that GPU can support only a limited amount of colliders.");
 	gpuCheckBox.SetSize(XMFLOAT2(hei, hei));
-	gpuCheckBox.OnClick([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->SetGPUEnabled(args.bValue);
-		}
-	});
+	gpuCheckBox.OnClick(forEachSelectedCollider([](auto collider, auto args) {
+		collider->SetGPUEnabled(args.bValue);
+	}));
 	AddWidget(&gpuCheckBox);
 
 	shapeCombo.Create("Shape: ");
@@ -72,31 +70,17 @@ void ColliderWindow::Create(EditorComponent* _editor)
 	shapeCombo.AddItem("Sphere", (uint64_t)ColliderComponent::Shape::Sphere);
 	shapeCombo.AddItem("Capsule", (uint64_t)ColliderComponent::Shape::Capsule);
 	shapeCombo.AddItem("Plane", (uint64_t)ColliderComponent::Shape::Plane);
-	shapeCombo.OnSelect([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->shape = (ColliderComponent::Shape)args.userdata;
-		}
-	});
+	shapeCombo.OnSelect(forEachSelectedCollider([](auto collider, auto args) {
+		collider->shape = (ColliderComponent::Shape)args.userdata;
+	}));
 	AddWidget(&shapeCombo);
 
 	radiusSlider.Create(0, 10, 0, 100000, "Radius: ");
 	radiusSlider.SetSize(XMFLOAT2(wid, hei));
 	radiusSlider.SetPos(XMFLOAT2(x, y += step));
-	radiusSlider.OnSlide([&](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->radius = args.fValue;
-		}
-	});
+	radiusSlider.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->radius = args.fValue;
+	}));
 	AddWidget(&radiusSlider);
 
 
@@ -106,46 +90,25 @@ void ColliderWindow::Create(EditorComponent* _editor)
 	offsetX.Create(-10, 10, 0, 10000, "Offset X: ");
 	offsetX.SetSize(XMFLOAT2(wid, hei));
 	offsetX.SetPos(XMFLOAT2(x, y += step));
-	offsetX.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->offset.x = args.fValue;
-		}
-	});
+	offsetX.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->offset.x = args.fValue;
+	}));
 	AddWidget(&offsetX);
 
 	offsetY.Create(-10, 10, 0, 10000, "Offset Y: ");
 	offsetY.SetSize(XMFLOAT2(wid, hei));
 	offsetY.SetPos(XMFLOAT2(x, y += step));
-	offsetY.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->offset.y = args.fValue;
-		}
-	});
+	offsetY.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->offset.y = args.fValue;
+	}));
 	AddWidget(&offsetY);
 
 	offsetZ.Create(-10, 10, 0, 10000, "Offset Z: ");
 	offsetZ.SetSize(XMFLOAT2(wid, hei));
 	offsetZ.SetPos(XMFLOAT2(x, y += step));
-	offsetZ.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->offset.z = args.fValue;
-		}
-	});
+	offsetZ.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->offset.z = args.fValue;
+	}));
 	AddWidget(&offsetZ);
 
 
@@ -155,46 +118,25 @@ void ColliderWindow::Create(EditorComponent* _editor)
 	tailX.Create(-10, 10, 0, 10000, "Tail X: ");
 	tailX.SetSize(XMFLOAT2(wid, hei));
 	tailX.SetPos(XMFLOAT2(x, y += step));
-	tailX.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->tail.x = args.fValue;
-		}
-	});
+	tailX.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->tail.x = args.fValue;
+	}));
 	AddWidget(&tailX);
 
 	tailY.Create(-10, 10, 0, 10000, "Tail Y: ");
 	tailY.SetSize(XMFLOAT2(wid, hei));
 	tailY.SetPos(XMFLOAT2(x, y += step));
-	tailY.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->tail.y = args.fValue;
-		}
-	});
+	tailY.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->tail.y = args.fValue;
+	}));
 	AddWidget(&tailY);
 
 	tailZ.Create(-10, 10, 0, 10000, "Tail Z: ");
 	tailZ.SetSize(XMFLOAT2(wid, hei));
 	tailZ.SetPos(XMFLOAT2(x, y += step));
-	tailZ.OnSlide([=](wi::gui::EventArgs args) {
-		wi::scene::Scene& scene = editor->GetCurrentScene();
-		for (auto& x : editor->translator.selected)
-		{
-			ColliderComponent* collider = scene.colliders.GetComponent(x.entity);
-			if (collider == nullptr)
-				continue;
-			collider->tail.z = args.fValue;
-		}
-	});
+	tailZ.OnSlide(forEachSelectedCollider([](auto collider, auto args) {
+		collider->tail.z = args.fValue;
+	}));
 	AddWidget(&tailZ);
 
 
@@ -235,56 +177,24 @@ void ColliderWindow::SetEntity(Entity entity)
 void ColliderWindow::ResizeLayout()
 {
 	wi::gui::Window::ResizeLayout();
-	const float padding = 4;
-	const float width = GetWidgetAreaSize().x;
-	float y = padding;
-	float jump = 20;
+	layout.margin_left = 80;
 
-	const float margin_left = 80;
-	const float margin_right = 40;
-
-	auto add = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_right = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		widget.SetPos(XMFLOAT2(width - margin_right - widget.GetSize().x, y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-	auto add_fullwidth = [&](wi::gui::Widget& widget) {
-		if (!widget.IsVisible())
-			return;
-		const float margin_left = padding;
-		const float margin_right = padding;
-		widget.SetPos(XMFLOAT2(margin_left, y));
-		widget.SetSize(XMFLOAT2(width - margin_left - margin_right, widget.GetScale().y));
-		y += widget.GetSize().y;
-		y += padding;
-	};
-
-	add_fullwidth(infoLabel);
-	add_right(cpuCheckBox);
+	layout.add_fullwidth(infoLabel);
+	layout.add_right(cpuCheckBox);
 	gpuCheckBox.SetPos(XMFLOAT2(cpuCheckBox.GetPos().x - 100, cpuCheckBox.GetPos().y));
-	add(shapeCombo);
-	add(radiusSlider);
+	layout.add(shapeCombo);
+	layout.add(radiusSlider);
 
-	y += jump;
+	layout.jump();
 
-	add(offsetX);
-	add(offsetY);
-	add(offsetZ);
+	layout.add(offsetX);
+	layout.add(offsetY);
+	layout.add(offsetZ);
 
-	y += jump;
+	layout.jump();
 
-	add(tailX);
-	add(tailY);
-	add(tailZ);
+	layout.add(tailX);
+	layout.add(tailY);
+	layout.add(tailZ);
 
 }

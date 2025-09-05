@@ -375,7 +375,7 @@ struct alignas(16) ShaderMaterial
 	int sampler_descriptor;
 	uint options_stencilref;
 	uint layerMask;
-	uint shaderType;
+	uint shaderType_meshblend;
 
 	uint4 userdata;
 
@@ -403,7 +403,7 @@ struct alignas(16) ShaderMaterial
 		sampler_descriptor = -1;
 		options_stencilref = 0;
 		layerMask = ~0u;
-		shaderType = 0;
+		shaderType_meshblend = 0;
 
 		userdata = uint4(0, 0, 0, 0);
 
@@ -443,6 +443,8 @@ struct alignas(16) ShaderMaterial
 	inline half3 GetInteriorOffset() { return unpack_half3(subsurfaceScattering_inv); }
 	inline half2 GetInteriorSinCos() { return half2(unpack_half4(subsurfaceScattering).w, unpack_half4(subsurfaceScattering_inv).w); }
 	inline uint GetStencilRef() { return options_stencilref >> 24u; }
+	inline uint GetShaderType() { return shaderType_meshblend & 0xFFFF; }
+	inline half GetMeshBlend() { return f16tof32(shaderType_meshblend >> 16u); }
 #endif // __cplusplus
 
 	inline uint GetOptions() { return options_stencilref; }
@@ -771,6 +773,7 @@ enum SHADER_ENTITY_TYPE
 	ENTITY_TYPE_DIRECTIONALLIGHT,
 	ENTITY_TYPE_POINTLIGHT,
 	ENTITY_TYPE_SPOTLIGHT,
+	ENTITY_TYPE_RECTLIGHT,
 	ENTITY_TYPE_DECAL,
 	ENTITY_TYPE_ENVMAP,
 	ENTITY_TYPE_FORCEFIELD_POINT,
@@ -796,7 +799,7 @@ struct alignas(16) ShaderEntity
 	float3 position;
 	uint type8_flags8_range16;
 
-	uint2 direction16_coneAngleCos16; // coneAngleCos is used for cascade count in directional light
+	uint2 direction16_coneAngleCos16;
 	uint2 color; // half4 packed
 
 	uint layerMask;
@@ -828,12 +831,25 @@ struct alignas(16) ShaderEntity
 	{
 		return (half)f16tof32(radius16_length16 >> 16u);
 	}
+	inline half GetHeight()
+	{
+		return GetRadius();
+	}
 	inline half3 GetDirection()
 	{
 		return normalize(half3(
 			(half)f16tof32(direction16_coneAngleCos16.x),
 			(half)f16tof32(direction16_coneAngleCos16.x >> 16u),
 			(half)f16tof32(direction16_coneAngleCos16.y)
+		));
+	}
+	inline half4 GetQuaternion()
+	{
+		return normalize(half4(
+			(half)f16tof32(direction16_coneAngleCos16.x),
+			(half)f16tof32(direction16_coneAngleCos16.x >> 16u),
+			(half)f16tof32(direction16_coneAngleCos16.y),
+			(half)f16tof32(direction16_coneAngleCos16.y >> 16u)
 		));
 	}
 	inline half GetConeAngleCos()
@@ -916,6 +932,10 @@ struct alignas(16) ShaderEntity
 	{
 		radius16_length16 |= XMConvertFloatToHalf(value) << 16u;
 	}
+	inline void SetHeight(float value)
+	{
+		SetRadius(value);
+	}
 	inline void SetColor(float4 value)
 	{
 		color.x |= XMConvertFloatToHalf(value.x);
@@ -928,6 +948,13 @@ struct alignas(16) ShaderEntity
 		direction16_coneAngleCos16.x |= XMConvertFloatToHalf(value.x);
 		direction16_coneAngleCos16.x |= XMConvertFloatToHalf(value.y) << 16u;
 		direction16_coneAngleCos16.y |= XMConvertFloatToHalf(value.z);
+	}
+	inline void SetQuaternion(float4 value)
+	{
+		direction16_coneAngleCos16.x |= XMConvertFloatToHalf(value.x);
+		direction16_coneAngleCos16.x |= XMConvertFloatToHalf(value.y) << 16u;
+		direction16_coneAngleCos16.y |= XMConvertFloatToHalf(value.z);
+		direction16_coneAngleCos16.y |= XMConvertFloatToHalf(value.w) << 16u;
 	}
 	inline void SetConeAngleCos(float value)
 	{
@@ -1022,7 +1049,7 @@ struct alignas(16) ShaderFrustumCorners
 #endif // __cplusplus
 };
 
-static const float CAPSULE_SHADOW_AFFECTION_RANGE = 2; // how far away the capsule shadow can reach outside of their own radius
+static const float CAPSULE_SHADOW_AFFECTION_RANGE = 4; // how far away the capsule shadow can reach outside of their own radius
 static const float CAPSULE_SHADOW_BOLDEN = 1.1f; // multiplier for capsule shadow capsule radiuses globally
 
 static const uint SHADER_ENTITY_COUNT = 256;
@@ -1201,10 +1228,10 @@ struct alignas(16) FrameCB
 	uint spotlights;
 	uint pointlights;
 
+	uint rectlights;
 	uint lights;
 	uint decals;
 	uint forces;
-	uint padding2;
 
 	ShaderEntity entityArray[SHADER_ENTITY_COUNT];
 	float4x4 matrixArray[SHADER_ENTITY_COUNT];
@@ -1215,6 +1242,7 @@ enum SHADERCAMERA_OPTIONS
 	SHADERCAMERA_OPTION_NONE = 0,
 	SHADERCAMERA_OPTION_USE_SHADOW_MASK = 1 << 0,
 	SHADERCAMERA_OPTION_ORTHO = 1 << 1,
+	SHADERCAMERA_OPTION_DEDICATED_SHADOW_LODBIAS = 1 << 2,
 };
 
 struct alignas(16) ShaderCamera

@@ -12,6 +12,8 @@ public:
 	void RefreshBoneList();
 
 	wi::gui::Label infoLabel;
+	wi::gui::Button importAnimationsButton;
+	wi::gui::ComboBox animationTesterCombo;
 	wi::gui::CheckBox lookatMouseCheckBox;
 	wi::gui::CheckBox lookatCheckBox;
 	wi::gui::ComboBox lookatEntityCombo;
@@ -26,6 +28,8 @@ public:
 	wi::gui::Slider headSizeSlider;
 	wi::gui::Slider ragdollFatnessSlider;
 	wi::gui::Slider ragdollHeadSizeSlider;
+	wi::gui::Slider armSpacingSlider;
+	wi::gui::Slider legSpacingSlider;
 	wi::gui::TreeList boneList;
 
 	void ResizeLayout() override;

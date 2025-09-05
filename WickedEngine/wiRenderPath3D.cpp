@@ -81,6 +81,7 @@ namespace wi
 		visibilityResources = {};
 		fsr2Resources = {};
 		vxgiResources = {};
+		meshblendResources = {};
 	}
 
 	void RenderPath3D::ResizeBuffers()
@@ -183,25 +184,14 @@ namespace wi
 			device->CreateTexture(&desc, nullptr, &rtSceneCopy_tmp, &rtPrimitiveID);
 			device->SetName(&rtSceneCopy_tmp, "rtSceneCopy_tmp");
 
-			for (uint32_t i = 0; i < rtSceneCopy.GetDesc().mip_levels; ++i)
-			{
-				int subresource_index;
-				subresource_index = device->CreateSubresource(&rtSceneCopy, SubresourceType::SRV, 0, 1, i, 1);
-				assert(subresource_index == i);
-				subresource_index = device->CreateSubresource(&rtSceneCopy_tmp, SubresourceType::SRV, 0, 1, i, 1);
-				assert(subresource_index == i);
-				subresource_index = device->CreateSubresource(&rtSceneCopy, SubresourceType::UAV, 0, 1, i, 1);
-				assert(subresource_index == i);
-				subresource_index = device->CreateSubresource(&rtSceneCopy_tmp, SubresourceType::UAV, 0, 1, i, 1);
-				assert(subresource_index == i);
-			}
+			device->CreateMipgenSubresources(rtSceneCopy);
+			device->CreateMipgenSubresources(rtSceneCopy_tmp);
 
 			// because this is used by SSR and SSGI before it gets a chance to be normally rendered, it MUST be cleared!
 			CommandList cmd = device->BeginCommandList();
 			device->Barrier(GPUBarrier::Image(&rtSceneCopy, rtSceneCopy.desc.layout, ResourceState::UNORDERED_ACCESS), cmd);
 			device->ClearUAV(&rtSceneCopy, 0, cmd);
 			device->Barrier(GPUBarrier::Image(&rtSceneCopy, ResourceState::UNORDERED_ACCESS, rtSceneCopy.desc.layout), cmd);
-			device->SubmitCommandLists();
 		}
 		{
 			TextureDesc desc;
@@ -818,7 +808,7 @@ namespace wi
 			for (size_t i = 0; i < scene->videos.GetCount(); ++i)
 			{
 				const wi::scene::VideoComponent& video = scene->videos[i];
-				if (wi::video::IsDecodingRequired(&video.videoinstance, scene->dt))
+				if (wi::video::IsDecodingRequired(&video.videoinstance))
 				{
 					video_cmd = device->BeginCommandList(QUEUE_VIDEO_DECODE);
 					break;
@@ -827,8 +817,20 @@ namespace wi
 			for (size_t i = 0; i < scene->videos.GetCount(); ++i)
 			{
 				wi::scene::VideoComponent& video = scene->videos[i];
-				wi::video::UpdateVideo(&video.videoinstance, scene->dt, video_cmd);
+				wi::video::DecodeVideo(&video.videoinstance, video_cmd);
 			}
+		}
+
+		if (getMeshBlendEnabled() && visibility_main.IsMeshBlendVisible())
+		{
+			if (!meshblendResources.IsValid())
+			{
+				wi::renderer::CreateMeshBlendResources(meshblendResources, internalResolution);
+			}
+		}
+		else
+		{
+			meshblendResources = {};
 		}
 
 		prerender_happened = true;
@@ -918,12 +920,6 @@ namespace wi
 			if (scene->IsAccelerationStructureUpdateRequested())
 			{
 				wi::renderer::UpdateRaytracingAccelerationStructures(*scene, cmd);
-			}
-
-			if (scene->weather.IsRealisticSky())
-			{
-				wi::renderer::ComputeSkyAtmosphereTextures(cmd);
-				wi::renderer::ComputeSkyAtmosphereSkyViewLut(cmd);
 			}
 
 			if (wi::renderer::GetSurfelGIEnabled())
@@ -1164,16 +1160,6 @@ namespace wi
 				);
 			}
 
-			if (scene->weather.IsRealisticSky())
-			{
-				wi::renderer::ComputeSkyAtmosphereSkyViewLut(cmd);
-
-				if (scene->weather.IsRealisticSkyAerialPerspective())
-				{
-					wi::renderer::ComputeSkyAtmosphereCameraVolumeLut(cmd);
-				}
-			}
-
 			if (scene->weather.IsVolumetricClouds() && !scene->weather.IsVolumetricCloudsReceiveShadow())
 			{
 				// When volumetric cloud DOESN'T receive shadow it can be done async to shadow maps!
@@ -1187,6 +1173,11 @@ namespace wi
 					scene->weather.volumetricCloudsWeatherMapFirst.IsValid() ? &scene->weather.volumetricCloudsWeatherMapFirst.GetTexture() : nullptr,
 					scene->weather.volumetricCloudsWeatherMapSecond.IsValid() ? &scene->weather.volumetricCloudsWeatherMapSecond.GetTexture() : nullptr
 				);
+			}
+
+			if (getMeshBlendEnabled() && visibility_main.IsMeshBlendVisible())
+			{
+				wi::renderer::PostProcess_MeshBlend_EdgeProcess(meshblendResources, cmd);
 			}
 
 		});
@@ -1304,17 +1295,6 @@ namespace wi
 					camera_reflection,
 					cmd
 				);
-
-				// Render SkyAtmosphere assets from planar reflections point of view
-				if (scene->weather.IsRealisticSky())
-				{
-					wi::renderer::ComputeSkyAtmosphereSkyViewLut(cmd);
-
-					if (scene->weather.IsRealisticSkyAerialPerspective())
-					{
-						wi::renderer::ComputeSkyAtmosphereCameraVolumeLut(cmd);
-					}
-				}
 
 				device->EventBegin("Planar reflections Z-Prepass", cmd);
 				auto range = wi::profiler::BeginRangeGPU("Planar Reflections Z-Prepass", cmd);
@@ -1687,6 +1667,12 @@ namespace wi
 			RenderOutline(cmd);
 
 			device->RenderPassEnd(cmd);
+
+			if (getMeshBlendEnabled() && visibility_main.IsMeshBlendVisible())
+			{
+				rp[0].loadop = RenderPassImage::LoadOp::LOAD;
+				wi::renderer::PostProcess_MeshBlend_Resolve(meshblendResources, rtMain, rp, rp_count, cmd);
+			}
 
 			if (wi::renderer::GetRaytracedShadowsEnabled() || wi::renderer::GetScreenSpaceShadowsEnabled())
 			{
@@ -2732,6 +2718,7 @@ namespace wi
 						wi::renderer::DRAWSCENE_TRANSPARENT
 					);
 					wi::renderer::DrawSky(*scene, cmd);
+					wi::renderer::DrawLightVisualizers(visibility, cmd);
 					device->RenderPassEnd(cmd);
 
 					wi::renderer::GenerateMipChain(camera.render_to_texture.rendertarget_render, wi::renderer::MIPGENFILTER_LINEAR, cmd);
@@ -3197,6 +3184,48 @@ namespace wi
 		{
 			rtOutlineSource = {};
 		}
+	}
+
+	Texture RenderPath3D::CreateScreenshotWithAlphaBackground()
+	{
+		TextureDesc desc = rtMain_render.GetDesc();
+		desc.format = Format::R8G8B8A8_UNORM;
+		desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
+		Texture tex;
+		GraphicsDevice* device = GetDevice();
+		bool success = device->CreateTexture(&desc, nullptr, &tex);
+		assert(success);
+
+		Texture tex_resolved;
+		if (desc.sample_count > 1)
+		{
+			desc.sample_count = 1;
+			success = device->CreateTexture(&desc, nullptr, &tex_resolved);
+			assert(success);
+		}
+
+		CommandList cmd = device->BeginCommandList();
+		RenderPassImage rp[] = {
+			RenderPassImage::RenderTarget(&tex, RenderPassImage::LoadOp::CLEAR),
+			RenderPassImage::DepthStencil(GetDepthStencil()),
+			RenderPassImage::Resolve(&tex_resolved),
+		};
+		device->RenderPassBegin(rp, tex_resolved.IsValid() ? 3 : 2, cmd);
+		Viewport vp;
+		vp.width = (float)desc.width;
+		vp.height = (float)desc.height;
+		device->BindViewports(1, &vp, cmd);
+		wi::image::Params fx;
+		fx.stencilComp = wi::image::STENCILMODE_NOT;
+		fx.stencilRef = 0;
+		fx.stencilRefMode = wi::image::STENCILREFMODE_ALL;
+		fx.enableFullScreen();
+		wi::image::Draw(GetLastPostprocessRT(), fx, cmd);
+		device->RenderPassEnd(cmd);
+
+		if (tex_resolved.IsValid())
+			return tex_resolved;
+		return tex;
 	}
 
 }

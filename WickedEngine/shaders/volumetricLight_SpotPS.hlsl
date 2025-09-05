@@ -116,9 +116,9 @@ float4 main(VertexToPixel input) : SV_TARGET
 				shadow_pos.xyz /= shadow_pos.w;
 				float2 shadow_uv = shadow_pos.xy * float2(0.5f, -0.5f) + float2(0.5f, 0.5f);
 				[branch]
-				if ((saturate(shadow_uv.x) == shadow_uv.x) && (saturate(shadow_uv.y) == shadow_uv.y))
+				if (is_saturated(shadow_uv))
 				{
-					attenuation *= shadow_2D(light, shadow_pos.xyz, shadow_uv.xy, 0, input.pos.xy);
+					attenuation *= shadow_2D(light, shadow_pos.z, shadow_uv.xy, 0, input.pos.xy);
 				}
 			}
 			
@@ -145,5 +145,5 @@ float4 main(VertexToPixel input) : SV_TARGET
 
 	accumulation *= sampleCount_rcp;
 
-	return max(0, half4(accumulation * light.GetColor().rgb, 1));
+	return saturateMediump(max(0, half4(accumulation * light.GetColor().rgb, 1)));
 }

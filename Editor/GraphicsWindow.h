@@ -11,6 +11,7 @@ public:
 	wi::gui::CheckBox vsyncCheckBox;
 	wi::gui::ComboBox swapchainComboBox;
 	wi::gui::Slider hdrcalibrationSlider;
+	wi::gui::Slider hdrScalingSlider;
 	wi::gui::ComboBox renderPathComboBox;
 	wi::gui::Slider pathTraceTargetSlider;
 	wi::gui::Label pathTraceStatisticsLabel;
@@ -106,6 +107,8 @@ public:
 	wi::gui::CheckBox debugLightCullingCheckBox;
 	wi::gui::CheckBox tessellationCheckBox;
 
+	wi::gui::CheckBox meshblendCheckBox;
+
 	enum RENDERPATH
 	{
 		RENDERPATH_DEFAULT,
@@ -114,7 +117,7 @@ public:
 	void ChangeRenderPath(RENDERPATH path);
 
 	void UpdateSwapChainFormats(wi::graphics::SwapChain* swapChain);
-	void Update();
+	void UpdateData();
 
 	void ResizeLayout() override;
 
