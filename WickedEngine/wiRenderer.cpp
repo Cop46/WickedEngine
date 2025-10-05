@@ -1076,6 +1076,7 @@ void LoadShaders()
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_FXAA], "fxaaCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_TEMPORALAA], "temporalaaCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_SHARPEN], "sharpenCS.cso"); });
+	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_CRT], "crt_screenCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_TONEMAP], "tonemapCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_UNDERWATER], "underwaterCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_MESH_BLEND_PREPARE], "mesh_blend_prepareCS.cso"); });
@@ -5945,15 +5946,17 @@ void DrawSoftParticles(
 			const uint32_t emitterIndex = vis.visibleEmitters[emitterSortingHashes[i] & 0x0000FFFF];
 			const wi::EmittedParticleSystem& emitter = vis.scene->emitters[emitterIndex];
 			const Entity entity = vis.scene->emitters.GetEntity(emitterIndex);
-			const MaterialComponent& material = *vis.scene->materials.GetComponent(entity);
+			const MaterialComponent* material = vis.scene->materials.GetComponent(entity);
+			if (material == nullptr)
+				continue;
 
 			if (distortion && emitter.shaderType == wi::EmittedParticleSystem::SOFT_DISTORTION)
 			{
-				emitter.Draw(material, cmd);
+				emitter.Draw(*material, cmd);
 			}
 			else if (!distortion && (emitter.shaderType == wi::EmittedParticleSystem::SOFT || emitter.shaderType == wi::EmittedParticleSystem::SOFT_LIGHTING || emitter.shaderType == wi::EmittedParticleSystem::SIMPLE || IsWireRender()))
 			{
-				emitter.Draw(material, cmd);
+				emitter.Draw(*material, cmd);
 			}
 		}
 	}
@@ -10618,7 +10621,8 @@ void RayTraceScene(
 	const Texture* output_normal,
 	const Texture* output_depth,
 	const Texture* output_stencil,
-	const Texture* output_depth_stencil
+	const Texture* output_depth_stencil,
+	const Texture* output_primitiveID
 )
 {
 	if (!scene.TLAS.IsValid() && !scene.BVH.IsValid())
@@ -10662,6 +10666,7 @@ void RayTraceScene(
 		&nullUAV,
 		&nullUAV,
 		&nullUAV,
+		& nullUAV,
 		&nullUAV,
 	};
 	device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
@@ -10683,6 +10688,11 @@ void RayTraceScene(
 	if (output_stencil != nullptr)
 	{
 		device->BindUAV(output_stencil, 4, cmd);
+	}
+	if (output_primitiveID != nullptr)
+	{
+		device->BindUAV(output_primitiveID, 5, cmd);
+		PushBarrier(GPUBarrier::Image(output_primitiveID, output_primitiveID->desc.layout, ResourceState::UNORDERED_ACCESS));
 	}
 	FlushBarriers(cmd);
 
@@ -10710,6 +10720,11 @@ void RayTraceScene(
 			device->ClearUAV(output_stencil, 0, cmd);
 			PushBarrier(GPUBarrier::Memory(output_stencil));
 		}
+		if (output_primitiveID != nullptr)
+		{
+			device->ClearUAV(output_primitiveID, 0, cmd);
+			PushBarrier(GPUBarrier::Memory(output_primitiveID));
+		}
 		FlushBarriers(cmd);
 	}
 
@@ -10719,6 +10734,11 @@ void RayTraceScene(
 		1,
 		cmd
 	);
+
+	if (output_primitiveID != nullptr)
+	{
+		PushBarrier(GPUBarrier::Image(output_primitiveID, ResourceState::UNORDERED_ACCESS, output_primitiveID->desc.layout));
+	}
 
 	PushBarrier(GPUBarrier::Image(&output, ResourceState::UNORDERED_ACCESS, output.desc.layout));
 	FlushBarriers(cmd);
@@ -11186,12 +11206,7 @@ void ComputeLuminance(
 			cmd
 		);
 
-		{
-			GPUBarrier barriers[] = {
-				GPUBarrier::Memory(),
-			};
-			device->Barrier(barriers, arraysize(barriers), cmd);
-		}
+		device->Barrier(GPUBarrier::Memory(), cmd);
 	}
 
 	// Pass 2 : Reduce into 1x1 texture
@@ -11204,7 +11219,6 @@ void ComputeLuminance(
 
 	{
 		GPUBarrier barriers[] = {
-			GPUBarrier::Memory(),
 			GPUBarrier::Buffer(&res.luminance, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE),
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
@@ -16829,6 +16843,54 @@ void Postprocess_Sharpen(
 	postprocess.resolution_rcp.x = 1.0f / postprocess.resolution.x;
 	postprocess.resolution_rcp.y = 1.0f / postprocess.resolution.y;
 	postprocess.params0.x = amount;
+	device->PushConstants(&postprocess, sizeof(postprocess), cmd);
+
+	const GPUResource* uavs[] = {
+		&output,
+	};
+	device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
+
+	device->Barrier(GPUBarrier::Image(&output, output.desc.layout, ResourceState::UNORDERED_ACCESS), cmd);
+
+	device->ClearUAV(&output, 0, cmd);
+	device->Barrier(GPUBarrier::Memory(&output), cmd);
+
+	device->Dispatch(
+		(desc.width + POSTPROCESS_BLOCKSIZE - 1) / POSTPROCESS_BLOCKSIZE,
+		(desc.height + POSTPROCESS_BLOCKSIZE - 1) / POSTPROCESS_BLOCKSIZE,
+		1,
+		cmd
+	);
+
+	device->Barrier(GPUBarrier::Image(&output, ResourceState::UNORDERED_ACCESS, output.desc.layout), cmd);
+
+	device->EventEnd(cmd);
+}
+void Postprocess_CRT(
+	const Texture& input,
+	const Texture& output,
+	CommandList cmd,
+	float flicker_amount,
+	float flicker_time,
+	bool srgb
+)
+{
+	ScopedGPUProfiling("Postprocess_CRT", cmd);
+	device->EventBegin("Postprocess_CRT", cmd);
+
+	device->BindComputeShader(&shaders[CSTYPE_POSTPROCESS_CRT], cmd);
+
+	device->BindResource(&input, 0, cmd);
+
+	const TextureDesc& desc = output.GetDesc();
+
+	PostProcess postprocess;
+	postprocess.resolution.x = desc.width;
+	postprocess.resolution.y = desc.height;
+	postprocess.resolution_rcp.x = 1.0f / postprocess.resolution.x;
+	postprocess.resolution_rcp.y = 1.0f / postprocess.resolution.y;
+	postprocess.params0.x = std::sin(flicker_time) * flicker_amount;
+	postprocess.params0.y = srgb ? 1.0f : 0.0f;
 	device->PushConstants(&postprocess, sizeof(postprocess), cmd);
 
 	const GPUResource* uavs[] = {
