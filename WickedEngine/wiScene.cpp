@@ -3926,6 +3926,7 @@ namespace wi::scene
 				ShaderGeometry geometry;
 				geometry.init();
 				geometry.ib = mesh.ib.descriptor_srv;
+				geometry.ib_reorder = mesh.ib_reorder.descriptor_srv;
 				if (mesh.so_pos.IsValid())
 				{
 					geometry.vb_pos_wind = mesh.so_pos.descriptor_srv;
@@ -4584,6 +4585,10 @@ namespace wi::scene
 					if (object.IsNotVisibleInReflections())
 					{
 						instance.instance_mask &= ~wi::renderer::raytracing_inclusion_mask_reflection;
+					}
+					if (object.GetFilterMask() & FILTER_WATER)
+					{
+						instance.instance_mask &= ~wi::renderer::raytracing_inclusion_mask_shadow;
 					}
 					instance.bottom_level = &mesh.BLASes[object.lod];
 					instance.instance_contribution_to_hit_group_index = 0;
