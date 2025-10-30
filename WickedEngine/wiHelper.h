@@ -43,6 +43,10 @@ namespace wi::helper
 
 	std::string toLower(const std::string& s);
 
+	std::wstring toUpper(const std::wstring& s);
+
+	std::wstring toLower(const std::wstring& s);
+
 	void messageBox(const std::string& msg, const std::string& caption = "Warning!");
 
 	enum class MessageBoxResult
@@ -150,7 +154,7 @@ namespace wi::helper
 		wi::vector<std::string> extensions;
 		bool multiselect = true; // only for TYPE::OPEN
 	};
-	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess);
+	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess, std::function<void()> onFailure = nullptr);
 
 	std::string FolderDialog(const std::string& description = "Select folder");
 

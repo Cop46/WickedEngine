@@ -34,7 +34,13 @@
 #include <WinBase.h>
 #endif // _WIN32
 
-#ifdef PLATFORM_LINUX
+#if defined(__FREEBSD__)
+#include <kvm.h>
+#include <sys/param.h>
+#include <sys/sysctl.h>
+#include <sys/user.h>
+#pragma comment(lib,"kvm")
+#elif defined(PLATFORM_LINUX)
 #include <sys/sysinfo.h>
 #endif // PLATFORM_LINUX
 
@@ -49,7 +55,7 @@ namespace wi::helper
 	{
 		std::string result;
 		std::locale loc;
-		for (unsigned int i = 0; i < s.length(); ++i)
+		for (size_t i = 0; i < s.length(); ++i)
 		{
 			result += std::toupper(s.at(i), loc);
 		}
@@ -59,7 +65,28 @@ namespace wi::helper
 	{
 		std::string result;
 		std::locale loc;
-		for (unsigned int i = 0; i < s.length(); ++i)
+		for (size_t i = 0; i < s.length(); ++i)
+		{
+			result += std::tolower(s.at(i), loc);
+		}
+		return result;
+	}
+
+	std::wstring toUpper(const std::wstring& s)
+	{
+		std::wstring result;
+		std::locale loc;
+		for (size_t i = 0; i < s.length(); ++i)
+		{
+			result += std::toupper(s.at(i), loc);
+		}
+		return result;
+	}
+	std::wstring toLower(const std::wstring& s)
+	{
+		std::wstring result;
+		std::locale loc;
+		for (size_t i = 0; i < s.length(); ++i)
 		{
 			result += std::tolower(s.at(i), loc);
 		}
@@ -1348,18 +1375,28 @@ namespace wi::helper
 
 	std::string GetExecutablePath()
 	{
-#ifdef _WIN32
+#if defined(_WIN32)
 		wchar_t wstr[1024] = {};
 		GetModuleFileName(NULL, wstr, arraysize(wstr));
 		char str[1024] = {};
 		StringConvert(wstr, str, arraysize(str));
 		return str;
+#elif defined(__FREEBSD__)
+		int name[] = { CTL_KERN, KERN_PROC, KERN_PROC_PATHNAME, -1 };
+		char str[MAXPATHLEN] = {};
+		size_t length;
+		int error = sysctl(name, 4, str, &length, NULL, 0);
+		if (error < 0 || length <= 1) {
+			// sysctl failed
+			return std::string();
+		}
+		return std::string(str, length);
 #else
 		return std::filesystem::canonical("/proc/self/exe").string();
 #endif // _WIN32
 	}
 
-	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess)
+	void FileDialog(const FileDialogParams& params, std::function<void(std::string fileName)> onSuccess, std::function<void()> onFailure)
 	{
 #ifdef PLATFORM_WINDOWS_DESKTOP
 		std::thread([=] {
@@ -1454,6 +1491,8 @@ namespace wi::helper
 						onSuccess(BackslashToForwardSlash(result_filename));
 					}
 				}
+			} else {
+				if (onFailure) onFailure();
 			}
 
 			}).detach();
@@ -1495,6 +1534,8 @@ namespace wi::helper
 					{
 						onSuccess(x);
 					}
+				} else {
+					if (onFailure) onFailure();
 				}
 				break;
 			}
@@ -1504,6 +1545,8 @@ namespace wi::helper
 				if (!destination.empty())
 				{
 					onSuccess(destination);
+				} else {
+					if (onFailure) onFailure();
 				}
 				break;
 			}
@@ -1958,6 +2001,34 @@ namespace wi::helper
 		GetProcessMemoryInfo(GetCurrentProcess(), (PROCESS_MEMORY_COUNTERS*)&pmc, sizeof(pmc));
 		mem.process_physical = pmc.WorkingSetSize;
 		mem.process_virtual = pmc.PrivateUsage;
+#elif defined(__FREEBSD__)
+		static uint64_t phys_mem = 0;
+		static uint64_t swap_mem = 0;
+		size_t sysctl_buf_s;
+		int page_size = getpagesize();
+		if (phys_mem == 0)
+		{
+			int phys_mem_name[] = { CTL_HW, HW_PHYSMEM };
+			sysctl_buf_s = sizeof(phys_mem);
+			sysctl(phys_mem_name, 2, &phys_mem, &sysctl_buf_s, NULL, 0);
+			kvm_t *kvm;
+			if ((kvm = kvm_open(NULL, "/dev/null", "/dev/null", O_RDONLY, "GetMemoryUsage")) != NULL)
+			{
+				struct kvm_swap swap;
+				if (kvm_getswapinfo(kvm, &swap, 1, 0) == 0)
+					swap_mem = swap.ksw_total * page_size;
+				kvm_close(kvm);
+			}
+		}
+		mem.total_physical = phys_mem;
+		mem.total_virtual = swap_mem;
+		struct kinfo_proc kinfo;
+		int proc_name[] = { CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid() };
+		sysctl_buf_s = sizeof(struct kinfo_proc);
+		if (sysctl(proc_name, 4, &kinfo, &sysctl_buf_s, NULL, 0) == 0)
+		{
+			mem.process_physical = kinfo.ki_rssize * page_size;
+		}
 #elif defined(PLATFORM_LINUX)
 		struct sysinfo info;
 		constexpr int PAGE_SIZE = 4096;

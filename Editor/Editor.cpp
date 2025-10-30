@@ -362,6 +362,25 @@ void Editor::Initialize()
 		}
 	}
 }
+
+bool Editor::KeepRunning() {
+	return !exit_requested || renderComponent.save_in_progress;
+}
+
+void Editor::Exit()
+{
+	// Check all scenes for unsaved changes
+	for (int i = 0; i < (int)renderComponent.scenes.size(); ++i)
+	{
+		if (!renderComponent.CheckUnsavedChanges(i))
+		{
+			return;
+		}
+	}
+	// main loop will need to quit for us
+	exit_requested = true;
+}
+
 void Editor::HotReload()
 {
 	if (IsScriptReplacement())
@@ -1239,12 +1258,16 @@ void EditorComponent::Load()
 		ss += "You can find sample LUA scripts in the Content/scripts directory. Try to load one.\n";
 		ss += "You can find a startup script in startup.lua (this will be executed on program start, if exists)\n";
 		ss += "You can use some command line arguments (without any prefix):\n";
-		ss += "\t- Default to DirectX12 graphics device: dx12\n";
-		ss += "\t- Default to Vulkan graphics device: vulkan\n";
+#ifdef PLATFORM_WINDOWS_DESKTOP
+		ss += "\t- Select Vulkan graphics device instead of DX12: vulkan\n";
+#endif // PLATFORM_WINDOWS_DESKTOP
+		ss += "\t- Prefer integrated GPU: igpu\n";
+		ss += "\t- Prefer AMD GPU: amdgpu\n";
+		ss += "\t- Prefer Nvidia GPU: nvidiagpu\n";
+		ss += "\t- Prefer Intel GPU: intelgpu\n";
 		ss += "\t- Enable graphics device debug mode: debugdevice\n";
 		ss += "\t- Enable graphics device GPU-based validation: gpuvalidation\n";
 		ss += "\t- Make window always active, even when in background: alwaysactive\n";
-		ss += "\t- Prefer to use integrated GPU: igpu\n";
 		ss += "\nFor questions, bug reports, feedback, requests, please open an issue at:\n";
 		ss += "https://github.com/turanszkij/WickedEngine/issues\n";
 		ss += "\n\n";
@@ -1295,15 +1318,7 @@ void EditorComponent::Load()
 	exitButton.SetColor(wi::Color(160, 50, 50, 180), wi::gui::WIDGETSTATE::IDLE);
 	exitButton.SetColor(wi::Color(200, 50, 50, 255), wi::gui::WIDGETSTATE::FOCUS);
 	exitButton.OnClick([this](wi::gui::EventArgs args) {
-		// Check all scenes for unsaved changes
-		for (int i = 0; i < (int)scenes.size(); ++i)
-		{
-			if (!CheckUnsavedChanges(i))
-			{
-				return;
-			}
-		}
-		wi::platform::Exit();
+		main->Exit();
 		});
 	topmenuWnd.AddWidget(&exitButton);
 
@@ -5243,6 +5258,12 @@ void EditorComponent::Open(std::string filename)
 }
 void EditorComponent::Save(const std::string& filename)
 {
+	struct SetAndClearFlagOnExit {
+		bool& flag;
+		SetAndClearFlagOnExit(bool& flag) : flag(flag) { flag = true; }
+		~SetAndClearFlagOnExit() { flag = false; }
+	} scoped(save_in_progress);
+
 	std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename));
 
 	FileType type = FileType::INVALID;
@@ -5308,8 +5329,13 @@ void EditorComponent::Save(const std::string& filename)
 
 	PostSaveText("Scene saved: ", GetCurrentEditorScene().path);
 }
+
 void EditorComponent::SaveAs()
 {
+
+	// also set and reset by Save()
+	save_in_progress = true;
+
 	wi::helper::FileDialogParams params;
 	params.type = wi::helper::FileDialogParams::SAVE;
 	params.description = "Wicked Scene (.wiscene) | GLTF Model (.gltf) | GLTF Binary Model (.glb) | C++ code (.h,.cpp)";
@@ -5324,7 +5350,7 @@ void EditorComponent::SaveAs()
 			std::string filename = (!extension.compare("GLTF") || !extension.compare("GLB") || !extension.compare("H") || !extension.compare("CPP")) ? fileName : wi::helper::ForceExtension(fileName, params.extensions.front());
 			Save(filename);
 		});
-	});
+	}, [this]() { save_in_progress = false; });
 }
 
 Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps) const
@@ -6007,6 +6033,13 @@ void EditorComponent::SetCurrentScene(int index)
 	wi::lua::scene::SetGlobalCamera(renderPath->camera);
 	componentsWnd.RefreshEntityTree();
 	RefreshSceneList();
+
+	EditorScene& editorscene = GetCurrentEditorScene();
+	if (editorscene.path.empty() && !editorscene.untitled_camera_reset_once)
+	{
+		cameraWnd.ResetCam();
+		editorscene.untitled_camera_reset_once = true;
+	}
 }
 void EditorComponent::RefreshSceneList()
 {
@@ -6093,6 +6126,7 @@ void EditorComponent::RefreshSceneList()
 			componentsWnd.RefreshEntityTree();
 			ResetHistory();
 			scenes[i]->path.clear();
+			scenes[i]->untitled_camera_reset_once = false;
 
 			wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 				if (scenes.size() > 1)
@@ -6147,8 +6181,7 @@ bool EditorComponent::CheckUnsavedChanges(int scene_index)
 		{
 			// Need to prompt for save location
 			SaveAs();
-			// After SaveAs, check if the scene was actually saved
-			return !editorscene.has_unsaved_changes;
+			return true;
 		}
 		else
 		{

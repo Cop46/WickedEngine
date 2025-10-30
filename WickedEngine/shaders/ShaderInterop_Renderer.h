@@ -76,10 +76,28 @@ enum SHADERMATERIAL_OPTIONS
 	SHADERMATERIAL_OPTION_BIT_DOUBLE_SIDED = 1 << 7,
 	SHADERMATERIAL_OPTION_BIT_TRANSPARENT = 1 << 8,
 	SHADERMATERIAL_OPTION_BIT_ADDITIVE = 1 << 9,
-	SHADERMATERIAL_OPTION_BIT_UNLIT = 1 << 10,
-	SHADERMATERIAL_OPTION_BIT_USE_VERTEXAO = 1 << 11,
-	SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED = 1 << 12,
+	SHADERMATERIAL_OPTION_BIT_USE_VERTEXAO = 1 << 10,
+	SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED = 1 << 11,
 };
+
+#ifndef __cplusplus
+enum SHADERTYPE
+{
+	SHADERTYPE_PBR,
+	SHADERTYPE_PBR_PLANARREFLECTION,
+	SHADERTYPE_PBR_PARALLAXOCCLUSIONMAPPING,
+	SHADERTYPE_PBR_ANISOTROPIC,
+	SHADERTYPE_WATER,
+	SHADERTYPE_CARTOON,
+	SHADERTYPE_UNLIT,
+	SHADERTYPE_PBR_CLOTH,
+	SHADERTYPE_PBR_CLEARCOAT,
+	SHADERTYPE_PBR_CLOTH_CLEARCOAT,
+	SHADERTYPE_PBR_TERRAINBLENDED,
+	SHADERTYPE_INTERIORMAPPING,
+	SHADERTYPE_COUNT
+};
+#endif // __cplusplus
 
 // Same as MaterialComponent::TEXTURESLOT
 enum TEXTURESLOT
@@ -353,7 +371,7 @@ struct alignas(16) ShaderTextureSlot
 #endif // __cplusplus
 };
 
-struct alignas(16) ShaderMaterial
+struct alignas(32) ShaderMaterial
 {
 	uint2 baseColor;
 	uint2 normalmap_pom_alphatest_displacement;
@@ -372,7 +390,8 @@ struct alignas(16) ShaderMaterial
 	uint2 transmission_sheenroughness_clearcoat_clearcoatroughness;
 	uint2 aniso_anisosin_anisocos_terrainblend;
 
-	int sampler_descriptor;
+	int sampler_descriptor : 16;
+	int sampler_clamp_descriptor : 16;
 	uint options_stencilref;
 	uint layerMask;
 	uint shaderType_meshblend;
@@ -380,6 +399,8 @@ struct alignas(16) ShaderMaterial
 	uint4 userdata;
 
 	ShaderTextureSlot textures[TEXTURESLOT_COUNT];
+
+	float4 padding;
 
 	void init()
 	{
@@ -401,11 +422,13 @@ struct alignas(16) ShaderMaterial
 		aniso_anisosin_anisocos_terrainblend = uint2(0, 0);
 
 		sampler_descriptor = -1;
+		sampler_clamp_descriptor = -1;
 		options_stencilref = 0;
 		layerMask = ~0u;
 		shaderType_meshblend = 0;
 
 		userdata = uint4(0, 0, 0, 0);
+		padding = float4(0, 0, 0, 0);
 
 		for (int i = 0; i < TEXTURESLOT_COUNT; ++i)
 		{
@@ -445,7 +468,6 @@ struct alignas(16) ShaderMaterial
 	inline uint GetStencilRef() { return options_stencilref >> 24u; }
 	inline uint GetShaderType() { return shaderType_meshblend & 0xFFFF; }
 	inline half GetMeshBlend() { return f16tof32(shaderType_meshblend >> 16u); }
-#endif // __cplusplus
 
 	inline uint GetOptions() { return options_stencilref; }
 	inline bool IsUsingVertexColors() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_USE_VERTEXCOLORS; }
@@ -456,12 +478,17 @@ struct alignas(16) ShaderMaterial
 	inline bool IsUsingWind() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_USE_WIND; }
 	inline bool IsReceiveShadow() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_RECEIVE_SHADOW; }
 	inline bool IsCastingShadow() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_CAST_SHADOW; }
-	inline bool IsUnlit() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_UNLIT; }
 	inline bool IsTransparent() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_TRANSPARENT; }
 	inline bool IsAdditive() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_ADDITIVE; }
 	inline bool IsDoubleSided() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_DOUBLE_SIDED; }
 	inline bool IsCapsuleShadowDisabled() { return GetOptions() & SHADERMATERIAL_OPTION_BIT_CAPSULE_SHADOW_DISABLED; }
+	inline bool IsUnlit() { return GetShaderType() == SHADERTYPE_UNLIT; }
+
+#endif // __cplusplus
 };
+#ifdef __cplusplus
+static_assert(sizeof(ShaderMaterial) == 384);
+#endif // __cplusplus
 
 // For binning shading based on shader types:
 struct alignas(16) ShaderTypeBin
@@ -497,7 +524,7 @@ enum SHADERMESH_FLAGS
 
 // This is equivalent to a Mesh + MeshSubset
 //	But because these are always loaded toghether by shaders, they are unrolled into one to reduce individual buffer loads
-struct alignas(16) ShaderGeometry
+struct alignas(32) ShaderGeometry
 {
 	int ib;
 	int vb_pos_wind;
@@ -566,6 +593,9 @@ struct alignas(16) ShaderGeometry
 		padding2 = 0;
 	}
 };
+#ifdef __cplusplus
+static_assert(sizeof(ShaderGeometry) == 128);
+#endif // __cplusplus
 
 static const uint MESHLET_VERTEX_COUNT = 64u;
 static const uint MESHLET_TRIANGLE_COUNT = 124u;
@@ -661,7 +691,7 @@ struct alignas(16) ShaderTransform
 #endif // __cplusplus
 };
 
-struct alignas(16) ShaderMeshInstance
+struct alignas(32) ShaderMeshInstance
 {
 	uint64_t uid;
 	uint flags;	// high 8 bits: user stencilRef
@@ -691,6 +721,8 @@ struct alignas(16) ShaderMeshInstance
 	ShaderTransform transformPrev; // Note: this could contain quantization remapping from UNORM -> FLOAT depending on vertex position format
 	ShaderTransform transformRaw; // Note: this is the world matrix without any quantization remapping
 
+	float4 padding;
+
 	void init()
 	{
 #ifdef __cplusplus
@@ -717,6 +749,7 @@ struct alignas(16) ShaderMeshInstance
 		transform.init();
 		transformPrev.init();
 		transformRaw.init();
+		padding = float4(0, 0, 0, 0);
 	}
 
 	inline void SetUserStencilRef(uint stencilRef)
@@ -736,6 +769,10 @@ struct alignas(16) ShaderMeshInstance
 	inline half4 GetRimHighlight() { return unpack_half4(rimHighlight); }
 #endif // __cplusplus
 };
+#ifdef __cplusplus
+static_assert(sizeof(ShaderMeshInstance) == 256);
+#endif // __cplusplus
+
 struct ShaderMeshInstancePointer
 {
 	uint data;
@@ -770,11 +807,16 @@ struct ShaderMeshInstancePointer
 
 struct ObjectPushConstants
 {
-	uint geometryIndex;
-	uint materialIndex;
+	uint geometryIndex : 24;
+	uint wrapSamplerIndex : 8;
+	uint materialIndex : 24;
+	uint clampSamplerIndex : 8;
 	int instances;
 	uint instance_offset;
 };
+#ifdef __cplusplus
+static_assert(sizeof(ObjectPushConstants) == 16);
+#endif // __cplusplus
 
 
 enum SHADER_ENTITY_TYPE
@@ -1005,6 +1047,9 @@ struct alignas(16) ShaderEntity
 
 #endif // __cplusplus
 };
+#ifdef __cplusplus
+static_assert(sizeof(ShaderEntity) == 64);
+#endif // __cplusplus
 
 struct alignas(16) ShaderFrustum
 {
