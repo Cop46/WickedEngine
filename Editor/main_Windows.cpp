@@ -23,7 +23,10 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 		case WM_SIZE:
 		case WM_DPICHANGED:
 			if (editor.is_window_active && LOWORD(lParam) > 0 && HIWORD(lParam) > 0)
+			{
 				editor.SetWindow(hWnd);
+				editor.SaveWindowSize();
+			}
 			break;
 		case WM_CHAR:
 			switch (wParam)
@@ -112,6 +115,16 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 				break;
 			}
 			break;
+		case WM_SYSCHAR:
+		case WM_SYSKEYDOWN:
+		case WM_SYSKEYUP:
+			if (editor.config.GetBool("bypass_system_key") && wParam != VK_F4)
+			{
+				// Handle system key messages (like Alt key) to prevent menu bar activation freeze
+				// Return 0 to indicate we processed the message and prevent default behavior
+				break;
+			}
+			return DefWindowProc(hWnd, message, wParam, lParam);
 		case WM_SETTINGCHANGE:
 			{
 				// Change window theme dark mode based on system setting:

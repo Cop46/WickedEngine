@@ -40,7 +40,7 @@ namespace wi::scene
 		wi::ecs::ComponentManager<ArmatureComponent>& armatures = componentLibrary.Register<ArmatureComponent>("wi::scene::Scene::armatures");
 		wi::ecs::ComponentManager<LightComponent>& lights = componentLibrary.Register<LightComponent>("wi::scene::Scene::lights", 5); // version = 5
 		wi::ecs::ComponentManager<CameraComponent>& cameras = componentLibrary.Register<CameraComponent>("wi::scene::Scene::cameras", 2); // version = 2
-		wi::ecs::ComponentManager<EnvironmentProbeComponent>& probes = componentLibrary.Register<EnvironmentProbeComponent>("wi::scene::Scene::probes", 1); // version = 1
+		wi::ecs::ComponentManager<EnvironmentProbeComponent>& probes = componentLibrary.Register<EnvironmentProbeComponent>("wi::scene::Scene::probes", 2); // version = 2
 		wi::ecs::ComponentManager<ForceFieldComponent>& forces = componentLibrary.Register<ForceFieldComponent>("wi::scene::Scene::forces", 1); // version = 1
 		wi::ecs::ComponentManager<DecalComponent>& decals = componentLibrary.Register<DecalComponent>("wi::scene::Scene::decals", 1); // version = 1
 		wi::ecs::ComponentManager<AnimationComponent>& animations = componentLibrary.Register<AnimationComponent>("wi::scene::Scene::animations", 2); // version = 2
@@ -63,7 +63,7 @@ namespace wi::scene
 		wi::ecs::ComponentManager<MetadataComponent>& metadatas = componentLibrary.Register<MetadataComponent>("wi::scene::Scene::metadatas");
 		wi::ecs::ComponentManager<CharacterComponent>& characters = componentLibrary.Register<CharacterComponent>("wi::scene::Scene::characters");
 		wi::ecs::ComponentManager<PhysicsConstraintComponent>& constraints = componentLibrary.Register<PhysicsConstraintComponent>("wi::scene::Scene::constraints", 6); // version = 6
-		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 2); // version = 2
+		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 3); // version = 3
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -75,7 +75,7 @@ namespace wi::scene
 
 		float time = 0;
 		CameraComponent camera; // for LOD and 3D sound update
-		std::shared_ptr<void> physics_scene;
+		wi::allocator::shared_ptr<void> physics_scene;
 		wi::SpinLock locker;
 		wi::primitive::AABB bounds;
 		wi::vector<wi::primitive::AABB> parallel_bounds;
@@ -327,7 +327,7 @@ namespace wi::scene
 		//	The contents of the other scene will be lost (and moved to this)!
 		//  Any references to entities or components from the other scene will now reference them in this scene.
 		virtual void Merge(Scene& other);
-		// Similar to merge but skipping some things that are safe to skip within the Update look
+		// Similar to merge but skipping some things that are safe to skip within the Update loop
 		void MergeFastInternal(Scene& other);
 		// Create a copy of prefab and merge it into this.
 		//	prefab		: source scene to be copied from
@@ -458,6 +458,35 @@ namespace wi::scene
 
 		// Gathers all direct and indirect children of an entity
 		void GatherChildren(wi::ecs::Entity parent, wi::vector<wi::ecs::Entity>& children) const;
+
+		// Iterates over each child of an entity and executes a lambda function for each child
+		//	parent		: the parent entity whose children will be iterated
+		//	function	: lambda function that takes a child entity as parameter
+		//				  If function returns bool, iteration stops when it returns false
+		//				  If function returns void, iteration continues for all children
+		template<typename Func>
+		void ForEachChild(const wi::ecs::Entity parent, Func function) const
+		{
+			for (size_t i = 0; i < hierarchy.GetCount(); ++i)
+			{
+				wi::ecs::Entity child = hierarchy.GetEntity(i);
+
+				if (Entity_IsDescendant(child, parent))
+				{
+					if constexpr (std::is_same_v<decltype(function(child)), bool>)
+					{
+						// Function returns bool - stop iteration if it returns false
+						if (!function(child))
+							break;
+					}
+					else
+					{
+						// Function returns void - continue iteration
+						function(child);
+					}
+				}
+			}
+		}
 
 		// Read/write whole scene into an archive
 		void Serialize(wi::Archive& archive);

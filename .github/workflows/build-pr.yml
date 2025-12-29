@@ -4,7 +4,7 @@ on:
   pull_request
 
 env:
-  CCACHE_VERSION: 4.11.3
+  CCACHE_VERSION: 4.12.1
   CCACHE_MAXSIZE: 500Mi
   # see https://ccache.dev/manual/latest.html#_precompiled_headers
   CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
@@ -18,6 +18,10 @@ jobs:
       CCACHE_NODIRECT: 1
     steps:
     - uses: actions/checkout@v4
+
+    - uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
 
     - name: Restore Ccache database
       id: restore-ccache
@@ -37,7 +41,6 @@ jobs:
     - name: Initial compile
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
         MSBuild WickedEngine.sln /t:OfflineShaderCompiler /m /p:Configuration=Release /p:Platform=x64
 
     - name: Generate shader dump
@@ -49,7 +52,6 @@ jobs:
     - name: Recompile with shader dump
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
         MSBuild WickedEngine.sln /t:clean /m /p:Configuration=Release /p:Platform=x64
         MSBuild WickedEngine.sln /t:Editor_Windows /m /p:Configuration=Release /p:Platform=x64
 
@@ -74,6 +76,106 @@ jobs:
       uses: actions/upload-artifact@v4
       with:
         name: Editor (Windows)
+        path: |
+          languages/
+          fonts/
+          config.ini
+          startup.lua
+          Editor_Windows.exe
+
+  windows-arm64:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
+
+    - name: Initial compile
+      shell: cmd
+      run: |
+        MSBuild WickedEngine.sln /t:OfflineShaderCompiler /m /p:Configuration=Release /p:Platform=x64
+
+    - name: Generate shader dump
+      shell: cmd
+      run: |
+        cd "WickedEngine"
+        "../BUILD/x64/Release/OfflineShaderCompiler/OfflineShaderCompiler.exe" hlsl6 spirv shaderdump strip_reflection
+
+    - name: Recompile with shader dump
+      shell: cmd
+      run: |
+        MSBuild WickedEngine.sln /t:clean /m /p:Configuration=Release /p:Platform=ARM64
+        MSBuild WickedEngine.sln /t:Editor_Windows /m /p:Configuration=Release /p:Platform=ARM64
+
+    - name: Move files
+      shell: cmd
+      run: |
+        move BUILD\ARM64\Release\Editor_Windows\Editor_Windows.exe .\
+        move Editor\config.ini .\
+        move Editor\startup.lua .\
+        move Editor\languages .\
+        move Editor\fonts .\
+
+    - name: Package Editor
+      uses: actions/upload-artifact@v4
+      with:
+        name: Editor (Windows, ARM64)
+        path: |
+          languages/
+          fonts/
+          config.ini
+          startup.lua
+          Editor_Windows.exe
+
+
+  windows_cmake:
+    # The omission of CCache is intentional.
+    # This job is only run on PRs, so using CCache isn't worth it
+    # since PR jobs cannot access each other's cache, only the
+    # cache from the master branch (which doesn't exist in this case)
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: cmake
+          cmake_extra_opts: ""
+          cmake_build_opts: --config Release
+          editor_path: build\Editor\Release\Editor.exe
+        - name: cmake clang
+          cmake_extra_opts: >
+            -GNinja
+            -DCMAKE_BUILD_TYPE=Release
+            -DCMAKE_C_COMPILER=clang
+            -DCMAKE_CXX_COMPILER=clang++
+          cmake_build_opts: ""
+          editor_path: build\Editor\Editor.exe
+
+    name: windows (${{ matrix.name }})
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Compile with embedded shaders
+      shell: cmd
+      run: |
+        cmake -B build -DWICKED_EMBED_SHADERS=YES -DWICKED_ENABLE_IPO=NO ${{ matrix.cmake_extra_opts }}
+        cmake --build build ${{ matrix.cmake_build_opts }} --parallel
+
+    - name: Move files
+      shell: cmd
+      run: |
+        move ${{ matrix.editor_path }} .\Editor_Windows.exe
+        move Editor\config.ini .\
+        move Editor\startup.lua .\
+        move Editor\languages .\
+        move Editor\fonts .\
+
+    - name: Package Editor
+      uses: actions/upload-artifact@v4
+      with:
+        name: Editor (Windows) [${{ matrix.name }} build]
         path: |
           languages/
           fonts/
@@ -112,19 +214,9 @@ jobs:
         sudo apt update
         sudo apt install libsdl2-dev ccache
 
-    - name: Initial compile
+    - name: Compile with embedded shaders
       run: |
-        CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DWICKED_ENABLE_IPO=NO
-        make -C build -j$(nproc)
-
-    - name: Generate shader dump
-      run: |
-        cd build/WickedEngine
-        ./offlineshadercompiler spirv rebuild shaderdump
-        mv wiShaderDump.h ../../WickedEngine/
-
-    - name: Recompile with shader dump
-      run: |
+        CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DWICKED_ENABLE_IPO=NO -DWICKED_EMBED_SHADERS=YES
         make -C build -j$(nproc)
 
     - name: Save Ccache database

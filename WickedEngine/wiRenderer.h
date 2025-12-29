@@ -75,9 +75,10 @@ namespace wi::renderer
 	{
 		wi::graphics::GPUBuffer alias;
 		wi::allocator::PageAllocator::Allocation allocation;
+		inline bool IsValid() const { return allocation.IsValid(); }
 	};
 	// Sub-allocate (thread-safe) from a global GPU buffer for memory aliasing purpose:
-	//	The buffer will be DEFAULT usage, useable as vertex buffer, index buffer and shader resource
+	//	The buffer will be DEFAULT usage, useable as vertex buffer, index buffer, shader resource and unordered access
 	//	The purpose is to suballocate smaller GPUBuffers inside a larger GPUBuffer and bind the large GPUBuffer once as index buffer,
 	//	while the small buffers can be allocated/deallocated from it with memory aliasing and also used regularly by themselves
 	BufferSuballocation SuballocateGPUBuffer(uint64_t size);
@@ -501,7 +502,7 @@ namespace wi::renderer
 	void VXGI_Resolve(
 		const VXGIResources& res,
 		const wi::scene::Scene& scene,
-		wi::graphics::Texture texture_lineardepth,
+		const wi::graphics::Texture& texture_lineardepth,
 		wi::graphics::CommandList cmd
 	);
 
@@ -1117,6 +1118,15 @@ namespace wi::renderer
 		BORDEREXPANDSTYLE borderExpand = BORDEREXPAND_DISABLE,
 		bool srgb_convert = false
 	);
+	// Performs copy operation even between different texture formats
+	//	Simplified function overload
+	void CopyTexture2D(
+		const wi::graphics::Texture& dst,
+		const wi::graphics::Texture& src,
+		wi::graphics::CommandList cmd,
+		BORDEREXPANDSTYLE borderExpand = BORDEREXPAND_DISABLE,
+		bool srgb_convert = false
+	);
 
 	void DrawWaterRipples(const Visibility& vis, wi::graphics::CommandList cmd);
 
@@ -1195,6 +1205,8 @@ namespace wi::renderer
 	bool IsDisableAlbedoMaps();
 	void SetForceDiffuseLighting(bool value);
 	bool IsForceDiffuseLighting();
+	void SetForceUnlit(bool value);
+	bool IsForceUnlit();
 	void SetScreenSpaceShadowsEnabled(bool value);
 	bool GetScreenSpaceShadowsEnabled();
 	void SetSurfelGIEnabled(bool value);
@@ -1232,7 +1244,8 @@ namespace wi::renderer
 	// Add box to render in next frame. It will be rendered in DrawDebugWorld()
 	void DrawBox(const wi::primitive::AABB& aabb, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
 	void DrawBox(const XMMATRIX& boxMatrix, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
-	void DrawBox(const XMFLOAT4X4& boxMatrix, const XMFLOAT4& color = XMFLOAT4(1,1,1,1), bool depth = true);
+	void DrawBox(const XMFLOAT4X4& boxMatrix, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
+	void DrawBox(const BoundingOrientedBox& obb, const XMFLOAT4& color = XMFLOAT4(1,1,1,1), bool depth = true);
 	// Add sphere to render in next frame. It will be rendered in DrawDebugWorld()
 	void DrawSphere(const wi::primitive::Sphere& sphere, const XMFLOAT4& color = XMFLOAT4(1, 1, 1, 1), bool depth = true);
 	// Add capsule to render in next frame. It will be rendered in DrawDebugWorld()

@@ -7,6 +7,8 @@
 #include "wiVector.h"
 #include "wiVideo.h"
 #include "wiUnorderedSet.h"
+#include "wiUnorderedMap.h"
+#include "wiAllocator.h"
 
 #include <memory>
 #include <string>
@@ -17,8 +19,8 @@ namespace wi
 	//	It can be loaded from file or memory using wi::resourcemanager::Load()
 	struct Resource
 	{
-		std::shared_ptr<void> internal_state;
-		inline bool IsValid() const { return internal_state.get() != nullptr; }
+		wi::allocator::shared_ptr<void> internal_state;
+		constexpr bool IsValid() const { return internal_state.IsValid(); }
 
 		const wi::vector<uint8_t>& GetFileData() const;
 		const wi::graphics::Texture& GetTexture() const;
@@ -114,6 +116,21 @@ namespace wi
 		// Reload all resources that are outdated
 		void ReloadOutdatedResources();
 
+		enum class ResourceType
+		{
+			TEXTURE		= 1 << 0,
+			VIDEO		= 1 << 1,
+			SOUND		= 1 << 2,
+			SCRIPT		= 1 << 3,
+			FONT		= 1 << 4,
+
+			ALL = TEXTURE | VIDEO | SOUND | SCRIPT | FONT
+		};
+
+		// Returns a collection of all resources that are alive
+		//	you can filter by resource types bitmask
+		void CollectResources(wi::unordered_map<std::string, wi::Resource>& out_resources, ResourceType types = ResourceType::ALL);
+
 		struct ResourceSerializer
 		{
 			wi::vector<Resource> resources;
@@ -127,5 +144,9 @@ namespace wi
 
 template<>
 struct enable_bitmask_operators<wi::resourcemanager::Flags> {
+	static const bool enable = true;
+};
+template<>
+struct enable_bitmask_operators<wi::resourcemanager::ResourceType> {
 	static const bool enable = true;
 };

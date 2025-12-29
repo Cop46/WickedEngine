@@ -15,6 +15,12 @@
 #define wilog(str,...) {wilog_level(str, wi::backlog::LogLevel::Default, ## __VA_ARGS__);}
 #define wilog_assert(cond,str,...) {if(!(cond)){wilog_error(str, ## __VA_ARGS__); assert(cond);}}
 
+#ifdef _DEBUG
+#define wilog_debug(str,...) {wilog_level(str, wi::backlog::LogLevel::Default, ## __VA_ARGS__);}
+#else
+#define wilog_debug(str,...)
+#endif // DEBUG
+
 namespace wi::backlog
 {
 	// Do not modify the order, as this is exposed to LUA scripts as int!
@@ -26,7 +32,7 @@ namespace wi::backlog
 		Error,
 	};
 	void Toggle();
-	void Scroll(int direction);
+	void Scroll(float direction);
 	void Update(const wi::Canvas& canvas, float dt = 1.0f / 60.0f);
 	void Draw(
 		const wi::Canvas& canvas,
@@ -66,6 +72,13 @@ namespace wi::backlog
 	LogLevel GetUnseenLogLevelMax();
 
 	void SetLogFile(const std::string& path);
+	void GetLogFile(std::string& path);
+	std::string GetLogFile();
+
+	// Flush pending log writes to file
+	void Flush();
+	// Set the interval for automatic periodic flushes (in milliseconds, 0 = disabled, default = 1000ms)
+	void SetAutoFlushInterval(uint32_t milliseconds);
 
 	struct LogEntry
 	{
@@ -78,5 +91,5 @@ namespace wi::backlog
 	// It's also not considered part of the API and can change at any time.
 	//
 	// Use getText() instead, unless absolutely necessary.
-	void _forEachLogEntry_unsafe(std::function<void(const LogEntry&)> cb);
+	void _forEachLogEntry_unsafe(const std::function<void(const LogEntry&)>& cb);
 };

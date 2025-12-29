@@ -1,4 +1,3 @@
-#define ENTITY_TILE_UNIFORM
 #define SURFACE_LOAD_QUAD_DERIVATIVES
 #ifndef REDUCED
 #define SURFACE_LOAD_ENABLE_WIND
@@ -25,7 +24,7 @@ RWTexture2D<float> output_roughness : register(u2);
 RWTexture2D<uint4> output_payload_0 : register(u3);
 RWTexture2D<uint4> output_payload_1 : register(u4);
 
-[numthreads(VISIBILITY_BLOCKSIZE, VISIBILITY_BLOCKSIZE, 1)]
+[numthreads(VISIBILITY_BLOCKSIZE * VISIBILITY_BLOCKSIZE, 1, 1)]
 void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
 	const uint tile_offset = push.global_tile_offset + Gid.x;

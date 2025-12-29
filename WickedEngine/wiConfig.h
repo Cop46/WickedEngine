@@ -41,12 +41,14 @@ namespace wi::config
 		std::unordered_map<std::string, std::string> values;
 	};
 
-	struct File : public Section
+	struct File final : public Section
 	{
 		// Open a config file (.ini format)
 		bool Open(const char* filename);
 		// Write back the config file with the current keys and values
 		void Commit();
+		// Check whether a section exists
+		bool HasSection(const char* name) const;
 		// Get access to a named section. If it doesn't exist, then it will be created
 		Section& GetSection(const char* name);
 

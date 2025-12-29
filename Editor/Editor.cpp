@@ -251,7 +251,8 @@ void HotkeyRemap(Editor* main)
 		{"F9", wi::input::KEYBOARD_BUTTON_F9},
 		{"F10", wi::input::KEYBOARD_BUTTON_F10},
 		{"F11", wi::input::KEYBOARD_BUTTON_F11},
-		{"F12", wi::input::KEYBOARD_BUTTON_F12}
+		{"F12", wi::input::KEYBOARD_BUTTON_F12},
+		{"SPACE", wi::input::KEYBOARD_BUTTON_SPACE},
 	};
 
 	wi::config::Section hotkeyssection = main->config.GetSection("hotkeys");
@@ -371,6 +372,43 @@ bool Editor::KeepRunning() {
 	return !exit_requested || renderComponent.save_in_progress;
 }
 
+void Editor::SaveWindowSize()
+{
+	if (window != nullptr)
+	{
+#ifdef _WIN32
+		WINDOWPLACEMENT placement = {};
+		placement.length = sizeof(WINDOWPLACEMENT);
+		if (GetWindowPlacement(window, &placement) && placement.showCmd != SW_SHOWMAXIMIZED)
+		{
+			RECT rect;
+			GetWindowRect(window, &rect);
+			int width = rect.right - rect.left;
+			int height = rect.bottom - rect.top;
+			if (width > 0 && height > 0)
+			{
+				config.Set("width", width);
+				config.Set("height", height);
+				config.Commit();
+			}
+		}
+#elif defined(SDL2)
+		if (!(SDL_GetWindowFlags(window) & SDL_WINDOW_MAXIMIZED))
+		{
+			int width = 0;
+			int height = 0;
+			SDL_GetWindowSize(window, &width, &height);
+			if (width > 0 && height > 0)
+			{
+				config.Set("width", width);
+				config.Set("height", height);
+				config.Commit();
+			}
+		}
+#endif
+	}
+}
+
 void Editor::Exit()
 {
 	// Check all scenes for unsaved changes
@@ -381,6 +419,10 @@ void Editor::Exit()
 			return;
 		}
 	}
+
+	// Save window size to config
+	SaveWindowSize();
+
 	// main loop will need to quit for us
 	exit_requested = true;
 }
@@ -669,8 +711,7 @@ void EditorComponent::Load()
 		Scene& scene = GetCurrentScene();
 		PickResult pick;
 
-		XMFLOAT3 in_front_of_camera;
-		XMStoreFloat3(&in_front_of_camera, XMVectorAdd(camera.GetEye(), camera.GetAt() * 4));
+		XMFLOAT3 in_front_of_camera = GetPositionInFrontOfCamera();
 
 		switch (args.userdata)
 		{
@@ -720,13 +761,15 @@ void EditorComponent::Load()
 			break;
 		case NEW_SOUND:
 		{
+			const uint64_t target_scene_id = GetCurrentEditorScene().id;
 			wi::helper::FileDialogParams params;
 			params.type = wi::helper::FileDialogParams::OPEN;
 			params.description = "Sound";
 			params.extensions = wi::resourcemanager::GetSupportedSoundExtensions();
-			wi::helper::FileDialog(params, [=](std::string fileName) {
+			wi::helper::FileDialog(params, [=](const std::string& fileName) {
 				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
-					Entity entity = GetCurrentScene().Entity_CreateSound(wi::helper::GetFileNameFromPath(fileName), fileName);
+					EditorScene& target_editorscene = GetOrCreateEditorSceneForLoading(target_scene_id);
+					const Entity entity = target_editorscene.scene.Entity_CreateSound(wi::helper::GetFileNameFromPath(fileName), fileName);
 
 					wi::Archive& archive = AdvanceHistory();
 					archive << EditorComponent::HISTORYOP_ADD;
@@ -747,13 +790,15 @@ void EditorComponent::Load()
 		break;
 		case NEW_VIDEO:
 		{
+			const uint64_t target_scene_id = GetCurrentEditorScene().id;
 			wi::helper::FileDialogParams params;
 			params.type = wi::helper::FileDialogParams::OPEN;
 			params.description = "Video";
 			params.extensions = wi::resourcemanager::GetSupportedVideoExtensions();
-			wi::helper::FileDialog(params, [=](std::string fileName) {
+			wi::helper::FileDialog(params, [=](const std::string& fileName) {
 				wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
-					Entity entity = GetCurrentScene().Entity_CreateVideo(wi::helper::GetFileNameFromPath(fileName), fileName);
+					EditorScene& target_editorscene = GetOrCreateEditorSceneForLoading(target_scene_id);
+					const Entity entity = target_editorscene.scene.Entity_CreateVideo(wi::helper::GetFileNameFromPath(fileName), fileName);
 
 					wi::Archive& archive = AdvanceHistory();
 					archive << EditorComponent::HISTORYOP_ADD;
@@ -882,6 +927,27 @@ void EditorComponent::Load()
 		}
 		if (pick.entity != INVALID_ENTITY)
 		{
+			// Place the entity in front of camera, if enabled
+			if (generalWnd.placeInFrontOfCameraCheckBox.GetCheck())
+			{
+				TransformComponent* transform = scene.transforms.GetComponent(pick.entity);
+				if (transform != nullptr)
+				{
+					// Check if this entity type should spawn in front of camera
+					bool should_reposition = true;
+					if (args.userdata == NEW_DIRECTIONALLIGHT || args.userdata == NEW_CAMERA)
+					{
+						should_reposition = false;
+					}
+
+					if (should_reposition)
+					{
+						transform->translation_local = in_front_of_camera;
+						transform->SetDirty();
+					}
+				}
+			}
+
 			wi::Archive& archive = AdvanceHistory();
 			archive << EditorComponent::HISTORYOP_ADD;
 			RecordSelection(archive);
@@ -1059,6 +1125,7 @@ void EditorComponent::Load()
 	openButton.SetColor(wi::Color(50, 100, 255, 180), wi::gui::WIDGETSTATE::IDLE);
 	openButton.SetColor(wi::Color(120, 160, 255, 255), wi::gui::WIDGETSTATE::FOCUS);
 	openButton.OnClick([this](wi::gui::EventArgs args) {
+		const uint64_t target_scene_id = GetCurrentEditorScene().id;
 		wi::helper::FileDialogParams params;
 		params.type = wi::helper::FileDialogParams::OPEN;
 		params.description = ".wiscene, .obj, .gltf, .glb, .vrm, .fbx, .lua, .mp4, .png, ...";
@@ -1071,23 +1138,37 @@ void EditorComponent::Load()
 		params.extensions.push_back("fbx");
 		params.extensions.push_back("lua");
 		params.extensions.push_back("txt");
-		auto ext_video = wi::resourcemanager::GetSupportedVideoExtensions();
+		const auto ext_video = wi::resourcemanager::GetSupportedVideoExtensions();
 		for (auto& x : ext_video)
 		{
 			params.extensions.push_back(x);
 		}
-		auto ext_sound = wi::resourcemanager::GetSupportedSoundExtensions();
+		const auto ext_sound = wi::resourcemanager::GetSupportedSoundExtensions();
 		for (auto& x : ext_sound)
 		{
 			params.extensions.push_back(x);
 		}
-		auto ext_image = wi::resourcemanager::GetSupportedImageExtensions();
+		const auto ext_image = wi::resourcemanager::GetSupportedImageExtensions();
 		for (auto& x : ext_image)
 		{
 			params.extensions.push_back(x);
 		}
-		wi::helper::FileDialog(params, [&](std::string fileName) {
+		wi::helper::FileDialog(params, [=](const std::string& fileName) {
 			wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
+				// Switch to the target scene before opening the file
+				const EditorScene* target = FindEditorSceneByID(target_scene_id);
+				if (target != nullptr)
+				{
+					// Find index and switch to that scene
+					for (int i = 0; i < (int)scenes.size(); ++i)
+					{
+						if (scenes[i].get() == target)
+						{
+							SetCurrentScene(i);
+							break;
+						}
+					}
+				}
 				Open(fileName);
 				});
 			});
@@ -1217,6 +1298,7 @@ void EditorComponent::Load()
 		ss += "Move camera: " + GetInputString(EditorActions::MOVE_CAMERA_FORWARD) + ", " + GetInputString(EditorActions::MOVE_CAMERA_LEFT) + ", " + GetInputString(EditorActions::MOVE_CAMERA_BACKWARD) + ", " + GetInputString(EditorActions::MOVE_CAMERA_RIGHT) + ", or Controller left stick or D - pad\n";
 		ss += "Look: Right mouse button / arrow keys / controller right stick\n";
 		ss += "Select: Left mouse button\n";
+		ss += "Select top-level parent: Alt + Left mouse button\n";
 		ss += "Interact with physics/water/grass: Middle mouse button\n";
 		ss += "Faster camera: Left Shift button or controller R2/RT\n";
 		ss += "Snap to grid transform: Ctrl (hold while transforming)\n";
@@ -1241,6 +1323,7 @@ void EditorComponent::Load()
 		ss += "Move Toggle: " + GetInputString(EditorActions::MOVE_TOGGLE_ACTION) + "\n";
 		ss += "Rotate Toggle: " + GetInputString(EditorActions::ROTATE_TOGGLE_ACTION) + "\n";
 		ss += "Scale Toggle: " + GetInputString(EditorActions::SCALE_TOGGLE_ACTION) + "\n";
+		ss += "Reload terrain props: " + GetInputString(EditorActions::RELOAD_TERRAIN_PROPS) + "\n";
 		ss += "Wireframe mode: " + GetInputString(EditorActions::WIREFRAME_MODE) + "\n";
 		ss += "Screenshot (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT) + "\n";
 		ss += "Screenshot with background as alpha (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_ALPHA) + "\n";
@@ -1692,6 +1775,35 @@ void EditorComponent::Update(float dt)
 		componentsWnd.nameWnd.nameInput.SetAsActive(true);
 	}
 
+	// Duplicate Entity
+	if (!GetGUI().IsTyping() && CheckInput(EditorActions::DUPLICATE_ENTITY))
+	{
+		wi::Archive& archive = AdvanceHistory();
+		archive << HISTORYOP_ADD;
+		RecordSelection(archive);
+
+		auto& prevSel = translator.selectedEntitiesNonRecursive;
+		wi::vector<Entity> addedEntities;
+		for (auto& x : prevSel)
+		{
+			wi::scene::PickResult picked;
+			picked.entity = scene.Entity_Duplicate(x);
+			addedEntities.push_back(picked.entity);
+		}
+
+		ClearSelected();
+
+		for (auto& x : addedEntities)
+		{
+			AddSelected(x);
+		}
+
+		RecordSelection(archive);
+		RecordEntity(archive, addedEntities);
+
+		componentsWnd.RefreshEntityTree();
+	}
+
 	// Camera control:
 	if (!drive_mode && !wi::backlog::isActive() && !GetGUI().HasFocus())
 	{
@@ -1708,6 +1820,16 @@ void EditorComponent::Update(float dt)
 			paintToolWnd.GetMode() == PaintToolWindow::MODE::MODE_DISABLED && // paint tool shouldn't be active
 			(!componentsWnd.decalWnd.IsEnabled() || !componentsWnd.decalWnd.placementCheckBox.GetCheck()) && // decal placement shouldn't be active
 			!(wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL) && wi::input::Down(wi::input::KEYBOARD_BUTTON_LSHIFT)) && // instance placement shouldn't be active
+			!wi::input::Down(wi::input::KEYBOARD_BUTTON_ALT) &&
+			viewport3D_hitbox.intersects(XMFLOAT2(currentMouse.x, currentMouse.y)) &&
+			wi::input::Press(wi::input::MOUSE_BUTTON_LEFT);
+
+		// Alt+Click to select parent entity:
+		const bool altmouse_select_parent =
+			!translator.IsInteracting() &&
+			paintToolWnd.GetMode() == PaintToolWindow::MODE::MODE_DISABLED &&
+			(!componentsWnd.decalWnd.IsEnabled() || !componentsWnd.decalWnd.placementCheckBox.GetCheck()) &&
+			wi::input::Down(wi::input::KEYBOARD_BUTTON_ALT) &&
 			viewport3D_hitbox.intersects(XMFLOAT2(currentMouse.x, currentMouse.y)) &&
 			wi::input::Press(wi::input::MOUSE_BUTTON_LEFT);
 
@@ -1844,9 +1966,24 @@ void EditorComponent::Update(float dt)
 			if (!paintToolWnd.IsVisible() && std::abs(currentMouse.z) > 0.1f)
 			{
 				float current = cameraWnd.movespeedSlider.GetValue();
-				float increment = current > 10 ? 2.0f : 1.0f;
-				float add = currentMouse.z < 0 ? -increment : increment;
-				cameraWnd.movespeedSlider.SetValue(std::max(0.1f, std::ceil(current + add)));
+				bool scrollingDown = currentMouse.z < 0;
+				float newValue;
+
+				if (current < 1.0f || (current == 1.0f && scrollingDown))
+				{
+					// Below 1.0 threshold: use 0.1 increments
+					float add = scrollingDown ? -0.1f : 0.1f;
+					newValue = std::max(0.1f, current + add);
+				}
+				else
+				{
+					// Above 1.0 threshold
+					float increment = current > 10 ? 2.0f : 1.0f;
+					float add = scrollingDown ? -increment : increment;
+					newValue = std::max(0.1f, std::ceil(current + add));
+				}
+
+				cameraWnd.movespeedSlider.SetValue(newValue);
 				char txt[256];
 				snprintf(txt, arraysize(txt), "Camera speed: %.1f", cameraWnd.movespeedSlider.GetValue());
 				save_text_message = txt;
@@ -2379,6 +2516,36 @@ void EditorComponent::Update(float dt)
 			}
 		}
 
+		// Select top-level parent...
+		if (altmouse_select_parent && hovered.entity != INVALID_ENTITY)
+		{
+			const HierarchyComponent* hierarchy = scene.hierarchy.GetComponent(hovered.entity);
+			if (hierarchy != nullptr && hierarchy->parentID != INVALID_ENTITY)
+			{
+				Entity topParent = hierarchy->parentID;
+				const HierarchyComponent* parentHierarchy = scene.hierarchy.GetComponent(topParent);
+				while (parentHierarchy != nullptr && parentHierarchy->parentID != INVALID_ENTITY)
+				{
+					topParent = parentHierarchy->parentID;
+					parentHierarchy = scene.hierarchy.GetComponent(topParent);
+				}
+
+				wi::Archive& archive = AdvanceHistory(true);
+				archive << HISTORYOP_SELECTION;
+				// record PREVIOUS selection state...
+				RecordSelection(archive);
+
+				// Select the top-level parent entity:
+				translator.selected.clear();
+				AddSelected(topParent);
+
+				// record NEW selection state...
+				RecordSelection(archive);
+
+				componentsWnd.RefreshEntityTree();
+			}
+		}
+
 		// Select...
 		if (leftmouse_select || selectAll || clear_selected)
 		{
@@ -2559,35 +2726,6 @@ void EditorComponent::Update(float dt)
 				picked.entity = scene.Entity_Serialize(clipboard, seri, INVALID_ENTITY, Scene::EntitySerializeFlags::RECURSIVE);
 				AddSelected(picked);
 				addedEntities.push_back(picked.entity);
-			}
-
-			RecordSelection(archive);
-			RecordEntity(archive, addedEntities);
-
-			componentsWnd.RefreshEntityTree();
-		}
-
-		// Duplicate Entity
-		if (CheckInput(EditorActions::DUPLICATE_ENTITY))
-		{
-			wi::Archive& archive = AdvanceHistory();
-			archive << HISTORYOP_ADD;
-			RecordSelection(archive);
-
-			auto& prevSel = translator.selectedEntitiesNonRecursive;
-			wi::vector<Entity> addedEntities;
-			for (auto& x : prevSel)
-			{
-				wi::scene::PickResult picked;
-				picked.entity = scene.Entity_Duplicate(x);
-				addedEntities.push_back(picked.entity);
-			}
-
-			ClearSelected();
-
-			for (auto& x : addedEntities)
-			{
-				AddSelected(x);
 			}
 
 			RecordSelection(archive);
@@ -2946,7 +3084,6 @@ void EditorComponent::Update(float dt)
 		camera.UpdateCamera();
 	}
 
-	wi::RenderPath3D_PathTracing* pathtracer = dynamic_cast<wi::RenderPath3D_PathTracing*>(renderPath.get());
 	if (pathtracer != nullptr)
 	{
 		pathtracer->setTargetSampleCount((int)graphicsWnd.pathTraceTargetSlider.GetValue());
@@ -4904,6 +5041,7 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 		}
 		break;
 		case HISTORYOP_ADD:
+		case HISTORYOP_ADD_TO_SPLINE:
 		{
 			// Read selections states from archive:
 
@@ -4935,6 +5073,19 @@ void EditorComponent::ConsumeHistoryOperation(bool undo)
 				archive >> sel.distance;
 
 				selectedAFTER.push_back(sel);
+			}
+
+			if (type == HISTORYOP_ADD_TO_SPLINE)
+			{
+				wi::vector<Entity> modifiedSplineEntities;
+				archive >> modifiedSplineEntities;
+				EntitySerializer seri;
+				seri.allow_remap = false;
+				for (size_t i = 0; i < modifiedSplineEntities.size(); ++i)
+				{
+					scene.Entity_Remove(modifiedSplineEntities[i], false); // no recursive!!!
+					scene.Entity_Serialize(archive, seri, INVALID_ENTITY, wi::scene::Scene::EntitySerializeFlags::KEEP_INTERNAL_ENTITY_REFERENCES); // no recursive!!!
+				}
 			}
 
 			wi::vector<Entity> addedEntities;
@@ -5203,11 +5354,13 @@ void EditorComponent::Open(std::string filename)
 
 	RegisterRecentlyUsed(filename);
 
-	size_t camera_count_prev = GetCurrentScene().cameras.GetCount();
+	// Capture the current scene ID to ensure content is loaded into the correct tab
+	// even if the user switches tabs during async loading
+	const uint64_t target_scene_id = GetCurrentEditorScene().id;
 
 	wi::jobsystem::Execute(loadmodel_workload, [=] (wi::jobsystem::JobArgs) {
 		wi::backlog::post("[Editor] started loading model: " + filename);
-		std::shared_ptr<Scene> scene = std::make_shared<Scene>();
+		wi::allocator::shared_ptr<Scene> scene = wi::allocator::make_shared_single<Scene>();
 		if (type == FileType::WISCENE)
 		{
 			wi::scene::LoadModel(*scene, filename);
@@ -5227,44 +5380,68 @@ void EditorComponent::Open(std::string filename)
 
 		wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=] (uint64_t userdata) {
 
-			if (type == FileType::WISCENE && GetCurrentEditorScene().path.empty())
+			// Get the target scene (the one that was selected when Open was triggered)
+			// If it was closed during loading, a new empty tab is created as fallback
+			EditorScene& target_editorscene = GetOrCreateEditorSceneForLoading(target_scene_id);
+			wi::scene::Scene& target_scene = target_editorscene.scene;
+
+			const size_t camera_count_prev = target_scene.cameras.GetCount();
+			const size_t transform_count_prev = target_scene.transforms.GetCount();
+
+			if (type == FileType::WISCENE && target_editorscene.path.empty())
 			{
-				GetCurrentEditorScene().path = filename;
+				target_editorscene.path = filename;
 			}
-			GetCurrentScene().Merge(*scene);
+
+			target_scene.Merge(*scene);
+
+			// Place the imported model in front of the camera:
+			if (type != FileType::WISCENE && generalWnd.placeInFrontOfCameraCheckBox.GetCheck())
+			{
+				// Imported models always have a root transform entity
+				if (transform_count_prev < target_scene.transforms.GetCount())
+				{
+					const Entity rootEntity = target_scene.transforms.GetEntity(transform_count_prev);
+					TransformComponent* transform = target_scene.transforms.GetComponent(rootEntity);
+					if (transform != nullptr)
+					{
+						transform->translation_local = GetPositionInFrontOfCamera();
+						transform->SetDirty();
+					}
+				}
+			}
 
 			// Detect when the new scene contains a new camera, and snap the camera onto it:
-			size_t camera_count = GetCurrentScene().cameras.GetCount();
+			const size_t camera_count = target_scene.cameras.GetCount();
 			if (camera_count > 0 && camera_count > camera_count_prev)
 			{
-				Entity entity = GetCurrentScene().cameras.GetEntity(camera_count_prev);
+				const Entity entity = target_scene.cameras.GetEntity(camera_count_prev);
 				if (entity != INVALID_ENTITY)
 				{
-					CameraComponent* cam = GetCurrentScene().cameras.GetComponent(entity);
+					const CameraComponent* cam = target_scene.cameras.GetComponent(entity);
 					if (cam != nullptr)
 					{
-						EditorScene& editorscene = GetCurrentEditorScene();
-						editorscene.camera.Eye = cam->Eye;
-						editorscene.camera.At = cam->At;
-						editorscene.camera.Up = cam->Up;
-						editorscene.camera.fov = cam->fov;
-						editorscene.camera.zNearP = cam->zNearP;
-						editorscene.camera.zFarP = cam->zFarP;
-						editorscene.camera.focal_length = cam->focal_length;
-						editorscene.camera.aperture_size = cam->aperture_size;
-						editorscene.camera.aperture_shape = cam->aperture_shape;
+						target_editorscene.camera.Eye = cam->Eye;
+						target_editorscene.camera.At = cam->At;
+						target_editorscene.camera.Up = cam->Up;
+						target_editorscene.camera.fov = cam->fov;
+						target_editorscene.camera.zNearP = cam->zNearP;
+						target_editorscene.camera.zFarP = cam->zFarP;
+						target_editorscene.camera.focal_length = cam->focal_length;
+						target_editorscene.camera.aperture_size = cam->aperture_size;
+						target_editorscene.camera.aperture_shape = cam->aperture_shape;
 						// camera aspect should be always for the current screen
-						editorscene.camera.width = (float)renderPath->GetInternalResolution().x;
-						editorscene.camera.height = (float)renderPath->GetInternalResolution().y;
+						target_editorscene.camera.width = (float)renderPath->GetInternalResolution().x;
+						target_editorscene.camera.height = (float)renderPath->GetInternalResolution().y;
 
-						TransformComponent* camera_transform = GetCurrentScene().transforms.GetComponent(entity);
+						const TransformComponent* camera_transform = target_scene.transforms.GetComponent(entity);
 						if (camera_transform != nullptr)
 						{
-							editorscene.camera_transform = *camera_transform;
-							editorscene.camera.TransformCamera(editorscene.camera_transform);
+							target_editorscene.camera_transform = *camera_transform;
+							target_editorscene.camera.TransformCamera(target_editorscene.camera_transform);
 						}
 
-						editorscene.camera.UpdateCamera();
+						target_editorscene.camera.UpdateCamera();
 					}
 				}
 			}
@@ -5273,7 +5450,7 @@ void EditorComponent::Open(std::string filename)
 			componentsWnd.weatherWnd.UpdateData();
 			componentsWnd.RefreshEntityTree();
 
-			GetCurrentEditorScene().has_unsaved_changes = false;
+			target_editorscene.has_unsaved_changes = false;
 			RefreshSceneList();
 
 			wi::backlog::post("[Editor] finished loading model: " + filename);
@@ -5288,10 +5465,10 @@ void EditorComponent::Save(const std::string& filename)
 		~SetAndClearFlagOnExit() { flag = false; }
 	} scoped(save_in_progress);
 
-	std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename));
+	const std::string extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(filename));
 
-	FileType type = FileType::INVALID;
-	auto it = filetypes.find(extension);
+	auto type = FileType::INVALID;
+	const auto it = filetypes.find(extension);
 	if (it != filetypes.end())
 	{
 		type = it->second;
@@ -5299,7 +5476,7 @@ void EditorComponent::Save(const std::string& filename)
 	if (type == FileType::INVALID)
 		return;
 
-	if(type == FileType::WISCENE || type == FileType::HEADER || type == FileType::CPP)
+	if (type == FileType::WISCENE || type == FileType::HEADER || type == FileType::CPP)
 	{
 		const bool dump_to_header = type == FileType::HEADER;
 		const bool dump_to_cpp = type == FileType::CPP;
@@ -5315,7 +5492,37 @@ void EditorComponent::Save(const std::string& filename)
 			else
 			{
 				archive.SetCompressionEnabled(generalWnd.saveCompressionCheckBox.GetCheck());
-				archive.SetThumbnailAndResetPos(CreateThumbnailScreenshot());
+
+				Scene& currentScene = GetCurrentScene();
+				currentScene.Update(0);
+
+				// Create dedicated thumbnail renderpath with fixed dimensions
+				wi::RenderPath3D thumbnailRenderPath;
+				thumbnailRenderPath.width = 512;
+				thumbnailRenderPath.height = 256;
+				thumbnailRenderPath.scene = &currentScene;
+
+				Texture thumbnailScreenshot;
+
+				// Setup camera for single root entity scene thumbnail
+				if (SetupThumbnailCamera(thumbnailRenderPath))
+				{
+					// Render the thumbnail
+					thumbnailRenderPath.PreUpdate();
+					thumbnailRenderPath.Update(0);
+					thumbnailRenderPath.PostUpdate();
+					thumbnailRenderPath.PreRender();
+					thumbnailRenderPath.Render();
+					thumbnailScreenshot = CreateThumbnail(*thumbnailRenderPath.GetLastPostprocessRT(), 256, 128);
+				}
+				else
+				{
+					thumbnailScreenshot = CreateThumbnail(*renderPath->GetLastPostprocessRT(), 256, 128);
+				}
+
+				thumbnailRenderPath.DeleteGPUResources();
+
+				archive.SetThumbnailAndResetPos(thumbnailScreenshot);
 			}
 
 			Scene& scene = GetCurrentScene();
@@ -5368,7 +5575,7 @@ void EditorComponent::SaveAs()
 	params.extensions.push_back("glb");
 	params.extensions.push_back("h");
 	params.extensions.push_back("cpp");
-	wi::helper::FileDialog(params, [=](std::string fileName) {
+	wi::helper::FileDialog(params, [=](const std::string& fileName) {
 		wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t userdata) {
 			auto extension = wi::helper::toUpper(wi::helper::GetExtensionFromFileName(fileName));
 			std::string filename = (!extension.compare("GLTF") || !extension.compare("GLB") || !extension.compare("H") || !extension.compare("CPP")) ? fileName : wi::helper::ForceExtension(fileName, params.extensions.front());
@@ -5380,6 +5587,10 @@ void EditorComponent::SaveAs()
 Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps) const
 {
 	GraphicsDevice* device = GetDevice();
+	// Ensure GPU has finished rendering before creating thumbnail
+	device->SubmitCommandLists();
+	device->WaitForGPU();
+
 	CommandList cmd = device->BeginCommandList();
 	Texture thumbnail = texture;
 
@@ -5477,9 +5688,100 @@ Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width,
 
 	return thumbnail;
 }
-Texture EditorComponent::CreateThumbnailScreenshot() const
+
+bool EditorComponent::SetupThumbnailCamera(wi::RenderPath3D& thumbnailRenderPath)
 {
-	return CreateThumbnail(*renderPath->GetLastPostprocessRT(), 256, 128);
+	Scene& scene = GetCurrentScene();
+
+	// Check if scene has exactly one root entity
+	wi::unordered_set<Entity> all_entities;
+	scene.FindAllEntities(all_entities);
+
+	Entity root_entity = INVALID_ENTITY;
+	for (Entity entity : all_entities)
+	{
+		const HierarchyComponent* hierarchy_component = scene.hierarchy.GetComponent(entity);
+		if (hierarchy_component == nullptr || hierarchy_component->parentID == INVALID_ENTITY)
+		{
+			if (root_entity != INVALID_ENTITY)
+			{
+				return false; // More than one root entity found
+			}
+			root_entity = entity;
+		}
+	}
+
+	if (root_entity == INVALID_ENTITY)
+		return false;
+
+	AABB combined_bounds;
+	bool has_bounds = false;
+
+	auto add_entity_bounds = [&](const Entity entity) {
+		const ObjectComponent* object = scene.objects.GetComponent(entity);
+		if (object != nullptr && object->meshID != INVALID_ENTITY)
+		{
+			const MeshComponent* mesh = scene.meshes.GetComponent(object->meshID);
+			const TransformComponent* transform = scene.transforms.GetComponent(entity);
+			if (mesh != nullptr && transform != nullptr && mesh->aabb.IsValid())
+			{
+				const XMMATRIX world_transform = XMLoadFloat4x4(&transform->world);
+				AABB world_aabb = mesh->aabb.transform(world_transform);
+				combined_bounds = has_bounds ? AABB::Merge(combined_bounds, world_aabb) : world_aabb;
+				has_bounds = true;
+			}
+		}
+	};
+
+	add_entity_bounds(root_entity);
+
+	scene.ForEachChild(root_entity, [&](const Entity child) {
+		add_entity_bounds(child);
+	});
+
+	// Only adjust camera if we have valid bounds
+	if (!has_bounds || combined_bounds.getArea() <= 0)
+		return false;
+
+	// Create temp camera for thumbnail
+	XMFLOAT3 bounds_center = combined_bounds.getCenter();
+	float bounds_radius = combined_bounds.getRadius();
+	float camera_distance = bounds_radius * 2.0f; // Distance multiplier for framing
+
+	float horizontal_angle = wi::math::DegreesToRadians(-50.0f);
+	float elevation_angle = wi::math::DegreesToRadians(20.0f);
+	float horizontal_distance = camera_distance * std::cos(elevation_angle);
+	float vertical_offset = camera_distance * std::sin(elevation_angle);
+
+	auto camera_position = XMFLOAT3(
+		bounds_center.x + horizontal_distance * std::cos(horizontal_angle),
+		bounds_center.y + vertical_offset,
+		bounds_center.z + horizontal_distance * std::sin(horizontal_angle)
+	);
+
+	TransformComponent temp_camera_transform;
+	temp_camera_transform.Translate(XMLoadFloat3(&camera_position));
+	temp_camera_transform.UpdateTransform();
+
+	XMVECTOR eye = XMLoadFloat3(&camera_position);
+	XMVECTOR at = XMLoadFloat3(&bounds_center);
+	XMVECTOR up = XMVectorSet(0, 1, 0, 0);
+	XMMATRIX view = XMMatrixLookAtLH(eye, at, up);
+	XMMATRIX view_inv = XMMatrixInverse(nullptr, view);
+	XMStoreFloat4x4(&temp_camera_transform.world, view_inv);
+
+	CameraComponent temp_camera;
+	temp_camera.fov = wi::math::DegreesToRadians(60.0f);
+	temp_camera.width = (float)thumbnailRenderPath.width;
+	temp_camera.height = (float)thumbnailRenderPath.height;
+	temp_camera.TransformCamera(temp_camera_transform);
+	temp_camera.UpdateCamera();
+
+	// Set the thumbnail renderpath camera
+	thumbnail_saved_camera = temp_camera;
+	thumbnailRenderPath.camera = &thumbnail_saved_camera;
+
+	return true;
 }
 
 void EditorComponent::PostSaveText(const std::string& message, const std::string& filename, float time_seconds)
@@ -5492,7 +5794,13 @@ void EditorComponent::PostSaveText(const std::string& message, const std::string
 
 void EditorComponent::CheckBonePickingEnabled()
 {
-	Scene& scene = GetCurrentScene();
+	const Scene& scene = GetCurrentScene();
+
+	if (generalWnd.bonePickerOpacitySlider.GetValue() <= 0.0f)
+	{
+		bone_picking = false;
+		return;
+	}
 
 	if (generalWnd.skeletonsVisibleCheckBox.GetCheck())
 	{
@@ -6169,6 +6477,7 @@ void EditorComponent::NewScene()
 	int scene_id = int(scenes.size());
 	scenes.push_back(std::make_unique<EditorScene>());
 	auto& editorscene = scenes.back();
+	editorscene->id = next_scene_id++;
 	editorscene->tabSelectButton.Create("");
 	editorscene->tabSelectButton.SetLocalizationEnabled(false);
 	editorscene->tabCloseButton.Create("X");
@@ -6180,6 +6489,29 @@ void EditorComponent::NewScene()
 	RefreshSceneList();
 	UpdateDynamicWidgets();
 	cameraWnd.ResetCam();
+}
+
+EditorComponent::EditorScene* EditorComponent::FindEditorSceneByID(uint64_t id) const
+{
+	for (auto& scene : scenes)
+	{
+		if (scene->id == id)
+		{
+			return scene.get();
+		}
+	}
+	return nullptr;
+}
+
+EditorComponent::EditorScene& EditorComponent::GetOrCreateEditorSceneForLoading(uint64_t target_scene_id)
+{
+	EditorScene* target = FindEditorSceneByID(target_scene_id);
+	if (target != nullptr)
+	{
+		return *target;
+	}
+	NewScene();
+	return GetCurrentEditorScene();
 }
 
 bool EditorComponent::CheckUnsavedChanges(int scene_index)
@@ -6295,6 +6627,15 @@ void EditorComponent::FocusCameraOnSelected()
 	editorscene.camera_transform.Translate(centerV - camera.GetAt() * focus_offset);
 	editorscene.camera_transform.UpdateTransform();
 	editorscene.cam_move = {};
+}
+
+XMFLOAT3 EditorComponent::GetPositionInFrontOfCamera() const
+{
+	const EditorScene& editorscene = GetCurrentEditorScene();
+	const CameraComponent& camera = editorscene.camera;
+	XMFLOAT3 in_front_of_camera;
+	XMStoreFloat3(&in_front_of_camera, XMVectorAdd(camera.GetEye(), camera.GetAt() * 4));
+	return in_front_of_camera;
 }
 
 void EditorComponent::ReloadTerrainProps()

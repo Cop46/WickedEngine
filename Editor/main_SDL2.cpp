@@ -46,6 +46,7 @@ int sdl_loop()
                         case SDL_WINDOWEVENT_RESIZED:
                             // Tells the engine to reload window configuration (size and dpi)
                             editor.SetWindow(editor.window);
+                            editor.SaveWindowSize();
                             break;
                         case SDL_WINDOWEVENT_FOCUS_LOST:
                             editor.is_window_active = false;
@@ -215,7 +216,7 @@ int main(int argc, char *argv[])
 
     sdl2::sdlsystem_ptr_t system = sdl2::make_sdlsystem(SDL_INIT_EVERYTHING | SDL_INIT_EVENTS);
     if (*system) {
-        throw sdl2::SDLError("Error creating SDL2 system");
+		wilog_error("Error creating SDL2 system");
     }
 
 	int width = 1920;
@@ -245,7 +246,7 @@ int main(int argc, char *argv[])
             width, height,
             SDL_WINDOW_SHOWN | SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
     if (!window) {
-        throw sdl2::SDLError("Error creating window");
+		wilog_error("Error creating window");
     }
 
     set_window_icon(window.get());

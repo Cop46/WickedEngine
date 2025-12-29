@@ -27,6 +27,7 @@ public:
 	wi::gui::CheckBox debugEmittersCheckBox;
 	wi::gui::CheckBox debugForceFieldsCheckBox;
 	wi::gui::CheckBox debugRaytraceBVHCheckBox;
+	wi::gui::CheckBox placeInFrontOfCameraCheckBox;
 	wi::gui::ComboBox wireFrameComboBox;
 	wi::gui::CheckBox envProbesCheckBox;
 	wi::gui::CheckBox cameraVisCheckBox;
@@ -36,6 +37,7 @@ public:
 	wi::gui::CheckBox freezeCullingCameraCheckBox;
 	wi::gui::CheckBox disableAlbedoMapsCheckBox;
 	wi::gui::CheckBox forceDiffuseLightingCheckBox;
+	wi::gui::CheckBox forceUnlitCheckBox;
 	wi::gui::CheckBox focusModeCheckBox;
 	wi::gui::CheckBox disableRoundCornersCheckBox;
 	wi::gui::CheckBox disableGradientCheckBox;

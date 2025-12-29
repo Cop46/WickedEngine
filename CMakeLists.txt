@@ -1,5 +1,11 @@
 cmake_minimum_required(VERSION 3.19)
 
+# enable "codegen" target if supported by CMake
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.31)
+    cmake_policy(SET CMP0171 NEW)
+    set(codegen CODEGEN)
+endif()
+
 if (${CMAKE_SOURCE_DIR} STREQUAL ${CMAKE_BINARY_DIR})
     message(FATAL_ERROR
         "In-source builds are not supported!\n"
@@ -23,6 +29,7 @@ option(WICKED_EDITOR "Build WickedEngine editor" ON)
 option(WICKED_TESTS "Build WickedEngine tests" ON)
 option(WICKED_IMGUI_EXAMPLE "Build WickedEngine imgui example" ON)
 option(WICKED_ENABLE_IPO "Enable IPO/LTO in non-debug builds" ${ipo_supported})
+option(WICKED_EMBED_SHADERS "Embed shaders into the library" NO)
 if(UNIX)
     option(WICKED_ENABLE_ASAN "Enable AddressSanitizer in debug builds" OFF)
     option(WICKED_ENABLE_UBSAN "Enable UndefinedBehaviourSanitizer in debug builds" OFF)
@@ -96,7 +103,7 @@ endif()
 
 if(WICKED_ENABLE_SAN_ALWAYS)
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${SANITIZE_OPTIONS}")
-    add_link_options(${SANITIZE_LINK_OPTIONS)
+    add_link_options(${SANITIZE_LINK_OPTIONS})
 else()
     set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} ${SANITIZE_OPTIONS}")
     add_link_options($<$<CONFIG:Debug>:${SANITIZE_LINK_OPTIONS}>)
@@ -105,26 +112,44 @@ endif()
 if (WIN32)
     set(PLATFORM "Windows")
     add_compile_definitions(WIN32=1)
-    if (MSVC)
-        add_compile_options(
-            /W3
-            /MP
-        )
-    endif()
-
-    # add_compile_definitions(_WIN32=1) this is a given from the compiler
-elseif(UNIX)
+    add_compile_definitions(_HAS_EXCEPTIONS=0)
+elseif (UNIX)
     set(PLATFORM "SDL2")
     add_compile_definitions(SDL2=1)
+    add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+endif()
 
+if (MSVC)
+    add_compile_options(
+        /W3 # warning level 3
+        /MP # multi-processor compilation
+        /EHsc- # exceptions disabled
+        /GR- # runtime type information disabled
+        $<$<CONFIG:Release>:/GS-> # security check disabled in Release
+    )
+else()
+    set(ubsan_active
+         "$<AND:$<BOOL:${WICKED_ENABLE_UBSAN}>,$<OR:$<CONFIG:Debug>,$<BOOL:${WICKED_ENABLE_SAN_ALWAYS}>>>"
+    )
     # Common compiler options and warning level for CLANG and GCC:
     add_compile_options(
-        -Wall
+        -Wall # warning level: all
 
+        # some warnings are disabled to better match MSVC warning level 3:
         -Wno-unused-variable
         -Wno-unused-function
         -Wno-unused-but-set-variable
         -Wno-sign-compare
+
+        $<$<COMPILE_LANGUAGE:CXX>:-fno-exceptions> # exceptions disabled
+        $<$<AND:$<COMPILE_LANGUAGE:CXX>,$<NOT:${ubsan_active}>>:-fno-rtti> # runtime type information disabled
+
+        # security checks disabled in Release:
+        $<$<CONFIG:Release>:-fno-stack-protector>
+        $<$<CONFIG:Release>:-fcf-protection=none>
+        $<$<AND:$<CONFIG:Release>,$<NOT:$<PLATFORM_ID:Windows>>>:-fno-stack-clash-protection> # not supported on Windows
+        $<$<CONFIG:Release>:-fno-stack-check>
+        $<$<AND:$<CONFIG:Release>,$<NOT:$<PLATFORM_ID:Windows>>>:-fno-asynchronous-unwind-tables>  # seems to crash LUA evaluation on Windows
     )
 endif()
 
@@ -137,8 +162,9 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         -Wno-nullability-completeness
         -Wno-unused-private-field
 
-        # Increase Ccache hit rate, note that you also need to set config options
-        # in your Ccache config, see https://ccache.dev/manual/latest.html#_precompiled_headers
+        # Increase Ccache hit rate, note that you also need to set config
+        # options in your Ccache config
+        # see https://ccache.dev/manual/latest.html#_precompiled_headers
         "SHELL:-Xclang -fno-pch-timestamp"
     )
     if (USE_LIBCXX)
@@ -155,7 +181,6 @@ elseif (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         -Wno-strict-aliasing
     )
 endif()
-
 
 add_subdirectory(WickedEngine)
 add_custom_target(Content

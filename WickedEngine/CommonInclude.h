@@ -16,6 +16,9 @@
 
 #if defined(__GNUC__) || defined(__clang__)
 #define __forceinline __attribute__((always_inline)) inline
+#define NO_SANITIZE(x) __attribute__((no_sanitize(x)))
+#else
+#define NO_SANITIZE(x)
 #endif // defined(__GNUC__) || defined(__clang__)
 
 // Simple common math helpers:
@@ -30,7 +33,7 @@ template <typename T>
 constexpr T sqr(T x) { return x * x; }
 
 template <typename T>
-constexpr T pow4(T x) { return x * x * x * x; }
+constexpr T pow4(T x) { return sqr(sqr(x)); }
 
 template <typename T>
 constexpr T clamp(T x, T a, T b)
@@ -120,6 +123,9 @@ struct StackVector
 #if defined(_WIN32)
 // Windows, Xbox:
 #include <intrin.h>
+#if defined(_M_ARM64)
+#include <arm64intr.h>
+#endif // _M_ARM64
 inline long AtomicAnd(volatile long* ptr, long mask)
 {
 	return _InterlockedAnd(ptr, mask);
@@ -391,6 +397,13 @@ constexpr const char* relative_path(const char* path)
 	}
 
 	return startPosition;
+}
+
+constexpr auto relative_path_storage(const char* path)
+{
+	StackString ret;
+	ret.push_back(relative_path(path));
+	return ret;
 }
 
 // Extract function name from a string at compile-time

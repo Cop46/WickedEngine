@@ -13,6 +13,7 @@
 #include <mutex>
 #include <string>
 #include <atomic>
+#include <deque>
 
 using namespace wi::ecs;
 using namespace wi::scene;
@@ -183,6 +184,9 @@ namespace wi::terrain
 		wi::jobsystem::context workload;
 		std::atomic_bool cancelled{ false };
 		wi::vector<SplineComponent> splines;
+		wi::vector<wi::ecs::Entity> spline_entities;
+		wi::vector<Chunk> removable_chunks; // chunks that were invalidated are regenerated on the generator thread. Before merging them with the scene, the previous version of them will need to be removed from the destination scene
+		std::deque<Chunk> priority_invalidation; // to not let invalidation stuck at same chunks every frame while editing splines, for more appealing visual feedback
 	};
 
 	wi::jobsystem::context virtual_texture_ctx;
@@ -414,7 +418,7 @@ namespace wi::terrain
 
 		grass_properties.viewDistance = chunk_width;
 
-		generator = std::make_shared<Generator>();
+		generator = wi::allocator::make_shared_single<Generator>();
 
 		materialEntities.resize(MATERIAL_COUNT);
 	}
@@ -605,23 +609,29 @@ namespace wi::terrain
 			const SplineComponent& spline = scene->splines[i];
 			if (spline.terrain_modifier_amount > 0 || spline.prev_terrain_modifier_amount > 0)
 			{
-				restart_generation |= spline.dirty_terrain;
-				if (restart_generation)
+				bool spline_terrain_invalidation = false;
+				if (spline.dirty_terrain)
 				{
 					spline.dirty_terrain = false;
+					spline_terrain_invalidation = true;
 					spline.prev_terrain_modifier_amount = spline.terrain_modifier_amount;
 					spline.prev_terrain_pushdown = spline.terrain_pushdown;
 					spline.prev_terrain_texture_falloff = spline.terrain_texture_falloff;
 					spline.prev_terrain_generation_nodes = (int)spline.spline_node_entities.size();
 				}
-				restart_generation |= spline.materialEntity != spline.materialEntity_terrainPrev;
+				spline_terrain_invalidation |= spline.materialEntity != spline.materialEntity_terrainPrev;
 				const MaterialComponent* splineMaterial = scene->materials.GetComponent(spline.materialEntity);
 				if (splineMaterial != nullptr)
 				{
-					restart_generation |= splineMaterial->IsDirty();
+					spline_terrain_invalidation |= splineMaterial->IsDirty();
 					splineMaterialEntities.push_back(spline.materialEntity);
 				}
 				spline.materialEntity_terrainPrev = spline.materialEntity;
+
+				if (spline_terrain_invalidation)
+				{
+					InvalidateChunksAtSpline(spline);
+				}
 			}
 		}
 
@@ -655,6 +665,23 @@ namespace wi::terrain
 		{
 			weather = *weather_component; // feedback default weather
 		}
+
+		// Invalidated chunks replacements, originals are removed before merging updated ones:
+		for (Chunk chunk : generator->removable_chunks)
+		{
+			auto it = chunks.find(chunk);
+			if (it != chunks.end())
+			{
+				ChunkData& chunk_data = it->second;
+				scene->Entity_Remove(chunk_data.entity);
+				chunk_data.props_entity = INVALID_ENTITY;
+				if (chunk_data.vt != nullptr)
+				{
+					chunk_data.vt->invalidate();
+				}
+			}
+		}
+		generator->removable_chunks.clear();
 
 		// What was generated, will be merged in to the main scene
 		scene->MergeFastInternal(generator->scene);
@@ -893,16 +920,52 @@ namespace wi::terrain
 		// Start the generation on a background thread and keep it running until the next frame
 		generator->cancelled.store(false);
 		generator->workload.priority = wi::jobsystem::Priority::Low;
+		size_t terrain_spline_count_scene = 0; // Count the current terrain modifier splines in scene
+		for (size_t i = 0; i < scene->splines.GetCount(); ++i)
+		{
+			const SplineComponent& spline = scene->splines[i];
+			if (spline.terrain_modifier_amount > 0)
+			{
+				terrain_spline_count_scene++;
+			}
+		}
+		// Check mismatches between current and previous slines (removal, undo, etc.)
+		for (size_t i = 0; i < generator->splines.size(); ++i)
+		{
+			const SplineComponent& spline = generator->splines[i];
+			Entity entity = generator->spline_entities[i];
+			bool invalidation_required = false;
+			invalidation_required |= !scene->splines.Contains(entity); // no longer exists in scene, was deleted
+			if (!invalidation_required)
+			{
+				// If spline exists in scene, need to compare for changes:
+				const SplineComponent& other = *scene->splines.GetComponent(entity);
+				invalidation_required |= spline.width != other.width;
+				invalidation_required |= spline.rotation != other.rotation;
+				invalidation_required |= spline.terrain_modifier_amount != other.terrain_modifier_amount;
+				invalidation_required |= spline.terrain_pushdown != other.terrain_pushdown;
+				invalidation_required |= spline.terrain_texture_falloff != other.terrain_texture_falloff;
+				invalidation_required |= spline.spline_node_transforms.size() != other.spline_node_transforms.size();
+				if (!invalidation_required)
+				{
+					// Last resort compare whole node transform array:
+					invalidation_required |= std::memcmp(spline.spline_node_transforms.data(), other.spline_node_transforms.data(), spline.spline_node_transforms.size() * sizeof(TransformComponent)) != 0;
+				}
+			}
+			if (invalidation_required)
+			{
+				InvalidateChunksAtSpline(spline);
+			}
+		}
 		generator->splines.clear();
+		generator->spline_entities.clear();
 		for (size_t i = 0; i < scene->splines.GetCount(); ++i)
 		{
 			const SplineComponent& spline = scene->splines[i];
 			if (spline.terrain_modifier_amount > 0)
 			{
 				generator->splines.push_back(spline);
-				// extrude spline aabb for heightfield check:
-				generator->splines.back().aabb._min.y = -FLT_MAX;
-				generator->splines.back().aabb._max.y = FLT_MAX;
+				generator->spline_entities.push_back(scene->splines.GetEntity(i));
 			}
 		}
 		wi::jobsystem::Execute(generator->workload, [=](wi::jobsystem::JobArgs a) {
@@ -916,12 +979,25 @@ namespace wi::terrain
 				chunk.x += offset_x;
 				chunk.z += offset_z;
 				auto it = chunks.find(chunk);
-				if (it == chunks.end() || it->second.entity == INVALID_ENTITY)
+				if (it == chunks.end() || it->second.entity == INVALID_ENTITY || it->second.invalidated)
 				{
 					// Generate a new chunk:
 					ChunkData& chunk_data = chunks[chunk];
 
-					chunk_data.entity = generator->scene.Entity_CreateObject("chunk_" + std::to_string(chunk.x) + "_" + std::to_string(chunk.z));
+					std::string chunk_name = "chunk_" + std::to_string(chunk.x) + "_" + std::to_string(chunk.z);
+					if (chunk_data.entity == INVALID_ENTITY)
+					{
+						chunk_data.entity = generator->scene.Entity_CreateObject(chunk_name);
+					}
+					else
+					{
+						// replacement will be made instead of simple merge, entity ID can be reused:
+						generator->scene.names.Create(chunk_data.entity) = std::move(chunk_name);
+						generator->scene.layers.Create(chunk_data.entity);
+						generator->scene.transforms.Create(chunk_data.entity);
+						generator->scene.objects.Create(chunk_data.entity);
+						generator->removable_chunks.push_back(chunk);
+					}
 					ObjectComponent& object = *generator->scene.objects.GetComponent(chunk_data.entity);
 					object.lod_bias = lod_bias;
 					object.filterMask |= wi::enums::FILTER_NAVIGATION_MESH;
@@ -1012,13 +1088,14 @@ namespace wi::terrain
 
 						// Apply splines to height only:
 						const XMVECTOR P = XMVectorSet(world_pos.x, -100000, world_pos.y, 0);
+						const wi::primitive::Ray ray(P, UP);
 						int splinematerialcnt = -1;
 						for (size_t j = 0; j < generator->splines.size(); ++j)
 						{
 							const SplineComponent& spline = generator->splines[j];
 							if (spline.materialEntity != INVALID_ENTITY)
 								splinematerialcnt++;
-							if (!spline.aabb.intersects(P))
+							if (!spline.bvh.IntersectsFirst(ray, [&](uint32_t index) { return spline.precomputed_aabbs[index].intersects(ray); }))
 								continue;
 							XMVECTOR S = spline.TraceSplinePlane(P, UP, 4);
 							S = spline.ClosestPointOnSpline(S, 4);
@@ -1134,6 +1211,8 @@ namespace wi::terrain
 					}
 
 					// Create the textures for virtual texture update:
+					chunk_data.heightmap = {};
+					chunk_data.blendmap = {};
 					CreateChunkRegionTexture(chunk_data);
 
 					if (IsPhysicsEnabled())
@@ -1162,10 +1241,13 @@ namespace wi::terrain
 					if (it != chunks.end() && it->second.entity != INVALID_ENTITY)
 					{
 						ChunkData& chunk_data = it->second;
-						if (chunk_data.grass_entity == INVALID_ENTITY && chunk_data.grass.meshID != INVALID_ENTITY)
+						if ((chunk_data.grass_entity == INVALID_ENTITY || chunk_data.invalidated) && chunk_data.grass.meshID != INVALID_ENTITY)
 						{
 							// add patch for this chunk
-							chunk_data.grass_entity = CreateEntity();
+							if (chunk_data.grass_entity == INVALID_ENTITY)
+							{
+								chunk_data.grass_entity = CreateEntity();
+							}
 							wi::HairParticleSystem& grass = generator->scene.hairs.Create(chunk_data.grass_entity);
 							grass = chunk_data.grass;
 							chunk_data.grass_density_current = grass_density;
@@ -1297,12 +1379,33 @@ namespace wi::terrain
 					}
 				}
 
+				it = chunks.find(chunk); // re-query!
+				if (it != chunks.end() && it->second.entity != INVALID_ENTITY)
+				{
+					ChunkData& chunk_data = it->second;
+					chunk_data.invalidated = false;
+				}
+
 				if (generated_something && timer.elapsed_milliseconds() > generation_time_budget_milliseconds)
 				{
 					generator->cancelled.store(true);
 				}
 
 			};
+
+			// priority invalidation queue:
+			//	This doesn't necessarily finish every frame, that's why it's a queue, next frame will pick up earlier requests before newer ones
+			while (!generator->priority_invalidation.empty())
+			{
+				Chunk chunk = generator->priority_invalidation.front();
+				generator->priority_invalidation.pop_front();
+				auto it = chunks.find(chunk);
+				if (it != chunks.end() && it->second.invalidated) // Check here too in this special case, because multiple of the same entries can easily exist on the queue. Already refreshes chunks will not be refreshed again
+				{
+					request_chunk(chunk.x, chunk.z);
+					if (generator->cancelled.load()) return;
+				}
+			}
 
 			// generate center chunk first:
 			request_chunk(0, 0);
@@ -1558,7 +1661,7 @@ namespace wi::terrain
 
 			if (chunk_data.vt == nullptr)
 			{
-				chunk_data.vt = std::make_shared<VirtualTexture>();
+				chunk_data.vt = wi::allocator::make_shared<VirtualTexture>();
 			}
 			VirtualTexture& vt = *chunk_data.vt;
 
@@ -2109,6 +2212,22 @@ namespace wi::terrain
 		}
 	}
 
+	void Terrain::InvalidateChunksAtSpline(const wi::scene::SplineComponent& spline)
+	{
+		for (auto it = chunks.begin(); it != chunks.end(); it++)
+		{
+			ChunkData& chunk_data = it->second;
+			if (chunk_data.invalidated)
+				continue;
+			BoundingBox bb(chunk_data.sphere.center, XMFLOAT3(chunk_data.sphere.radius, 1000000, chunk_data.sphere.radius));
+			if (spline.bvh.IntersectsFirst(bb, [&](uint32_t index) { return spline.precomputed_obbs[index].Intersects(bb); }))
+			{
+				chunk_data.invalidated = true;
+				generator->priority_invalidation.push_back(it->first);
+			}
+		}
+	}
+
 	void Terrain::Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri)
 	{
 		Generation_Cancel();
@@ -2295,7 +2414,7 @@ namespace wi::terrain
 				default:
 				case Modifier::Type::Perlin:
 					{
-						std::shared_ptr<PerlinModifier> modifier = std::make_shared<PerlinModifier>();
+						wi::allocator::shared_ptr<PerlinModifier> modifier = wi::allocator::make_shared_single<PerlinModifier>();
 						modifiers[i] = modifier;
 						archive >> modifier->octaves;
 						archive >> modifier->seed;
@@ -2304,7 +2423,7 @@ namespace wi::terrain
 					break;
 				case Modifier::Type::Voronoi:
 					{
-						std::shared_ptr<VoronoiModifier> modifier = std::make_shared<VoronoiModifier>();
+						wi::allocator::shared_ptr<VoronoiModifier> modifier = wi::allocator::make_shared_single<VoronoiModifier>();
 						modifiers[i] = modifier;
 						archive >> modifier->fade;
 						archive >> modifier->shape;
@@ -2316,7 +2435,7 @@ namespace wi::terrain
 					break;
 				case Modifier::Type::Heightmap:
 					{
-						std::shared_ptr<HeightmapModifier> modifier = std::make_shared<HeightmapModifier>();
+						wi::allocator::shared_ptr<HeightmapModifier> modifier = wi::allocator::make_shared_single<HeightmapModifier>();
 						modifiers[i] = modifier;
 						archive >> modifier->amount;
 						archive >> modifier->data;

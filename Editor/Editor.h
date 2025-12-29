@@ -88,6 +88,7 @@ public:
 	wi::physics::PickDragOperation physicsDragOp;
 
 	std::unique_ptr<wi::RenderPath3D> renderPath;
+	wi::RenderPath3D_PathTracing* pathtracer = nullptr; // This is not lifetime managing pointer, it will view renderPath if it's path tracing
 	wi::graphics::Texture gui_background_effect;
 	const wi::graphics::Texture* GetGUIBlurredBackground() const override { return renderPath->GetGUIBlurredBackground(); }
 
@@ -166,6 +167,7 @@ public:
 		HISTORYOP_DELETE,			// entity removed
 		HISTORYOP_COMPONENT_DATA,	// generic component data changed
 		HISTORYOP_PAINTTOOL,		// paint tool interaction
+		HISTORYOP_ADD_TO_SPLINE,	// Spline node added
 		HISTORYOP_NONE
 	};
 
@@ -190,7 +192,8 @@ public:
 	bool save_in_progress = false;
 
 	wi::graphics::Texture CreateThumbnail(wi::graphics::Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps = false) const;
-	wi::graphics::Texture CreateThumbnailScreenshot() const;
+	bool SetupThumbnailCamera(wi::RenderPath3D& thumbnailRenderPath);
+	wi::scene::CameraComponent thumbnail_saved_camera;
 
 	std::string save_text_message = "";
 	std::string save_text_filename = "";
@@ -202,6 +205,7 @@ public:
 
 	struct EditorScene
 	{
+		uint64_t id = 0; // unique ID for scene tabs
 		std::string path;
 		wi::scene::Scene scene;
 		XMFLOAT3 cam_move = {};
@@ -216,11 +220,16 @@ public:
 		wi::gui::Button tabCloseButton;
 	};
 	wi::vector<std::unique_ptr<EditorScene>> scenes;
+	uint64_t next_scene_id = 1;
 	int current_scene = 0;
 	EditorScene& GetCurrentEditorScene() { return *scenes[current_scene].get(); }
 	const EditorScene& GetCurrentEditorScene() const { return *scenes[current_scene].get(); }
 	wi::scene::Scene& GetCurrentScene() { return scenes[current_scene].get()->scene; }
 	const wi::scene::Scene& GetCurrentScene() const { return scenes[current_scene].get()->scene; }
+	// Find EditorScene by ID, returns pointer or nullptr if not found (e.g., tab was closed)
+	EditorScene* FindEditorSceneByID(uint64_t id) const;
+	// Get or create an EditorScene for content loading: returns the scene with given ID, or creates a new one if not found
+	EditorScene& GetOrCreateEditorSceneForLoading(uint64_t target_scene_id);
 	void SetCurrentScene(int index);
 	void RefreshSceneList();
 	void NewScene();
@@ -230,6 +239,8 @@ public:
 	void FocusCameraOnSelected();
 
 	void ReloadTerrainProps();
+
+	XMFLOAT3 GetPositionInFrontOfCamera() const;
 
 	wi::Localization default_localization;
 	wi::Localization current_localization;
@@ -262,6 +273,8 @@ public:
 	void HotReload();
 
 	bool KeepRunning();
+
+	void SaveWindowSize();
 
 	void Exit() override;
 

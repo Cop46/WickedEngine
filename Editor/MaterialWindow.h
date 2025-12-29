@@ -11,6 +11,8 @@ public:
 	void SetEntity(wi::ecs::Entity entity);
 
 	wi::gui::TextInputField materialNameField;
+	wi::gui::Button presetLoadButton;
+	wi::gui::Button presetSaveButton;
 	wi::gui::CheckBox shadowReceiveCheckBox;
 	wi::gui::CheckBox shadowCasterCheckBox;
 	wi::gui::CheckBox useVertexColorsCheckBox;
@@ -74,14 +76,12 @@ public:
 	wi::gui::Label textureSlotLabel;
 	wi::gui::TextInputField textureSlotUvsetField;
 
+	wi::unordered_map<std::string, wi::Resource> uniqueTextures;
 	wi::gui::Window texturePickerWindow;
 	std::deque<wi::gui::Button> texturePickerButtons;
 
 	void RecreateTexturePickerButtons();
 
 	void ResizeLayout() override;
-
-private:
-	wi::unordered_map<std::string, wi::Resource> CollectUniqueTextures() const;
 };
 

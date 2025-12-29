@@ -182,8 +182,6 @@ void GeneralWindow::Create(EditorComponent* _editor)
 	freezeCullingCameraCheckBox.SetCheck(wi::renderer::GetFreezeCullingCameraEnabled());
 	AddWidget(&freezeCullingCameraCheckBox);
 
-
-
 	disableAlbedoMapsCheckBox.Create("Disable albedo maps: ");
 	disableAlbedoMapsCheckBox.SetTooltip("Disables albedo maps on objects for easier lighting debugging");
 	disableAlbedoMapsCheckBox.OnClick([](wi::gui::EventArgs args) {
@@ -200,6 +198,15 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		});
 	forceDiffuseLightingCheckBox.SetCheck(wi::renderer::IsForceDiffuseLighting());
 	AddWidget(&forceDiffuseLightingCheckBox);
+
+	forceUnlitCheckBox.Create("Force unlit: ");
+	forceUnlitCheckBox.SetTooltip("Sets every surface without lighting and shadows");
+	forceUnlitCheckBox.OnClick([](wi::gui::EventArgs args) {
+		wi::renderer::SetForceUnlit(args.bValue);
+		});
+	forceUnlitCheckBox.SetCheck(wi::renderer::IsForceUnlit());
+	AddWidget(&forceUnlitCheckBox);
+
 
 	focusModeCheckBox.Create(ICON_EYE " Focus mode GUI: ");
 	focusModeCheckBox.SetCheckText(ICON_EYE);
@@ -395,6 +402,18 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		});
 	});
 	AddWidget(&localizationButton);
+
+	placeInFrontOfCameraCheckBox.Create("Place entities in front of camera: ");
+	placeInFrontOfCameraCheckBox.SetTooltip("When enabled, newly created entities and imported models will be positioned in front of the editor camera instead of at the origin.");
+	if (editor->main->config.GetSection("options").Has("place_entities_in_front_of_camera"))
+	{
+		placeInFrontOfCameraCheckBox.SetCheck(editor->main->config.GetSection("options").GetBool("place_entities_in_front_of_camera"));
+	}
+	placeInFrontOfCameraCheckBox.OnClick([this](wi::gui::EventArgs args) {
+		editor->main->config.GetSection("options").Set("place_entities_in_front_of_camera", args.bValue);
+		editor->main->config.Commit();
+	});
+	AddWidget(&placeInFrontOfCameraCheckBox);
 
 	wireFrameComboBox.Create("Render wireframe: ");
 	wireFrameComboBox.SetTooltip("Choose wireframe rendering mode:\nDisabled: Normal rendering\nWireframe Only: Replace geometry with wireframe\nWireframe Overlay: Show wireframe on top of geometry");
@@ -1512,6 +1531,8 @@ void GeneralWindow::ResizeLayout()
 
 	layout.add_fullwidth(localizationButton);
 
+	layout.add_right(placeInFrontOfCameraCheckBox);
+
 	layout.add(wireFrameComboBox);
 	layout.add_right(physicsDebugCheckBox);
 	layout.add(physicsDebugMaxDistanceSlider);
@@ -1533,6 +1554,7 @@ void GeneralWindow::ResizeLayout()
 	layout.add_right(freezeCullingCameraCheckBox);
 	layout.add_right(disableAlbedoMapsCheckBox);
 	layout.add_right(forceDiffuseLightingCheckBox);
+	layout.add_right(forceUnlitCheckBox);
 
 	layout.jump();
 

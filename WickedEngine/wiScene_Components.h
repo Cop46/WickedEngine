@@ -524,7 +524,7 @@ namespace wi::scene
 		} character;
 
 		// Non-serialized attributes:
-		std::shared_ptr<void> physicsobject = nullptr; // You can set to null to recreate the physics object the next time phsyics system will be running.
+		wi::allocator::shared_ptr<void> physicsobject; // You can reset this to recreate the physics object the next time phsyics system will be running.
 
 		constexpr void SetDisableDeactivation(bool value) { if (value) { _flags |= DISABLE_DEACTIVATION; } else { _flags &= ~DISABLE_DEACTIVATION; } }
 		constexpr void SetKinematic(bool value) { if (value) { _flags |= KINEMATIC; } else { _flags &= ~KINEMATIC; } }
@@ -637,7 +637,7 @@ namespace wi::scene
 		float break_distance = FLT_MAX; // how much the constraint is allowed to be exerted before breaking, calculated as relative distance
 
 		// Non-serialized attributes:
-		std::shared_ptr<void> physicsobject = nullptr; // You can set to null to recreate the physics object the next time phsyics system will be running.
+		wi::allocator::shared_ptr<void> physicsobject; // You can reset this to recreate the physics object the next time phsyics system will be running.
 
 		// Request refreshing of constraint settings without recreating the constraint
 		constexpr void SetRefreshParametersNeeded(bool value = true) { if (value) { _flags |= REFRESH_PARAMETERS_REQUEST; } else { _flags &= ~REFRESH_PARAMETERS_REQUEST; } }
@@ -1269,7 +1269,7 @@ namespace wi::scene
 		wi::vector<float> weights; // weight per physics vertex controlling the mass. (0: disable weight (no physics, only animation), 1: default weight)
 
 		// Non-serialized attributes:
-		std::shared_ptr<void> physicsobject = nullptr; // You can set to null to recreate the physics object the next time phsyics system will be running.
+		wi::allocator::shared_ptr<void> physicsobject; // You can reset this to recreate the physics object the next time phsyics system will be running.
 		XMFLOAT4X4 worldMatrix = wi::math::IDENTITY_MATRIX;
 		wi::vector<ShaderTransform> boneData; // simulated soft body nodes as bone matrices that can be fed into skinning
 		wi::primitive::AABB aabb;
@@ -1284,7 +1284,7 @@ namespace wi::scene
 		{
 			physicsIndices.clear();
 			physicsToGraphicsVertexMapping.clear();
-			physicsobject = {};
+			physicsobject.reset();
 		}
 
 		void SetDetail(float loddetail)
@@ -1481,7 +1481,7 @@ namespace wi::scene
 			wi::graphics::Texture depthstencil_resolved;
 			XMUINT2 tileCount = {};
 			wi::graphics::GPUBuffer entityTiles;
-			std::shared_ptr<void> visibility;
+			wi::allocator::shared_ptr<void> visibility;
 		} render_to_texture;
 
 		void CreateOrtho(float newWidth, float newHeight, float newNear, float newFar, float newVerticalSize = 1);
@@ -1531,6 +1531,7 @@ namespace wi::scene
 		};
 		uint32_t _flags = DIRTY;
 		uint32_t resolution = 128; // power of two
+		float realtime_update_interval = 0.0f; // how often to render when realtime (in seconds, 0 = every frame)
 		std::string textureName; // if texture is coming from an asset
 
 		// Non-serialized attributes:
@@ -1540,17 +1541,22 @@ namespace wi::scene
 		float range;
 		XMFLOAT4X4 inverseMatrix;
 		mutable bool render_dirty = false;
+		mutable bool first_render = true; // true until first render completes
+		mutable float realtime_time_accumulator = 0.0f; // tracks time since last render for realtime probes
 
 		constexpr void SetDirty(bool value = true) { if (value) { _flags |= DIRTY; DeleteResource(); } else { _flags &= ~DIRTY; } }
 		constexpr void SetRealTime(bool value) { if (value) { _flags |= REALTIME; } else { _flags &= ~REALTIME; } }
 		constexpr void SetMSAA(bool value) { if (value) { _flags |= MSAA; } else { _flags &= ~MSAA; } SetDirty(); }
+		constexpr void SetUpdateInterval(float value) { realtime_update_interval = std::max(0.0f, value); }
 
 		constexpr bool IsDirty() const { return _flags & DIRTY; }
 		constexpr bool IsRealTime() const { return _flags & REALTIME; }
 		constexpr bool IsMSAA() const { return _flags & MSAA; }
 		constexpr uint32_t GetSampleCount() const { return IsMSAA() ? envmapMSAASampleCount : 1; }
+		bool ShouldRenderThisFrame() const { return !IsRealTime() || first_render || (realtime_update_interval <= 0.0f) || (realtime_time_accumulator >= realtime_update_interval); }
 
 		size_t GetMemorySizeInBytes() const;
+		constexpr float GetRealtimeUpdateInterval() const { return realtime_update_interval; }
 
 		void CreateRenderData();
 		void DeleteResource();
@@ -2223,6 +2229,7 @@ namespace wi::scene
 			RAGDOLL_PHYSICS = 1 << 1,
 			DISABLE_INTERSECTION = 1 << 2,
 			DISABLE_CAPSULE_SHADOW = 1 << 3,
+			RAGDOLL_DISABLED = 1 << 4,
 		};
 		uint32_t _flags = LOOKAT;
 
@@ -2302,11 +2309,13 @@ namespace wi::scene
 		constexpr bool IsRagdollPhysicsEnabled() const { return _flags & RAGDOLL_PHYSICS; }
 		constexpr bool IsIntersectionDisabled() const { return _flags & DISABLE_INTERSECTION; }
 		constexpr bool IsCapsuleShadowDisabled() const { return _flags & DISABLE_CAPSULE_SHADOW; }
+		constexpr bool IsRagdollDisabled() const { return _flags & RAGDOLL_DISABLED; }
 
 		constexpr void SetLookAtEnabled(bool value = true) { if (value) { _flags |= LOOKAT; } else { _flags &= ~LOOKAT; } }
 		constexpr void SetRagdollPhysicsEnabled(bool value = true) { if (value) { _flags |= RAGDOLL_PHYSICS; } else { _flags &= ~RAGDOLL_PHYSICS; } }
 		constexpr void SetIntersectionDisabled(bool value = true) { if (value) { _flags |= DISABLE_INTERSECTION; } else { _flags &= ~DISABLE_INTERSECTION; } }
 		constexpr void SetCapsuleShadowDisabled(bool value = true) { if (value) { _flags |= DISABLE_CAPSULE_SHADOW; } else { _flags &= ~DISABLE_CAPSULE_SHADOW; } }
+		constexpr void SetRagdollDisabled(bool value = true) { if (value) { _flags |= RAGDOLL_DISABLED; } else { _flags &= ~RAGDOLL_DISABLED; } }
 
 		XMFLOAT2 head_rotation_max = XMFLOAT2(XM_PI / 3.0f, XM_PI / 6.0f);
 		XMFLOAT2 eye_rotation_max = XMFLOAT2(XM_PI / 20.0f, XM_PI / 20.0f);
@@ -2327,7 +2336,7 @@ namespace wi::scene
 		XMFLOAT4 lookAtDeltaRotationState_Head = XMFLOAT4(0, 0, 0, 1);
 		XMFLOAT4 lookAtDeltaRotationState_LeftEye = XMFLOAT4(0, 0, 0, 1);
 		XMFLOAT4 lookAtDeltaRotationState_RightEye = XMFLOAT4(0, 0, 0, 1);
-		std::shared_ptr<void> ragdoll = nullptr; // physics system implementation-specific object
+		wi::allocator::shared_ptr<void> ragdoll; // physics system implementation-specific object
 		float default_facing = 0; // 0 = not yet computed, otherwise Z direction
 		float knee_bending = 0; // 0 = not yet computed, otherwise Z direction
 
@@ -2517,7 +2526,7 @@ namespace wi::scene
 				wi::jobsystem::Wait(ctx);
 			}
 		};
-		std::shared_ptr<PathfindingThreadContext> pathfinding_thread; // separate allocation, mustn't be reallocated while path finding thread is running
+		wi::allocator::shared_ptr<PathfindingThreadContext> pathfinding_thread; // separate allocation, mustn't be reallocated while path finding thread is running
 		const wi::VoxelGrid* voxelgrid = nullptr;
 
 		// Apply movement to the character in the next update
@@ -2619,6 +2628,7 @@ namespace wi::scene
 			DRAW_ALIGNED = 1 << 0,
 			LOOPED = 1 << 1,
 			DIRTY = 1 << 2,
+			FILLED = 1 << 3,
 		};
 		uint32_t _flags = NONE;
 
@@ -2647,9 +2657,12 @@ namespace wi::scene
 		mutable int prev_terrain_generation_nodes = 0;
 		mutable bool dirty_terrain = false;
 		bool prev_looped = false;
-		wi::primitive::AABB aabb;
+		bool prev_filled = false;
 		wi::ecs::Entity materialEntity = wi::ecs::INVALID_ENTITY; // temp for terrain usage
 		mutable wi::ecs::Entity materialEntity_terrainPrev = wi::ecs::INVALID_ENTITY; // temp for terrain usage
+		wi::vector<BoundingOrientedBox> precomputed_obbs; // an array of OBBs that approximate the spline's volume
+		wi::vector<wi::primitive::AABB> precomputed_aabbs; // an array of AABBs that approximate the spline's volume
+		wi::BVH bvh; // BVH fitted onto the precomputed_aabbs for accelerated intersection checking. The leaf nodes can be used to index aabbs and obbs alike
 
 		// Evaluate an interpolated location on the spline at t which in range [0,1] on the spline
 		//	the result matrix is oriented to look towards the spline direction and face upwards along the spline normal
@@ -2661,11 +2674,16 @@ namespace wi::scene
 		// Trace a point on the spline's plane:
 		XMVECTOR TraceSplinePlane(const XMVECTOR& ORIGIN, const XMVECTOR& DIRECTION, int steps = 10) const;
 
-		// Compute the boounding box of the spline iteratively
+		// Compute the bounding box of the spline iteratively
 		wi::primitive::AABB ComputeAABB(int steps = 10) const;
 
 		// Precompute the spline node distances that will be used at spline evaluation calls
 		void PrecomputeSplineNodeDistances();
+
+		// Compute the oriented and axis aligned bounding boxes of the spline iteratively that approximates the spline volume
+		//	Will write into the precomputed_aabbs and precomputed_obbs array, subdivision mean how many boxes will be used per-segment
+		//	Will also build the bvh
+		void PrecomputeSplineBounds(int subdivision = 10);
 
 		// By default the spline is drawn as camera facing, this can be used to set it to be drawn aligned to segment rotations:
 		bool IsDrawAligned() const { return _flags & DRAW_ALIGNED; }
@@ -2676,6 +2694,9 @@ namespace wi::scene
 
 		bool IsDirty() const { return _flags & DIRTY; }
 		void SetDirty(bool value = true) { if (value) { _flags |= DIRTY; } else { _flags &= ~DIRTY; } }
+
+		bool IsFilled() const { return _flags & FILLED; }
+		void SetFilled(bool value = true) { if (value) { _flags |= FILLED; } else { _flags &= ~FILLED; } }
 
 		void Serialize(wi::Archive& archive, wi::ecs::EntitySerializer& seri);
 	};

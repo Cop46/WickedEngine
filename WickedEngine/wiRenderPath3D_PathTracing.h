@@ -5,8 +5,7 @@
 namespace wi
 {
 
-	class RenderPath3D_PathTracing :
-		public RenderPath3D
+	class RenderPath3D_PathTracing : public RenderPath3D
 	{
 	protected:
 		int sam = -1;
@@ -45,6 +44,10 @@ namespace wi
 		void resetProgress() { wi::jobsystem::Wait(denoiserContext); sam = -1; denoiserProgress = 0; volumetriccloudResources.ResetFrame(); }
 
 		uint8_t instanceInclusionMask_PathTrace = 0xFF;
+
+		// This is an identifier of RenderPath subtype that is used for lua binding.
+		static constexpr const auto script_check_identifier = relative_path_storage(__FILE__);
+		const char* GetScriptBindingID() const override { return script_check_identifier.c_str(); }
 	};
 
 }

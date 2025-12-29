@@ -36,6 +36,7 @@
 #include <algorithm>
 #include <atomic>
 #include <mutex>
+#include <malloc.h> // alloca
 
 using namespace wi::primitive;
 using namespace wi::graphics;
@@ -130,6 +131,7 @@ bool raytracedShadows = false;
 bool tessellationEnabled = true;
 bool disableAlbedoMaps = false;
 bool forceDiffuseLighting = false;
+bool forceUnlit = false;
 bool SHADOWS_ENABLED = true;
 bool SCREENSPACESHADOWS = false;
 bool SURFELGI = false;
@@ -233,6 +235,7 @@ struct alignas(16) RenderBatch
 
 	// opaque sorting
 	//	Priority is set to mesh index to have more instancing
+	//  LOD is included to group same-mesh objects for better batching
 	//	distance is second priority (front to back Z-buffering)
 	constexpr bool operator<(const RenderBatch& other) const
 	{
@@ -242,24 +245,28 @@ struct alignas(16) RenderBatch
 			{
 				// The order of members is important here, it means the sort priority (low to high)!
 				uint64_t distance : 16;
+				uint64_t lod : 8;
 				uint64_t meshIndex : 16;
-				uint64_t sort_bits : 32;
+				uint64_t sort_bits : 24;
 			} bits;
 			uint64_t value;
 		};
 		static_assert(sizeof(SortKey) == sizeof(uint64_t));
 		SortKey a = {};
 		a.bits.distance = distance;
+		a.bits.lod = lod_override;
 		a.bits.meshIndex = meshIndex;
 		a.bits.sort_bits = sort_bits;
 		SortKey b = {};
 		b.bits.distance = other.distance;
+		b.bits.lod = other.lod_override;
 		b.bits.meshIndex = other.meshIndex;
 		b.bits.sort_bits = other.sort_bits;
 		return a.value < b.value;
 	}
 	// transparent sorting
 	//	Priority is distance for correct alpha blending (back to front rendering)
+	//  LOD is included to group same-mesh objects for better batching
 	//	mesh index is second priority for instancing
 	constexpr bool operator>(const RenderBatch& other) const
 	{
@@ -268,8 +275,9 @@ struct alignas(16) RenderBatch
 			struct
 			{
 				// The order of members is important here, it means the sort priority (low to high)!
+				uint64_t lod : 8;
 				uint64_t meshIndex : 16;
-				uint64_t sort_bits : 32;
+				uint64_t sort_bits : 24;
 				uint64_t distance : 16;
 			} bits;
 			uint64_t value;
@@ -278,10 +286,12 @@ struct alignas(16) RenderBatch
 		SortKey a = {};
 		a.bits.distance = distance;
 		a.bits.sort_bits = sort_bits;
+		a.bits.lod = lod_override;
 		a.bits.meshIndex = meshIndex;
 		SortKey b = {};
 		b.bits.distance = other.distance;
 		b.bits.sort_bits = other.sort_bits;
+		b.bits.lod = other.lod_override;
 		b.bits.meshIndex = other.meshIndex;
 		return a.value > b.value;
 	}
@@ -324,40 +334,6 @@ struct RenderQueue
 };
 static thread_local RenderQueue renderQueue;
 static thread_local RenderQueue renderQueue_transparent;
-
-
-const Sampler* GetSampler(SAMPLERTYPES id)
-{
-	return &samplers[id];
-}
-const Shader* GetShader(SHADERTYPE id)
-{
-	return &shaders[id];
-}
-const InputLayout* GetInputLayout(ILTYPES id)
-{
-	return &inputLayouts[id];
-}
-const RasterizerState* GetRasterizerState(RSTYPES id)
-{
-	return &rasterizers[id];
-}
-const DepthStencilState* GetDepthStencilState(DSSTYPES id)
-{
-	return &depthStencils[id];
-}
-const BlendState* GetBlendState(BSTYPES id)
-{
-	return &blendStates[id];
-}
-const GPUBuffer* GetBuffer(BUFFERTYPES id)
-{
-	return &buffers[id];
-}
-const Texture* GetTexture(TEXTYPES id)
-{
-	return &textures[id];
-}
 
 enum OBJECT_MESH_SHADER_PSO
 {
@@ -731,6 +707,49 @@ size_t GetShaderErrorCount()
 size_t GetShaderMissingCount()
 {
 	return SHADER_MISSING.load();
+}
+
+
+const Sampler* GetSampler(SAMPLERTYPES id)
+{
+	return &samplers[id];
+}
+const Shader* GetShader(SHADERTYPE id)
+{
+	// Note: we must wait for shader creation background threads when trying to get shader from outside code
+	//	This GetShader() function is NOT used within this file, because here we don't wait for these shaders to be completely loaded!!
+	if ((id >= PSTYPE_OBJECT_PERMUTATION_BEGIN && id <= PSTYPE_OBJECT_PERMUTATION_END) || (id >= PSTYPE_OBJECT_TRANSPARENT_PERMUTATION_BEGIN && id <= PSTYPE_OBJECT_TRANSPARENT_PERMUTATION_END))
+	{
+		wi::jobsystem::Wait(objectps_ctx);
+	}
+	wi::jobsystem::Wait(raytracing_ctx);
+	wi::jobsystem::Wait(mesh_shader_ctx);
+
+	return &shaders[id];
+}
+const InputLayout* GetInputLayout(ILTYPES id)
+{
+	return &inputLayouts[id];
+}
+const RasterizerState* GetRasterizerState(RSTYPES id)
+{
+	return &rasterizers[id];
+}
+const DepthStencilState* GetDepthStencilState(DSSTYPES id)
+{
+	return &depthStencils[id];
+}
+const BlendState* GetBlendState(BSTYPES id)
+{
+	return &blendStates[id];
+}
+const GPUBuffer* GetBuffer(BUFFERTYPES id)
+{
+	return &buffers[id];
+}
+const Texture* GetTexture(TEXTYPES id)
+{
+	return &textures[id];
 }
 
 bool LoadShader(
@@ -2731,46 +2750,54 @@ BufferSuballocation SuballocateGPUBuffer(uint64_t size)
 	if (size > GPUSubAllocator::blocksize / 2)
 		return {}; // invalid, larger allocations than half block size will not be suballocated
 
-	// scoped for locker
+	std::scoped_lock lock(suballocator.locker);
+
+	// See if any of the large blocks can fulfill the allocation request:
+	BufferSuballocation allocation;
+	for (auto& block : suballocator.blocks)
 	{
-		std::scoped_lock lock(suballocator.locker);
-
-		// See if any of the large blocks can fulfill the allocation request:
-		BufferSuballocation allocation;
-		for (auto& block : suballocator.blocks)
+		allocation.allocation = block.allocator.allocate(size);
+		if (allocation.allocation.IsValid())
 		{
-			allocation.allocation = block.allocator.allocate(size);
-			if (allocation.allocation.IsValid())
-			{
-				allocation.alias = block.buffer;
-				//wilog("SuballocateGPUBuffer allocated size: %s, pages: %d, free space remaining: %s", wi::helper::GetMemorySizeText(size).c_str(), block.allocator.page_count_from_bytes(size), wi::helper::GetMemorySizeText(allocation.allocation.allocator->allocator.storageReport().totalFreeSpace * block.allocator.page_size).c_str());
-				return allocation;
-			}
+			allocation.alias = block.buffer;
+			//wilog("SuballocateGPUBuffer allocated size: %s, pages: %d, free space remaining: %s", wi::helper::GetMemorySizeText(size).c_str(), block.allocator.page_count_from_bytes(size), wi::helper::GetMemorySizeText(allocation.allocation.allocator->allocator.storageReport().totalFreeSpace * block.allocator.page_size).c_str());
+			return allocation;
 		}
-
-		// Allocation couldn't be fulfilled, create new block:
-		GPUBufferDesc desc;
-		desc.size = GPUSubAllocator::blocksize;
-		if (device->CheckCapability(GraphicsDeviceCapability::CACHE_COHERENT_UMA))
-		{
-			// In UMA mode, it is better to create UPLOAD buffer, this avoids one copy from UPLOAD to DEFAULT
-			desc.usage = Usage::UPLOAD;
-		}
-		else
-		{
-			desc.usage = Usage::DEFAULT;
-		}
-		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::VERTEX_BUFFER | BindFlag::INDEX_BUFFER;
-		desc.misc_flags = ResourceMiscFlag::ALIASING_BUFFER | ResourceMiscFlag::NO_DEFAULT_DESCRIPTORS;
-		desc.alignment = device->GetMinOffsetAlignment(&desc);
-		auto& block = suballocator.blocks.emplace_back();
-		bool success = device->CreateBuffer(&desc, nullptr, &block.buffer);
-		assert(success);
-		device->SetName(&block.buffer, "GPUSubAllocator");
-		block.allocator.init(desc.size, (uint32_t)desc.alignment, true);
-		wilog("SuballocateGPUBuffer created buffer block with size: %s, with page size: %s, page count: %d", wi::helper::GetMemorySizeText(block.allocator.total_size_in_bytes()).c_str(), wi::helper::GetMemorySizeText(block.allocator.page_size).c_str(), (int)block.allocator.page_count);
 	}
-	return SuballocateGPUBuffer(size); // retry
+
+	// Allocation couldn't be fulfilled, create new block:
+	GPUBufferDesc desc;
+	desc.size = GPUSubAllocator::blocksize;
+	if (device->CheckCapability(GraphicsDeviceCapability::CACHE_COHERENT_UMA))
+	{
+		// In UMA mode, it is better to create UPLOAD buffer, this avoids one copy from UPLOAD to DEFAULT
+		desc.usage = Usage::UPLOAD;
+	}
+	else
+	{
+		desc.usage = Usage::DEFAULT;
+	}
+	desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::VERTEX_BUFFER | BindFlag::INDEX_BUFFER | BindFlag::UNORDERED_ACCESS;
+	desc.misc_flags = ResourceMiscFlag::ALIASING_BUFFER | ResourceMiscFlag::NO_DEFAULT_DESCRIPTORS;
+	if (device->CheckCapability(GraphicsDeviceCapability::RAYTRACING))
+	{
+		desc.misc_flags |= ResourceMiscFlag::RAY_TRACING;
+	}
+	desc.alignment = device->GetMinOffsetAlignment(&desc);
+	auto& block = suballocator.blocks.emplace_back();
+	bool success = device->CreateBuffer(&desc, nullptr, &block.buffer);
+	assert(success);
+	device->SetName(&block.buffer, "GPUSubAllocator");
+	block.allocator.init(desc.size, (uint32_t)desc.alignment, true);
+	wilog("SuballocateGPUBuffer created buffer block with size: %s, with page size: %s, page count: %d", wi::helper::GetMemorySizeText(block.allocator.total_size_in_bytes()).c_str(), wi::helper::GetMemorySizeText(block.allocator.page_size).c_str(), (int)block.allocator.page_count);
+
+	allocation.allocation = block.allocator.allocate(size);
+	if (allocation.allocation.IsValid())
+	{
+		allocation.alias = block.buffer;
+		//wilog("SuballocateGPUBuffer allocated size: %s, pages: %d, free space remaining: %s", wi::helper::GetMemorySizeText(size).c_str(), block.allocator.page_count_from_bytes(size), wi::helper::GetMemorySizeText(allocation.allocation.allocator->allocator.storageReport().totalFreeSpace * block.allocator.page_size).c_str());
+	}
+	return allocation;
 }
 void UpdateGPUSuballocator()
 {
@@ -2781,8 +2808,10 @@ void UpdateGPUSuballocator()
 	}
 	for (size_t i = 0; i < suballocator.blocks.size(); ++i)
 	{
-		if (suballocator.blocks[i].allocator.is_empty())
+		const auto& block = suballocator.blocks[i];
+		if (block.allocator.is_empty())
 		{
+			wilog("deleted suballocation buffer block with size: %s, with page size: %s, page count: %d", wi::helper::GetMemorySizeText(block.allocator.total_size_in_bytes()).c_str(), wi::helper::GetMemorySizeText(block.allocator.page_size).c_str(), (int)block.allocator.page_count);
 			suballocator.blocks.erase(suballocator.blocks.begin() + i);
 			break;
 		}
@@ -3136,6 +3165,7 @@ void RenderMeshes(
 		;
 	const bool skip_planareflection_objects = flags & DRAWSCENE_SKIP_PLANAR_REFLECTION_OBJECTS;
 	const bool wireframe_overlay = flags & DRAWSCENE_WIREFRAME_OVERLAY;
+	const bool wireframe = wireframe_overlay || (IsWireRender() && GetWireframeMode() != WIREFRAME_OVERLAY);
 
 	// Do we need to compute a light mask for this pass on the CPU?
 	const bool forwardLightmaskRequest =
@@ -3186,7 +3216,6 @@ void RenderMeshes(
 		const float tessF = mesh.GetTessellationFactor();
 		const bool tessellatorRequested = tessF > 0 && tessellation;
 		const bool meshShaderRequested = !tessellatorRequested && mesh_shader && mesh.vb_clu.IsValid();
-		const bool wireframe = wireframe_overlay || (IsWireRender() && GetWireframeMode() != WIREFRAME_OVERLAY);
 
 		// Notes on provoking index buffer:
 		//	Normally it's used for primitiveID generation, so it would be only used in PREPASS
@@ -4305,6 +4334,10 @@ void UpdatePerFrameData(
 	{
 		frameCB.options |= OPTION_BIT_FORCE_DIFFUSE_LIGHTING;
 	}
+	if (IsForceUnlit())
+	{
+		frameCB.options |= OPTION_BIT_FORCE_UNLIT;
+	}
 	if (vis.scene->weather.IsVolumetricCloudsCastShadow() && vis.scene->weather.IsVolumetricClouds())
 	{
 		frameCB.options |= OPTION_BIT_VOLUMETRICCLOUDS_CAST_SHADOW;
@@ -5274,6 +5307,9 @@ void UpdateRenderData(
 	}
 
 	FlushBarriers(cmd); // wind/skinning flush
+
+	// Hair particle systems clearing (needs to be for everything, not just visible):
+	HairParticleSystem::InitializeGPUBuffersIfNeeded(vis.scene->hairs.GetData(), vis.scene->hairs.GetCount(), cmd);
 
 	// Hair particle systems GPU simulation:
 	//	(This must be non-async too, as prepass will render hairs!)
@@ -7197,11 +7233,6 @@ void DrawScene(
 		filterMask |= FILTER_WATER;
 	}
 
-	if (IsWireRender())
-	{
-		filterMask = FILTER_ALL;
-	}
-
 	if (opaque || transparent)
 	{
 		renderQueue.init();
@@ -8207,6 +8238,9 @@ void DrawDebugWorld(
 	if (debugEnvProbes)
 	{
 		device->EventBegin("Debug EnvProbes", cmd);
+
+		BindCameraCB(camera, camera, camera, cmd);
+
 		// Envmap spheres:
 
 		device->BindPipelineState(&PSO_debug[DEBUGRENDERING_ENVPROBE], cmd);
@@ -9524,9 +9558,19 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 
 			if ((probe_aabb.layerMask & vis.layerMask) && probe.render_dirty && probe.texture.IsValid())
 			{
-				probe.render_dirty = false;
-				render_probe(probe, probe_aabb);
-				rendered_anything = true;
+				if (probe.IsRealTime())
+				{
+					probe.realtime_time_accumulator += vis.scene->dt;
+				}
+
+				if (probe.ShouldRenderThisFrame())
+				{
+					probe.render_dirty = false;
+					probe.first_render = false;
+					probe.realtime_time_accumulator = 0.0f;
+					render_probe(probe, probe_aabb);
+					rendered_anything = true;
+				}
 			}
 		}
 
@@ -9960,7 +10004,7 @@ void VXGI_Voxelize(
 void VXGI_Resolve(
 	const VXGIResources& res,
 	const Scene& scene,
-	Texture texture_lineardepth,
+	const Texture& texture_lineardepth,
 	CommandList cmd
 )
 {
@@ -10630,9 +10674,9 @@ void CopyTexture2D(const Texture& dst, int DstMIP, int DstX, int DstY, const Tex
 	cb.xCopyDst.y = DstY;
 	cb.xCopySrc.x = SrcX;
 	cb.xCopySrc.y = SrcY;
-	cb.xCopySrcSize.x = desc_src.width >> SrcMIP;
-	cb.xCopySrcSize.y = desc_src.height >> SrcMIP;
-	cb.xCopySrcMIP = SrcMIP;
+	cb.xCopySrcSize.x = SrcMIP >= 0 ? (desc_src.width >> SrcMIP) : desc_src.width;
+	cb.xCopySrcSize.y = SrcMIP >= 0 ? (desc_src.height >> SrcMIP) : desc_src.height;
+	cb.xCopySrcMIP = SrcMIP >= 0 ? SrcMIP : 0;
 	cb.xCopyFlags = 0;
 	if (borderExpand == BORDEREXPAND_WRAP)
 	{
@@ -10648,27 +10692,31 @@ void CopyTexture2D(const Texture& dst, int DstMIP, int DstX, int DstY, const Tex
 
 	device->BindUAV(&dst, 0, cmd, DstMIP);
 
-	{
-		GPUBarrier barriers[] = {
-			GPUBarrier::Image(&dst,dst.desc.layout,ResourceState::UNORDERED_ACCESS, DstMIP),
-		};
-		device->Barrier(barriers, arraysize(barriers), cmd);
-	}
+	PushBarrier(GPUBarrier::Image(&src, src.desc.layout, ResourceState::SHADER_RESOURCE_COMPUTE, DstMIP));
+	PushBarrier(GPUBarrier::Image(&dst, dst.desc.layout, ResourceState::UNORDERED_ACCESS, DstMIP));
+	FlushBarriers(cmd);
 
 	XMUINT2 copy_dim = XMUINT2(
-		std::min((uint32_t)cb.xCopySrcSize.x, uint32_t((desc_dst.width - DstX) >> DstMIP)),
-		std::min((uint32_t)cb.xCopySrcSize.y, uint32_t((desc_dst.height - DstY) >> DstMIP))
+		std::min((uint32_t)cb.xCopySrcSize.x, DstMIP >= 0 ? uint32_t((desc_dst.width - DstX) >> DstMIP) : desc_dst.width),
+		std::min((uint32_t)cb.xCopySrcSize.y, DstMIP >= 0 ? uint32_t((desc_dst.height - DstY) >> DstMIP) : desc_dst.height)
 	);
 	device->Dispatch((copy_dim.x + 7) / 8, (copy_dim.y + 7) / 8, 1, cmd);
 
-	{
-		GPUBarrier barriers[] = {
-			GPUBarrier::Image(&dst,ResourceState::UNORDERED_ACCESS,dst.desc.layout, DstMIP),
-		};
-		device->Barrier(barriers, arraysize(barriers), cmd);
-	}
+	PushBarrier(GPUBarrier::Image(&src, ResourceState::SHADER_RESOURCE_COMPUTE, src.desc.layout, DstMIP));
+	PushBarrier(GPUBarrier::Image(&dst, ResourceState::UNORDERED_ACCESS, dst.desc.layout, DstMIP));
+	FlushBarriers(cmd);
 
 	device->EventEnd(cmd);
+}
+void CopyTexture2D(
+	const Texture& dst,
+	const Texture& src,
+	CommandList cmd,
+	BORDEREXPANDSTYLE borderExpand,
+	bool srgb_convert
+)
+{
+	CopyTexture2D(dst, -1, 0, 0, src, -1, 0, 0, cmd, borderExpand, srgb_convert);
 }
 
 
@@ -18849,6 +18897,10 @@ void DrawBox(const XMFLOAT4X4& boxMatrix, const XMFLOAT4& color, bool depth)
 	else
 		renderableBoxes.push_back(std::make_pair(boxMatrix,color));
 }
+void DrawBox(const BoundingOrientedBox& obb, const XMFLOAT4& color, bool depth)
+{
+	DrawBox(XMMatrixScalingFromVector(XMLoadFloat3(&obb.Extents)) * XMMatrixRotationQuaternion(XMLoadFloat4(&obb.Orientation)) * XMMatrixTranslationFromVector(XMLoadFloat3(&obb.Center)), color, depth);
+}
 void DrawSphere(const Sphere& sphere, const XMFLOAT4& color, bool depth)
 {
 	if(depth)
@@ -19095,6 +19147,14 @@ void SetForceDiffuseLighting(bool value)
 bool IsForceDiffuseLighting()
 {
 	return forceDiffuseLighting;
+}
+void SetForceUnlit(bool value)
+{
+	forceUnlit = value;
+}
+bool IsForceUnlit()
+{
+	return forceUnlit;
 }
 void SetScreenSpaceShadowsEnabled(bool value)
 {

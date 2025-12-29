@@ -6,6 +6,7 @@
 #include "wiJobSystem.h"
 #include "wiRenderer.h"
 #include "wiTimer.h"
+#include "wiSpinLock.h"
 
 #include <Jolt/Jolt.h>
 #include <Jolt/RegisterTypes.h>
@@ -23,6 +24,7 @@
 #include <Jolt/Physics/Collision/Shape/HeightFieldShape.h>
 #include <Jolt/Physics/Collision/Shape/RotatedTranslatedShape.h>
 #include <Jolt/Physics/Collision/Shape/OffsetCenterOfMassShape.h>
+#include <Jolt/Physics/Collision/Shape/ScaledShape.h>
 #include <Jolt/Physics/Collision/RayCast.h>
 #include <Jolt/Physics/Collision/CastResult.h>
 #include <Jolt/Physics/Collision/CollisionCollectorImpl.h>
@@ -92,6 +94,48 @@ namespace wi::physics
 		bool INTERPOLATION = true;
 		float CHARACTER_COLLISION_TOLERANCE = 0.05f;
 		float DEBUG_MAX_DRAW_DISTANCE = 500.0f;
+		int COLLISION_STEPS = 1;
+
+		// Physics shape cache data structures for reusing complex shapes across multiple rigid bodies
+		struct PhysicsShapeCacheKey
+		{
+			const void* vertex_data = nullptr;
+			const void* index_data = nullptr;
+			size_t vertex_count = 0;
+			size_t index_count = 0;
+			wi::scene::RigidBodyPhysicsComponent::CollisionShape shape_type;
+			uint32_t mesh_lod = 0;
+
+			bool operator==(const PhysicsShapeCacheKey& other) const
+			{
+				return vertex_data == other.vertex_data &&
+					index_data == other.index_data &&
+					vertex_count == other.vertex_count &&
+					index_count == other.index_count &&
+					shape_type == other.shape_type &&
+					mesh_lod == other.mesh_lod;
+			}
+		};
+
+		struct PhysicsShapeCacheKeyHasher
+		{
+			size_t operator()(const PhysicsShapeCacheKey& key) const
+			{
+				size_t hash = std::hash<const void*>{}(key.vertex_data);
+				hash ^= std::hash<const void*>{}(key.index_data) << 1;
+				hash ^= std::hash<size_t>{}(key.vertex_count) << 2;
+				hash ^= std::hash<size_t>{}(key.index_count) << 3;
+				hash ^= std::hash<int>{}((int)key.shape_type) << 4;
+				hash ^= std::hash<uint32_t>{}(key.mesh_lod) << 5;
+				return hash;
+			}
+		};
+
+		struct PhysicsShapeCache
+		{
+			wi::unordered_map<PhysicsShapeCacheKey, ShapeRefC, PhysicsShapeCacheKeyHasher> cache;
+			wi::SpinLock lock;
+		};
 
 		const uint cMaxBodies = 65536;
 		const uint cNumBodyMutexes = 0;
@@ -136,7 +180,7 @@ namespace wi::physics
 		};
 
 		/// Class that determines if two object layers can collide
-		class ObjectLayerPairFilterImpl : public ObjectLayerPairFilter
+		class ObjectLayerPairFilterImpl final : public ObjectLayerPairFilter
 		{
 		public:
 			bool ShouldCollide(ObjectLayer inObject1, ObjectLayer inObject2) const override
@@ -187,7 +231,7 @@ namespace wi::physics
 		};
 
 		/// Class that determines if an object layer can collide with a broadphase layer
-		class ObjectVsBroadPhaseLayerFilterImpl : public ObjectVsBroadPhaseLayerFilter
+		class ObjectVsBroadPhaseLayerFilterImpl final : public ObjectVsBroadPhaseLayerFilter
 		{
 		public:
 			virtual bool ShouldCollide(ObjectLayer inLayer1, BroadPhaseLayer inLayer2) const override
@@ -224,6 +268,7 @@ namespace wi::physics
 			BPLayerInterfaceImpl broad_phase_layer_interface;
 			ObjectVsBroadPhaseLayerFilterImpl object_vs_broadphase_layer_filter;
 			ObjectLayerPairFilterImpl object_vs_object_layer_filter;
+			PhysicsShapeCache physics_shape_cache;
 			float accumulator = 0;
 			float alpha = 0;
 			bool activate_all_rigid_bodies = false;
@@ -236,7 +281,7 @@ namespace wi::physics
 		{
 			if (scene.physics_scene == nullptr)
 			{
-				auto physics_scene = std::make_shared<PhysicsScene>();
+				auto physics_scene = wi::allocator::make_shared_single<PhysicsScene>();
 
 				physics_scene->physics_system.Init(
 					cMaxBodies,
@@ -255,7 +300,7 @@ namespace wi::physics
 
 		struct RigidBody
 		{
-			std::shared_ptr<void> physics_scene;
+			wi::allocator::shared_ptr<void> physics_scene;
 			Entity entity = INVALID_ENTITY;
 			ShapeRefC shape;
 			BodyID bodyID;
@@ -339,7 +384,7 @@ namespace wi::physics
 		};
 		struct SoftBody
 		{
-			std::shared_ptr<void> physics_scene;
+			wi::allocator::shared_ptr<void> physics_scene;
 			Entity entity = INVALID_ENTITY;
 			BodyID bodyID;
 			float friction = 0;
@@ -370,7 +415,7 @@ namespace wi::physics
 		};
 		struct Constraint
 		{
-			std::shared_ptr<void> physics_scene;
+			wi::allocator::shared_ptr<void> physics_scene;
 			Entity entity = INVALID_ENTITY;
 			Ref<TwoBodyConstraint> constraint;
 			BodyID body1_self;
@@ -411,7 +456,7 @@ namespace wi::physics
 		{
 			if (physicscomponent.physicsobject == nullptr)
 			{
-				physicscomponent.physicsobject = std::make_shared<RigidBody>();
+				physicscomponent.physicsobject = wi::allocator::make_shared<RigidBody>();
 			}
 			return *(RigidBody*)physicscomponent.physicsobject.get();
 		}
@@ -423,7 +468,7 @@ namespace wi::physics
 		{
 			if (physicscomponent.physicsobject == nullptr)
 			{
-				physicscomponent.physicsobject = std::make_shared<SoftBody>();
+				physicscomponent.physicsobject = wi::allocator::make_shared<SoftBody>();
 			}
 			return *(SoftBody*)physicscomponent.physicsobject.get();
 		}
@@ -435,7 +480,7 @@ namespace wi::physics
 		{
 			if (physicscomponent.physicsobject == nullptr)
 			{
-				physicscomponent.physicsobject = std::make_shared<Constraint>();
+				physicscomponent.physicsobject = wi::allocator::make_shared<Constraint>();
 			}
 			return *(Constraint*)physicscomponent.physicsobject.get();
 		}
@@ -474,7 +519,61 @@ namespace wi::physics
 
 			if (physicsobject.shape == nullptr) // shape creation can be called from outside as optimization from threads
 			{
-				CreateRigidBodyShape(physicscomponent, transform.scale_local, mesh);
+				// Check scene's shape cache for complex shapes
+				//	These shapes are expensive to create, reuse them across multiple rigid bodies
+				//	We cache the unit-scale shape and apply scaling per-instance
+				if (mesh != nullptr && (physicscomponent.shape == RigidBodyPhysicsComponent::CollisionShape::TRIANGLE_MESH || physicscomponent.shape == RigidBodyPhysicsComponent::CollisionShape::CONVEX_HULL))
+				{
+					PhysicsShapeCache& shape_cache = GetPhysicsScene(scene).physics_shape_cache;
+					PhysicsShapeCacheKey cache_key;
+					cache_key.vertex_data = mesh->vertex_positions.data();
+					cache_key.index_data = mesh->indices.data();
+					cache_key.vertex_count = mesh->vertex_positions.size();
+					cache_key.index_count = mesh->indices.size();
+					cache_key.shape_type = physicscomponent.shape;
+					cache_key.mesh_lod = physicscomponent.mesh_lod;
+
+					ShapeRefC base_shape;
+
+					shape_cache.lock.lock();
+					auto it = shape_cache.cache.find(cache_key);
+					if (it == shape_cache.cache.end())
+					{
+						// Create and store in cache:
+						CreateRigidBodyShape(physicscomponent, XMFLOAT3(1, 1, 1), mesh); // cached with unit scale, it will be scaled per physics instances
+						base_shape = physicsobject.shape;
+						shape_cache.cache[cache_key] = base_shape;
+					}
+					else
+					{
+						// Reuse cached shape and apply per-instance scaling
+						base_shape = it->second;
+					}
+					shape_cache.lock.unlock();
+
+					// Apply scale to the cached shape
+					physicsobject.shape = ScaledShapeSettings(base_shape, cast(transform.scale_local)).Create().Get(); // instance scaling
+				}
+				else
+				{
+					// Simple shape creation, not using cache:
+					CreateRigidBodyShape(physicscomponent, transform.scale_local, mesh);
+				}
+			}
+
+			// Apply vehicle-specific transformations
+			if (physicscomponent.IsVehicle())
+			{
+				// Vehicle center of mass will be offset to chassis height to improve handling
+				physicsobject.shape = OffsetCenterOfMassShapeSettings(Vec3(0, -physicsobject.shape->GetLocalBounds().GetExtent().GetY() + physicscomponent.vehicle.chassis_half_height, 0), physicsobject.shape).Create().Get();
+			}
+
+			// Apply character-specific transformations
+			if (physicscomponent.IsCharacterPhysics())
+			{
+				// For character physics, offset the shape so the bottom is at origin
+				Vec3 bottom_offset = Vec3(0, physicsobject.shape->GetLocalBounds().GetExtent().GetY(), 0);
+				physicsobject.shape = RotatedTranslatedShapeSettings(bottom_offset, Quat::sIdentity(), physicsobject.shape).Create().Get();
 			}
 
 			if (physicsobject.shape != nullptr)
@@ -1139,23 +1238,66 @@ namespace wi::physics
 				return;
 			}
 
+			CollisionGroup& group1 = body1->GetCollisionGroup();
+			CollisionGroup& group2 = body2->GetCollisionGroup();
+
 			if (physicscomponent.IsDisableSelfCollision())
 			{
-				uint32_t groupID = collisionGroupID.fetch_add(1);
-				body1->GetCollisionGroup().SetGroupID(groupID);
-				body1->GetCollisionGroup().SetSubGroupID(0);
-				body2->GetCollisionGroup().SetGroupID(groupID);
-				body2->GetCollisionGroup().SetSubGroupID(1);
+				// The many cheks here ensure that if either body was already part of a group, then it will be handled (chain links with more than 2 parts)
+				if (group1.GetGroupID() == CollisionGroup::cInvalidGroup && group2.GetGroupID() == CollisionGroup::cInvalidGroup)
+				{
+					uint32_t groupID = collisionGroupID.fetch_add(1);
+					group1.SetGroupID(groupID);
+					group2.SetGroupID(groupID);
+				}
+				else if(group1.GetGroupID() == CollisionGroup::cInvalidGroup)
+				{
+					group1.SetGroupID(group2.GetGroupID());
+				}
+				else if (group2.GetGroupID() == CollisionGroup::cInvalidGroup)
+				{
+					group2.SetGroupID(group1.GetGroupID());
+				}
 
-				Ref<GroupFilterTable> group_filter = new GroupFilterTable(2);
-				group_filter->DisableCollision(0, 1);
-				body1->GetCollisionGroup().SetGroupFilter(group_filter);
-				body2->GetCollisionGroup().SetGroupFilter(group_filter);
+				if (group1.GetSubGroupID() == CollisionGroup::cInvalidSubGroup && group2.GetSubGroupID() == CollisionGroup::cInvalidSubGroup)
+				{
+					group1.SetSubGroupID(0);
+					group2.SetSubGroupID(1);
+				}
+				else if (group1.GetSubGroupID() == CollisionGroup::cInvalidSubGroup)
+				{
+					group1.SetSubGroupID(group2.GetSubGroupID() + 1);
+				}
+				else if (group2.GetSubGroupID() == CollisionGroup::cInvalidSubGroup)
+				{
+					group2.SetSubGroupID(group1.GetSubGroupID() + 1);
+				}
+
+				if (group1.GetGroupFilter() == nullptr && group2.GetGroupFilter() == nullptr)
+				{
+					Ref<GroupFilterTable> group_filter = new GroupFilterTable(32); // 32 subgroups supported at max for now
+					group_filter->DisableCollision(group1.GetSubGroupID(), group2.GetSubGroupID());
+					group1.SetGroupFilter(group_filter);
+					group2.SetGroupFilter(group_filter);
+				}
+				else if (group1.GetGroupFilter() == nullptr)
+				{
+					GroupFilterTable* table = (GroupFilterTable*)group2.GetGroupFilter();
+					group1.SetGroupFilter(table);
+					table->DisableCollision(group1.GetSubGroupID(), group2.GetSubGroupID());
+				}
+				else if (group2.GetGroupFilter() == nullptr)
+				{
+					GroupFilterTable* table = (GroupFilterTable*)group1.GetGroupFilter();
+					group2.SetGroupFilter(table);
+					table->DisableCollision(group1.GetSubGroupID(), group2.GetSubGroupID());
+				}
+
 			}
 			else
 			{
-				body1->GetCollisionGroup().SetGroupFilter(nullptr);
-				body2->GetCollisionGroup().SetGroupFilter(nullptr);
+				group1.SetGroupFilter(nullptr);
+				group2.SetGroupFilter(nullptr);
 			}
 
 			physicsobject.bind_distance = (body1->GetCenterOfMassPosition() - body2->GetCenterOfMassPosition()).Length();
@@ -1190,7 +1332,7 @@ namespace wi::physics
 				BODYPART_COUNT
 			};
 
-			std::shared_ptr<void> physics_scene;
+			wi::allocator::shared_ptr<void> physics_scene;
 			RigidBody rigidbodies[BODYPART_COUNT];
 			Entity saved_parents[BODYPART_COUNT] = {};
 			Skeleton skeleton;
@@ -1799,6 +1941,8 @@ namespace wi::physics
 		const wi::scene::MeshComponent* mesh
 	)
 	{
+		RigidBody& physicsobject = GetRigidBody(physicscomponent);
+
 		ShapeSettings::ShapeResult shape_result;
 
 		// The default convex radius caused issues when creating small box shape, etc, so I decrease it:
@@ -1940,19 +2084,7 @@ namespace wi::physics
 			return;
 		}
 
-		RigidBody& physicsobject = GetRigidBody(physicscomponent);
 		physicsobject.shape = shape_result.Get();
-
-		if (physicscomponent.IsVehicle())
-		{
-			// Vehicle center of mass will be offset to chassis height to improve handling:
-			physicsobject.shape = OffsetCenterOfMassShapeSettings(Vec3(0, -physicsobject.shape->GetLocalBounds().GetExtent().GetY() + physicscomponent.vehicle.chassis_half_height, 0), physicsobject.shape).Create().Get();
-		}
-
-		if (physicscomponent.IsCharacterPhysics())
-		{
-			physicsobject.shape = RotatedTranslatedShapeSettings(bottom_offset, Quat::sIdentity(), physicsobject.shape).Create().Get();
-		}
 	}
 
 	bool IsEnabled() { return ENABLED; }
@@ -1979,6 +2111,9 @@ namespace wi::physics
 	float GetFrameRate() { return 1.0f / TIMESTEP; }
 	void SetFrameRate(float value) { TIMESTEP = 1.0f / value; }
 
+	float GetCharacterCollisionTolerance() { return CHARACTER_COLLISION_TOLERANCE; }
+	void SetCharacterCollisionTolerance(float value) { CHARACTER_COLLISION_TOLERANCE = value; }
+
 	void RunPhysicsUpdateSystem(
 		wi::jobsystem::context& ctx,
 		wi::scene::Scene& scene,
@@ -2004,12 +2139,12 @@ namespace wi::physics
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.rigidbodies.GetCount(), dispatchGroupSize, [&scene](wi::jobsystem::JobArgs args) {
 
 			RigidBodyPhysicsComponent& physicscomponent = scene.rigidbodies[args.jobIndex];
-			Entity entity = scene.rigidbodies.GetEntity(args.jobIndex);
+			const Entity entity = scene.rigidbodies.GetEntity(args.jobIndex);
 
 			if ((physicscomponent.physicsobject == nullptr || physicscomponent.IsRefreshParametersNeeded()) && scene.transforms.Contains(entity))
 			{
 				physicscomponent.SetRefreshParametersNeeded(false);
-				TransformComponent* transform = scene.transforms.GetComponent(entity);
+				const TransformComponent* transform = scene.transforms.GetComponent(entity);
 				if (transform == nullptr)
 					return;
 				const ObjectComponent* object = scene.objects.GetComponent(entity);
@@ -2024,7 +2159,7 @@ namespace wi::physics
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.softbodies.GetCount(), 1, [&scene](wi::jobsystem::JobArgs args) {
 
 			SoftBodyPhysicsComponent& physicscomponent = scene.softbodies[args.jobIndex];
-			Entity entity = scene.softbodies.GetEntity(args.jobIndex);
+			const Entity entity = scene.softbodies.GetEntity(args.jobIndex);
 			if (!scene.meshes.Contains(entity))
 				return;
 			MeshComponent* mesh = scene.meshes.GetComponent(entity);
@@ -2040,6 +2175,11 @@ namespace wi::physics
 		});
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.humanoids.GetCount(), 1, [&scene](wi::jobsystem::JobArgs args) {
 			HumanoidComponent& humanoid = scene.humanoids[args.jobIndex];
+			if (humanoid.IsRagdollDisabled())
+			{
+				humanoid.ragdoll = {}; // delete ragdoll if it was previously created
+				return;
+			}
 			Entity humanoidEntity = scene.humanoids.GetEntity(args.jobIndex);
 			float scale = 1;
 			if (scene.transforms.Contains(humanoidEntity))
@@ -2058,7 +2198,7 @@ namespace wi::physics
 			}
 			if (humanoid.ragdoll == nullptr)
 			{
-				humanoid.ragdoll = std::make_shared<Ragdoll>(scene, humanoid, humanoidEntity, scale);
+				humanoid.ragdoll = wi::allocator::make_shared<Ragdoll>(scene, humanoid, humanoidEntity, scale);
 			}
 		});
 
@@ -2068,12 +2208,12 @@ namespace wi::physics
 			PhysicsConstraintComponent& physicscomponent = scene.constraints[args.jobIndex];
 			if (physicscomponent.bodyA == INVALID_ENTITY && physicscomponent.bodyB == INVALID_ENTITY)
 			{
-				physicscomponent.physicsobject = nullptr;
+				physicscomponent.physicsobject.reset();
 				return;
 			}
 			if (!scene.rigidbodies.Contains(physicscomponent.bodyA) && !scene.rigidbodies.Contains(physicscomponent.bodyB))
 			{
-				physicscomponent.physicsobject = nullptr;
+				physicscomponent.physicsobject.reset();
 				return;
 			}
 			if (physicscomponent.physicsobject != nullptr)
@@ -2089,7 +2229,7 @@ namespace wi::physics
 						if (body.bodyID != constraint.body1_ref)
 						{
 							// Rigidbody to constraint object mismatch!
-							physicscomponent.physicsobject = nullptr;
+							physicscomponent.physicsobject.reset();
 							return;
 						}
 					}
@@ -2103,7 +2243,7 @@ namespace wi::physics
 						if (body.bodyID != constraint.body2_ref)
 						{
 							// Rigidbody to constraint object mismatch!
-							physicscomponent.physicsobject = nullptr;
+							physicscomponent.physicsobject.reset();
 							return;
 						}
 					}
@@ -2298,10 +2438,12 @@ namespace wi::physics
 
 			if (currentMotionType == EMotionType::Dynamic && is_active)
 			{
+				const Vec3 com = body_interface.GetCenterOfMassPosition(physicsobject.bodyID);
+				bool is_underwater = false;
+
 				// Apply effects on dynamics if needed:
 				if (scene.weather.IsOceanEnabled())
 				{
-					const Vec3 com = body_interface.GetCenterOfMassPosition(physicsobject.bodyID);
 					const Vec3 surface_position = cast(scene.GetOceanPosAt(cast(com)));
 					const float diff = com.GetY() - surface_position.GetY();
 					if (diff < 0)
@@ -2325,13 +2467,48 @@ namespace wi::physics
 						if (!physicsobject.was_underwater)
 						{
 							physicsobject.was_underwater = true;
+							is_underwater = true;
 							scene.PutWaterRipple(cast(surface_position));
 						}
 					}
 					else
 					{
-						physicsobject.was_underwater = false;
+						is_underwater = false;
 					}
+				}
+
+				if (!is_underwater)
+				{
+					// Check for water volumes (non-ocean water bodies)
+					XMFLOAT3 pos = cast(com);
+					wi::primitive::Ray ray_down(XMFLOAT3(pos.x, pos.y + 10.0f, pos.z), XMFLOAT3(0, -1, 0), 0, 100);
+					wi::scene::Scene::RayIntersectionResult result = scene.Intersects(ray_down, wi::enums::FILTER_WATER);
+					if (result.entity != INVALID_ENTITY && result.position.y > pos.y)
+					{
+						body_interface.ApplyBuoyancyImpulse(
+							physicsobject.bodyID,
+							cast(result.position),
+							cast(result.normal),
+							physicscomponent.buoyancy,
+							0.8f,
+							0.6f,
+							Vec3::sZero(),
+							physics_scene.physics_system.GetGravity(),
+							scene.dt
+						);
+
+						if (!physicsobject.was_underwater)
+						{
+							physicsobject.was_underwater = true;
+							is_underwater = true;
+							scene.PutWaterRipple(result.position);
+						}
+					}
+				}
+
+				if (!is_underwater)
+				{
+					physicsobject.was_underwater = false;
 				}
 			}
 
@@ -2474,16 +2651,18 @@ namespace wi::physics
 				if (humanoid.IsRagdollPhysicsEnabled())
 				{
 					// Apply effects on dynamics if needed:
-					if (scene.weather.IsOceanEnabled())
+					static const Ragdoll::BODYPART floating_bodyparts[] = {
+						Ragdoll::BODYPART_PELVIS,
+						Ragdoll::BODYPART_SPINE,
+					};
+					for (auto& bodypart : floating_bodyparts)
 					{
-						static const Ragdoll::BODYPART floating_bodyparts[] = {
-							Ragdoll::BODYPART_PELVIS,
-							Ragdoll::BODYPART_SPINE,
-						};
-						for (auto& bodypart : floating_bodyparts)
+						auto& rb = ragdoll.rigidbodies[bodypart];
+						const Vec3 com = body_interface.GetCenterOfMassPosition(rb.bodyID);
+						bool is_underwater = false;
+
+						if (scene.weather.IsOceanEnabled())
 						{
-							auto& rb = ragdoll.rigidbodies[bodypart];
-							const Vec3 com = body_interface.GetCenterOfMassPosition(rb.bodyID);
 							const Vec3 surface_position = cast(scene.GetOceanPosAt(cast(com)));
 							const float diff = com.GetY() - surface_position.GetY();
 							if (diff < 0)
@@ -2512,8 +2691,42 @@ namespace wi::physics
 							}
 							else
 							{
-								rb.was_underwater = false;
+								is_underwater = false;
 							}
+						}
+
+						if (!is_underwater)
+						{
+							// Check for water volumes (non-ocean water bodies)
+							XMFLOAT3 pos = cast(com);
+							wi::primitive::Ray ray_down(XMFLOAT3(pos.x, pos.y + 10.0f, pos.z), XMFLOAT3(0, -1, 0), 0, 100);
+							wi::scene::Scene::RayIntersectionResult result = scene.Intersects(ray_down, wi::enums::FILTER_WATER);
+							if (result.entity != INVALID_ENTITY && result.position.y > pos.y)
+							{
+								body_interface.ApplyBuoyancyImpulse(
+									rb.bodyID,
+									cast(result.position),
+									cast(result.normal),
+									6.0f,
+									0.8f,
+									0.6f,
+									Vec3::sZero(),
+									physics_scene.physics_system.GetGravity(),
+									scene.dt
+								);
+
+								if (!rb.was_underwater)
+								{
+									rb.was_underwater = true;
+									is_underwater = true;
+									scene.PutWaterRipple(result.position);
+								}
+							}
+						}
+
+						if (!is_underwater)
+						{
+							rb.was_underwater = false;
 						}
 					}
 				}
@@ -2609,7 +2822,7 @@ namespace wi::physics
 		wi::jobsystem::Wait(ctx);
 
 		physics_scene.activate_all_rigid_bodies = false;
-		
+
 		// Perform internal simulation step:
 		if (IsSimulationEnabled())
 		{
@@ -2701,7 +2914,7 @@ namespace wi::physics
 					wi::jobsystem::Wait(ctx);
 				}
 
-				physics_scene.physics_system.Update(TIMESTEP, 1, &temp_allocator, &job_system);
+				physics_scene.physics_system.Update(TIMESTEP, COLLISION_STEPS, &temp_allocator, &job_system);
 				physics_scene.accumulator = next_accumulator;
 			}
 			physics_scene.alpha = physics_scene.accumulator / TIMESTEP;
@@ -2747,7 +2960,7 @@ namespace wi::physics
 			// Back to local space of parent:
 			transform->MatrixTransform(physicsobject.parentMatrixInverse);
 		});
-		
+
 		wi::jobsystem::Dispatch(ctx, (uint32_t)scene.softbodies.GetCount(), 1, [&scene, &physics_scene](wi::jobsystem::JobArgs args) {
 
 			SoftBodyPhysicsComponent& physicscomponent = scene.softbodies[args.jobIndex];
@@ -2882,7 +3095,7 @@ namespace wi::physics
 #ifdef JPH_DEBUG_RENDERER
 		if (IsDebugDrawEnabled())
 		{
-			class JoltDebugRenderer : public DebugRendererSimple
+			class JoltDebugRenderer final : public DebugRendererSimple
 			{
 				void DrawLine(RVec3Arg inFrom, RVec3Arg inTo, ColorArg inColor) override
 				{
@@ -2911,7 +3124,7 @@ namespace wi::physics
 			static JoltDebugRenderer debug_renderer;
 			debug_renderer.SetCameraPos(cast(scene.camera.Eye));
 
-			class DistanceCullingBodyFilter : public BodyDrawFilter
+			class DistanceCullingBodyFilter final : public BodyDrawFilter
 			{
 			public:
 				XMVECTOR camera_pos;
@@ -3724,7 +3937,7 @@ namespace wi::physics
 	}
 
 	template <class CollectorType>
-	class WickedClosestHitCollector : public JPH::ClosestHitCollisionCollector<CollectorType>
+	class WickedClosestHitCollector final : public JPH::ClosestHitCollisionCollector<CollectorType>
 	{
 	public:
 		const Scene* scene = nullptr;
@@ -3835,7 +4048,7 @@ namespace wi::physics
 
 	struct PickDragOperation_Jolt
 	{
-		std::shared_ptr<void> physics_scene;
+		wi::allocator::shared_ptr<void> physics_scene;
 		Ref<TwoBodyConstraint> constraint;
 		float pick_distance = 0;
 		Body* bodyA = nullptr;
@@ -3913,7 +4126,7 @@ namespace wi::physics
 				return;
 			Body* body = (Body*)result.physicsobject;
 
-			auto internal_state = std::make_shared<PickDragOperation_Jolt>();
+			auto internal_state = wi::allocator::make_shared<PickDragOperation_Jolt>();
 			internal_state->physics_scene = scene.physics_scene;
 			internal_state->pick_distance = wi::math::Distance(ray.origin, result.position);
 			internal_state->bodyB = body;

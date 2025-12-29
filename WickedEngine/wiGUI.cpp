@@ -13,6 +13,7 @@
 
 #include <sstream>
 #include <iomanip> // setprecision
+#include <utility>
 
 using namespace wi::graphics;
 using namespace wi::primitive;
@@ -219,7 +220,7 @@ namespace wi::gui
 			widget->SetColor(color, id);
 		}
 	}
-	void GUI::SetImage(wi::Resource resource, int id)
+	void GUI::SetImage(const wi::Resource& resource, int id)
 	{
 		for (auto& widget : widgets)
 		{
@@ -828,10 +829,11 @@ namespace wi::gui
 	{
 		SetName(name);
 		SetText(name);
-		OnClick([](EventArgs args) {});
-		OnDragStart([](EventArgs args) {});
-		OnDrag([](EventArgs args) {});
-		OnDragEnd([](EventArgs args) {});
+		OnClick([](const EventArgs& args) {});
+		OnRightClick([](const EventArgs& args) {});
+		OnDragStart([](const EventArgs& args) {});
+		OnDrag([](const EventArgs& args) {});
+		OnDragEnd([](const EventArgs& args) {});
 		SetSize(XMFLOAT2(100, 20));
 
 		font.params.h_align = wi::font::WIFALIGN_CENTER;
@@ -881,7 +883,8 @@ namespace wi::gui
 				Deactivate();
 			}
 
-			bool clicked = false;
+			bool leftButtonClicked = false;
+			bool rightButtonClicked = false;
 			// hover the button
 			if (pointerHitbox.intersects(hitBox))
 			{
@@ -896,7 +899,16 @@ namespace wi::gui
 				if (state == FOCUS)
 				{
 					// activate
-					clicked = true;
+					leftButtonClicked = true;
+				}
+			}
+
+			if (wi::input::Press(wi::input::MOUSE_BUTTON_RIGHT))
+			{
+				if (state == FOCUS)
+				{
+					// right-click
+					rightButtonClicked = true;
 				}
 			}
 
@@ -918,13 +930,21 @@ namespace wi::gui
 				}
 			}
 
-			if (clicked)
+			if (leftButtonClicked)
 			{
 				EventArgs args;
 				args.clickPos = pointerHitbox.pos;
 				dragStart = args.clickPos;
 				args.startPos = dragStart;
 				onDragStart(args);
+				Activate();
+			}
+
+			if (rightButtonClicked)
+			{
+				EventArgs args;
+				args.clickPos = pointerHitbox.pos;
+				onRightClick(args);
 				Activate();
 			}
 
@@ -1047,21 +1067,25 @@ namespace wi::gui
 		sprites[state].Draw(cmd);
 		font.Draw(cmd);
 	}
-	void Button::OnClick(std::function<void(EventArgs args)> func)
+	void Button::OnClick(std::function<void(const EventArgs& args)> func)
 	{
-		onClick = func;
+		onClick = std::move(func);
 	}
-	void Button::OnDragStart(std::function<void(EventArgs args)> func)
+	void Button::OnRightClick(std::function<void(const EventArgs& args)> func)
 	{
-		onDragStart = func;
+		onRightClick = std::move(func);
 	}
-	void Button::OnDrag(std::function<void(EventArgs args)> func)
+	void Button::OnDragStart(std::function<void(const EventArgs& args)> func)
 	{
-		onDrag = func;
+		onDragStart = std::move(func);
 	}
-	void Button::OnDragEnd(std::function<void(EventArgs args)> func)
+	void Button::OnDrag(std::function<void(const EventArgs& args)> func)
 	{
-		onDragEnd = func;
+		onDrag = std::move(func);
+	}
+	void Button::OnDragEnd(std::function<void(const EventArgs& args)> func)
+	{
+		onDragEnd = std::move(func);
 	}
 	void Button::SetTheme(const Theme& theme, int id)
 	{
@@ -1472,7 +1496,8 @@ namespace wi::gui
 				scroll_allowed = false;
 				state = FOCUS;
 				// This is outside scrollbar code, because it can also be scrolled if parent widget is only in focus
-				scrollbar.Scroll(wi::input::GetPointer().z * 20);
+				const float wheel_delta = wi::input::GetPointer().z;
+				scrollbar.Scroll(wheel_delta * 60.0f);
 			}
 			else
 			{
@@ -1570,7 +1595,7 @@ namespace wi::gui
 	{
 		SetName(name);
 		SetText(name);
-		OnInputAccepted([](EventArgs args) {});
+		OnInputAccepted([](const EventArgs& args) {});
 		SetSize(XMFLOAT2(100, 20));
 
 		font.params.v_align = wi::font::WIFALIGN_CENTER;
@@ -1660,10 +1685,15 @@ namespace wi::gui
 				}
 			}
 
-			bool clicked = false;
+			bool leftButtonClicked = false;
 			if (wi::input::Press(wi::input::MOUSE_BUTTON_LEFT))
 			{
-				clicked = true;
+				leftButtonClicked = true;
+			}
+			bool rightButtonClicked = false;
+			if (wi::input::Press(wi::input::MOUSE_BUTTON_RIGHT))
+			{
+				rightButtonClicked = true;
 			}
 
 			if (state == ACTIVE)
@@ -1714,7 +1744,7 @@ namespace wi::gui
 					}
 					caret_timer.record();
 				}
-				else if ((clicked && !intersectsPointer) || wi::input::Press(wi::input::KEYBOARD_BUTTON_ESCAPE))
+				else if ((leftButtonClicked && !intersectsPointer) || (rightButtonClicked && !intersectsPointer) || wi::input::Press(wi::input::KEYBOARD_BUTTON_ESCAPE))
 				{
 					// cancel input
 					font_input.text.clear();
@@ -1737,7 +1767,7 @@ namespace wi::gui
 							break;
 						}
 					}
-					if (clicked && intersectsPointer)
+					if (leftButtonClicked && intersectsPointer)
 					{
 						caret_begin = caret_pos;
 					}
@@ -1756,7 +1786,7 @@ namespace wi::gui
 
 			}
 
-			if (clicked && state == FOCUS)
+			if (leftButtonClicked && state == FOCUS)
 			{
 				// activate
 				SetAsActive();
@@ -1916,13 +1946,13 @@ namespace wi::gui
 			font.Draw(cmd);
 		}
 	}
-	void TextInputField::OnInputAccepted(std::function<void(EventArgs args)> func)
+	void TextInputField::OnInputAccepted(std::function<void(const EventArgs& args)> func)
 	{
-		onInputAccepted = func;
+		onInputAccepted = std::move(func);
 	}
-	void TextInputField::OnInput(std::function<void(EventArgs args)> func)
+	void TextInputField::OnInput(std::function<void(const EventArgs& args)> func)
 	{
-		onInput = func;
+		onInput = std::move(func);
 	}
 	void TextInputField::AddInput(const wchar_t inputChar)
 	{
@@ -1961,7 +1991,7 @@ namespace wi::gui
 				{
 					// Copy:
 					caret_pos = caret_pos_prev;
-					std::wstring text = font_input.GetText();
+					const std::wstring& text = font_input.GetText();
 					int start = std::min(caret_begin, caret_pos);
 					int end = std::max(caret_begin, caret_pos);
 					std::wstring clipboard = std::wstring(text.c_str() + start, text.c_str() + end);
@@ -1972,7 +2002,7 @@ namespace wi::gui
 				{
 					// Cut:
 					caret_pos = caret_pos_prev;
-					std::wstring text = font_input.GetText();
+					const std::wstring& text = font_input.GetText();
 					int start = std::min(caret_begin, caret_pos);
 					int end = std::max(caret_begin, caret_pos);
 					std::wstring clipboard = std::wstring(text.c_str() + start, text.c_str() + end);
@@ -2074,7 +2104,7 @@ namespace wi::gui
 
 		SetName(name);
 		SetText(name);
-		OnSlide([](EventArgs args) {});
+		OnSlide([](const EventArgs& args) {});
 		SetSize(XMFLOAT2(200, 20));
 
 		valueInputField.Create(name + "_endInputField");
@@ -2082,26 +2112,20 @@ namespace wi::gui
 		valueInputField.SetShadowRadius(0);
 		valueInputField.SetTooltip("Enter number to modify value even outside slider limits. Other inputs:\n - reset : reset slider to initial state.\n - FLT_MAX : float max value\n - -FLT_MAX : negative float max value.");
 		valueInputField.SetValue(end);
-		valueInputField.OnInputAccepted([this, start, end, defaultValue](EventArgs args) {
+		valueInputField.OnInputAccepted([this, start, end, defaultValue](const EventArgs& args) {
 			if (args.sValue.compare("reset") == 0)
 			{
 				this->value = defaultValue;
 				this->start = start;
 				this->end = end;
-				args.fValue = this->value;
-				args.iValue = (int)this->value;
 			}
 			else if (args.sValue.compare("FLT_MAX") == 0)
 			{
 				this->value = FLT_MAX;
-				args.fValue = this->value;
-				args.iValue = (int)this->value;
 			}
 			else if (args.sValue.compare("-FLT_MAX") == 0)
 			{
 				this->value = -FLT_MAX;
-				args.fValue = this->value;
-				args.iValue = (int)this->value;
 			}
 			else
 			{
@@ -2319,9 +2343,9 @@ namespace wi::gui
 		Widget::RenderTooltip(canvas, cmd);
 		valueInputField.RenderTooltip(canvas, cmd);
 	}
-	void Slider::OnSlide(std::function<void(EventArgs args)> func)
+	void Slider::OnSlide(std::function<void(const EventArgs& args)> func)
 	{
-		onSlide = func;
+		onSlide = std::move(func);
 	}
 	void Slider::SetColor(wi::Color color, int id)
 	{
@@ -2366,7 +2390,7 @@ namespace wi::gui
 	{
 		SetName(name);
 		SetText(name);
-		OnClick([](EventArgs args) {});
+		OnClick([](const EventArgs& args) {});
 		SetSize(XMFLOAT2(20, 20));
 
 		font.params.h_align = wi::font::WIFALIGN_RIGHT;
@@ -2549,9 +2573,9 @@ namespace wi::gui
 		}
 
 	}
-	void CheckBox::OnClick(std::function<void(EventArgs args)> func)
+	void CheckBox::OnClick(std::function<void(const EventArgs& args)> func)
 	{
-		onClick = func;
+		onClick = std::move(func);
 	}
 	void CheckBox::SetCheck(bool value)
 	{
@@ -2584,7 +2608,7 @@ namespace wi::gui
 	{
 		SetName(name);
 		SetText(name);
-		OnSelect([](EventArgs args) {});
+		OnSelect([](const EventArgs& args) {});
 		SetSize(XMFLOAT2(100, 20));
 
 		font.params.h_align = wi::font::WIFALIGN_RIGHT;
@@ -2667,209 +2691,212 @@ namespace wi::gui
 		const float drop_width = fixed_drop_width > 0 ? fixed_drop_width : (scale.x - 1 - scale.y);
 		const float drop_x = GetDropX(canvas);
 
-		if (IsEnabled() && dt > 0)
+		if (dt > 0)
 		{
-			float drop_offset = GetDropOffset(canvas);
+			if (IsEnabled())
+			{
+				float drop_offset = GetDropOffset(canvas);
 
-			if (state == FOCUS)
-			{
-				state = IDLE;
-			}
-			if (state == DEACTIVATING)
-			{
-				state = IDLE;
-			}
-			if (state == ACTIVE && combostate == COMBOSTATE_SELECTING)
-			{
-				hovered = -1;
-				Deactivate();
-			}
-			if (state == IDLE)
-			{
-				combostate = COMBOSTATE_INACTIVE;
-			}
-
-			hitBox.pos.x = translation.x;
-			hitBox.pos.y = translation.y;
-			hitBox.siz.x = scale.x;
-			if (drop_arrow)
-			{
-				hitBox.siz.x += scale.y + 1; // + drop-down indicator arrow + little offset
-			}
-			hitBox.siz.y = scale.y;
-
-			Hitbox2D pointerHitbox = GetPointerHitbox();
-
-			bool clicked = false;
-			// hover the button
-			if (pointerHitbox.intersects(hitBox))
-			{
-				if (state == IDLE)
+				if (state == FOCUS)
 				{
-					state = FOCUS;
+					state = IDLE;
 				}
-			}
-
-			if (wi::input::Press(wi::input::MOUSE_BUTTON_LEFT))
-			{
-				// activate
-				clicked = true;
-			}
-
-			bool click_down = false;
-			if (wi::input::Down(wi::input::MOUSE_BUTTON_LEFT))
-			{
-				click_down = true;
 				if (state == DEACTIVATING)
 				{
-					// Keep pressed until mouse is released
-					Activate();
+					state = IDLE;
 				}
-			}
-
-
-			if (clicked && state == FOCUS)
-			{
-				Activate();
-			}
-
-			if (state == ACTIVE)
-			{
-				filteredItemCount = int(items.size());
-				if (!filterText.empty())
+				if (state == ACTIVE && combostate == COMBOSTATE_SELECTING)
 				{
-					filteredItemCount = 0;
-					for (int i = 0; i < (int)items.size(); ++i)
+					hovered = -1;
+					Deactivate();
+				}
+				if (state == IDLE)
+				{
+					combostate = COMBOSTATE_INACTIVE;
+				}
+
+				hitBox.pos.x = translation.x;
+				hitBox.pos.y = translation.y;
+				hitBox.siz.x = scale.x;
+				if (drop_arrow)
+				{
+					hitBox.siz.x += scale.y + 1; // + drop-down indicator arrow + little offset
+				}
+				hitBox.siz.y = scale.y;
+
+				Hitbox2D pointerHitbox = GetPointerHitbox();
+
+				bool clicked = false;
+				// hover the button
+				if (pointerHitbox.intersects(hitBox))
+				{
+					if (state == IDLE)
 					{
-						if (wi::helper::toUpper(items[i].name).find(filterText) == std::string::npos)
-							continue;
-						filteredItemCount++;
+						state = FOCUS;
 					}
 				}
 
-				const float scrollbar_begin = translation.y + scale.y + drop_offset + scale.y * 0.5f;
-				const float scrollbar_end = scrollbar_begin + std::max(0.0f, (float)std::min(maxVisibleItemCount, filteredItemCount) - 1) * combo_height();
-
-				pointerHitbox = GetPointerHitbox(false); // get the hitbox again, but this time it won't be constrained to parent
-				if (HasScrollbar())
+				if (wi::input::Press(wi::input::MOUSE_BUTTON_LEFT))
 				{
-					if (combostate != COMBOSTATE_SELECTING && combostate != COMBOSTATE_INACTIVE)
+					// activate
+					clicked = true;
+				}
+
+				bool click_down = false;
+				if (wi::input::Down(wi::input::MOUSE_BUTTON_LEFT))
+				{
+					click_down = true;
+					if (state == DEACTIVATING)
 					{
-						if (combostate == COMBOSTATE_SCROLLBAR_GRABBED || pointerHitbox.intersects(Hitbox2D(XMFLOAT2(drop_x + drop_width + 1, translation.y + scale.y + drop_offset), XMFLOAT2(scale.y, (float)std::min(maxVisibleItemCount, filteredItemCount) * combo_height()))))
+						// Keep pressed until mouse is released
+						Activate();
+					}
+				}
+
+
+				if (clicked && state == FOCUS)
+				{
+					Activate();
+				}
+
+				if (state == ACTIVE)
+				{
+					filteredItemCount = int(items.size());
+					if (!filterText.empty())
+					{
+						filteredItemCount = 0;
+						for (int i = 0; i < (int)items.size(); ++i)
 						{
-							if (click_down)
+							if (wi::helper::toUpper(items[i].name).find(filterText) == std::string::npos)
+								continue;
+							filteredItemCount++;
+						}
+					}
+
+					const float scrollbar_begin = translation.y + scale.y + drop_offset + scale.y * 0.5f;
+					const float scrollbar_end = scrollbar_begin + std::max(0.0f, (float)std::min(maxVisibleItemCount, filteredItemCount) - 1) * combo_height();
+
+					pointerHitbox = GetPointerHitbox(false); // get the hitbox again, but this time it won't be constrained to parent
+					if (HasScrollbar())
+					{
+						if (combostate != COMBOSTATE_SELECTING && combostate != COMBOSTATE_INACTIVE)
+						{
+							if (combostate == COMBOSTATE_SCROLLBAR_GRABBED || pointerHitbox.intersects(Hitbox2D(XMFLOAT2(drop_x + drop_width + 1, translation.y + scale.y + drop_offset), XMFLOAT2(scale.y, (float)std::min(maxVisibleItemCount, filteredItemCount) * combo_height()))))
 							{
-								filter.SetAsActive();
-								combostate = COMBOSTATE_SCROLLBAR_GRABBED;
-								scrollbar_delta = wi::math::Clamp(pointerHitbox.pos.y, scrollbar_begin, scrollbar_end) - scrollbar_begin;
-								const float scrollbar_value = wi::math::InverseLerp(scrollbar_begin, scrollbar_end, scrollbar_begin + scrollbar_delta);
-								firstItemVisible = int(float(std::max(0, filteredItemCount - maxVisibleItemCount)) * scrollbar_value + 0.5f);
-								firstItemVisible = std::max(0, std::min(filteredItemCount - maxVisibleItemCount, firstItemVisible));
+								if (click_down)
+								{
+									filter.SetAsActive();
+									combostate = COMBOSTATE_SCROLLBAR_GRABBED;
+									scrollbar_delta = wi::math::Clamp(pointerHitbox.pos.y, scrollbar_begin, scrollbar_end) - scrollbar_begin;
+									const float scrollbar_value = wi::math::InverseLerp(scrollbar_begin, scrollbar_end, scrollbar_begin + scrollbar_delta);
+									firstItemVisible = int(float(std::max(0, filteredItemCount - maxVisibleItemCount)) * scrollbar_value + 0.5f);
+									firstItemVisible = std::max(0, std::min(filteredItemCount - maxVisibleItemCount, firstItemVisible));
+								}
+								else
+								{
+									combostate = COMBOSTATE_SCROLLBAR_HOVER;
+								}
+							}
+							else if (!click_down)
+							{
+								combostate = COMBOSTATE_HOVER;
+							}
+						}
+					}
+
+					if (combostate == COMBOSTATE_INACTIVE)
+					{
+						combostate = COMBOSTATE_HOVER;
+						filter.SetAsActive();
+					}
+					else if (combostate == COMBOSTATE_SELECTING || wi::input::Press(wi::input::KEYBOARD_BUTTON_ESCAPE))
+					{
+						Deactivate();
+						combostate = COMBOSTATE_INACTIVE;
+					}
+					else if (combostate == COMBOSTATE_HOVER && scroll_allowed)
+					{
+						scroll_allowed = false;
+
+						if (HasScrollbar())
+						{
+							int scroll = (int)wi::input::GetPointer().z;
+							firstItemVisible -= scroll;
+							firstItemVisible = std::max(0, std::min(filteredItemCount - maxVisibleItemCount, firstItemVisible));
+							if (scroll)
+							{
+								const float scrollbar_value = wi::math::InverseLerp(0, float(std::max(0, filteredItemCount - maxVisibleItemCount)), float(firstItemVisible));
+								scrollbar_delta = wi::math::Lerp(scrollbar_begin, scrollbar_end, scrollbar_value) - scrollbar_begin;
+							}
+						}
+
+						hovered = -1;
+						int visible_items = 0;
+						for (int i = firstItemVisible; (i < (int)items.size()) && (visible_items < maxVisibleItemCount); ++i)
+						{
+							if (!filterText.empty() && wi::helper::toUpper(items[i].name).find(filterText) == std::string::npos)
+								continue;
+							visible_items++;
+							Hitbox2D itembox;
+							itembox.pos.x = drop_x;
+							itembox.pos.y = translation.y + GetItemOffset(canvas, i);
+							itembox.siz.x = drop_width;
+							itembox.siz.y = combo_height();
+							if (pointerHitbox.intersects(itembox))
+							{
+								hovered = i;
+								break;
+							}
+						}
+
+						if (clicked)
+						{
+							if (pointerHitbox.intersects(filter.hitBox))
+							{
+								combostate = COMBOSTATE_FILTER_INTERACT;
 							}
 							else
 							{
-								combostate = COMBOSTATE_SCROLLBAR_HOVER;
-							}
-						}
-						else if (!click_down)
-						{
-							combostate = COMBOSTATE_HOVER;
-						}
-					}
-				}
-
-				if (combostate == COMBOSTATE_INACTIVE)
-				{
-					combostate = COMBOSTATE_HOVER;
-					filter.SetAsActive();
-				}
-				else if (combostate == COMBOSTATE_SELECTING || wi::input::Press(wi::input::KEYBOARD_BUTTON_ESCAPE))
-				{
-					Deactivate();
-					combostate = COMBOSTATE_INACTIVE;
-				}
-				else if (combostate == COMBOSTATE_HOVER && scroll_allowed)
-				{
-					scroll_allowed = false;
-
-					if (HasScrollbar())
-					{
-						int scroll = (int)wi::input::GetPointer().z;
-						firstItemVisible -= scroll;
-						firstItemVisible = std::max(0, std::min(filteredItemCount - maxVisibleItemCount, firstItemVisible));
-						if (scroll)
-						{
-							const float scrollbar_value = wi::math::InverseLerp(0, float(std::max(0, filteredItemCount - maxVisibleItemCount)), float(firstItemVisible));
-							scrollbar_delta = wi::math::Lerp(scrollbar_begin, scrollbar_end, scrollbar_value) - scrollbar_begin;
-						}
-					}
-
-					hovered = -1;
-					int visible_items = 0;
-					for (int i = firstItemVisible; (i < (int)items.size()) && (visible_items < maxVisibleItemCount); ++i)
-					{
-						if (!filterText.empty() && wi::helper::toUpper(items[i].name).find(filterText) == std::string::npos)
-							continue;
-						visible_items++;
-						Hitbox2D itembox;
-						itembox.pos.x = drop_x;
-						itembox.pos.y = translation.y + GetItemOffset(canvas, i);
-						itembox.siz.x = drop_width;
-						itembox.siz.y = combo_height();
-						if (pointerHitbox.intersects(itembox))
-						{
-							hovered = i;
-							break;
-						}
-					}
-
-					if (clicked)
-					{
-						if (pointerHitbox.intersects(filter.hitBox))
-						{
-							combostate = COMBOSTATE_FILTER_INTERACT;
-						}
-						else
-						{
-							combostate = COMBOSTATE_SELECTING;
-							if (hovered >= 0)
-							{
-								SetSelected(hovered);
+								combostate = COMBOSTATE_SELECTING;
+								if (hovered >= 0)
+								{
+									SetSelected(hovered);
+								}
 							}
 						}
 					}
-				}
-				else if (combostate == COMBOSTATE_FILTER_INTERACT)
-				{
-					// nothing here, but this holds main widget active while filter interaction is detected
-					if (clicked && !pointerHitbox.intersects(filter.hitBox))
+					else if (combostate == COMBOSTATE_FILTER_INTERACT)
 					{
-						combostate = COMBOSTATE_INACTIVE;
+						// nothing here, but this holds main widget active while filter interaction is detected
+						if (clicked && !pointerHitbox.intersects(filter.hitBox))
+						{
+							combostate = COMBOSTATE_INACTIVE;
+						}
 					}
 				}
-			}
 
-			if (state == ACTIVE) // intentionally checks base state again!
-			{
-				filter.Activate();
-				filter.scale_local.x = drop_width;
-				filter.scale_local.y = combo_height() - filter.GetShadowRadius() * 2;
-				filter.translation_local.x = drop_x;
-				filter.translation_local.y = translation.y + scale.y + drop_offset - combo_height() + filter.GetShadowRadius();
-				filter.SetDirty();
-				filterText = wi::helper::toUpper(filter.GetText());
-				filter.font.params.size = int(filter.scale_local.y - 4);
+				if (state == ACTIVE) // intentionally checks base state again!
+				{
+					filter.Activate();
+					filter.scale_local.x = drop_width;
+					filter.scale_local.y = combo_height() - filter.GetShadowRadius() * 2;
+					filter.translation_local.x = drop_x;
+					filter.translation_local.y = translation.y + scale.y + drop_offset - combo_height() + filter.GetShadowRadius();
+					filter.SetDirty();
+					filterText = wi::helper::toUpper(filter.GetText());
+					filter.font.params.size = int(filter.scale_local.y - 4);
+				}
+				else
+				{
+					filter.Deactivate();
+					filter.SetText("");
+					filterText = "";
+				}
 			}
 			else
 			{
 				filter.Deactivate();
-				filter.SetText("");
-				filterText = "";
 			}
-		}
-		else
-		{
-			filter.Deactivate();
 		}
 
 		filter.SetEnabled(enabled);
@@ -2884,9 +2911,9 @@ namespace wi::gui
 
 		font.params.posY = translation.y + sprites[state].params.siz.y * 0.5f;
 
-		selected = std::min((int)items.size(), selected);
+		selected = std::min(selected, (int)items.size() - 1);
 
-		if (selected >= 0)
+		if (selected >= 0 && selected < (int)items.size())
 		{
 			selected_font.SetText(items[selected].name);
 		}
@@ -3126,9 +3153,9 @@ namespace wi::gui
 			}
 		}
 	}
-	void ComboBox::OnSelect(std::function<void(EventArgs args)> func)
+	void ComboBox::OnSelect(std::function<void(const EventArgs& args)> func)
 	{
-		onSelect = func;
+		onSelect = std::move(func);
 	}
 	void ComboBox::AddItem(const std::string& name, uint64_t userdata)
 	{
@@ -3336,7 +3363,7 @@ namespace wi::gui
 				moveDragger.SetShadowRadius(0);
 				moveDragger.SetText(name);
 				moveDragger.font.params.h_align = wi::font::WIFALIGN_LEFT;
-				moveDragger.OnDrag([this](EventArgs args) {
+				moveDragger.OnDrag([this](const EventArgs& args) {
 					auto saved_parent = this->parent;
 					this->Detach();
 					this->Translate(XMFLOAT3(args.deltaPos.x, args.deltaPos.y, 0));
@@ -3353,11 +3380,11 @@ namespace wi::gui
 				closeButton.SetLocalizationEnabled(LocalizationEnabled::None);
 				closeButton.SetShadowRadius(0);
 				closeButton.SetText("x");
-				closeButton.OnClick([this](EventArgs args) {
+				closeButton.OnClick([this](const EventArgs& args) {
 					this->SetVisible(false);
 					if (onClose)
 					{
-						onClose(args);
+						onClose(std::move(args));
 					}
 					});
 				closeButton.SetTooltip("Close window");
@@ -3372,7 +3399,7 @@ namespace wi::gui
 				collapseButton.SetLocalizationEnabled(LocalizationEnabled::None);
 				collapseButton.SetShadowRadius(0);
 				collapseButton.SetText("-");
-				collapseButton.OnClick([this](EventArgs args) {
+				collapseButton.OnClick([this](const EventArgs& args) {
 					this->SetMinimized(!this->IsMinimized());
 					if (onCollapse)
 					{
@@ -3857,12 +3884,12 @@ namespace wi::gui
 
 		if (!IsMinimized() && IsVisible())
 		{
-			float scroll = wi::input::GetPointer().z * 20;
-			if (scroll && scroll_allowed && scrollbar_vertical.IsScrollbarRequired() && pointerHitbox.intersects(hitBox)) // when window is in focus, but other widgets aren't
+			const float wheel_delta = wi::input::GetPointer().z;
+			if (wheel_delta != 0.0f && scroll_allowed && scrollbar_vertical.IsScrollbarRequired() && pointerHitbox.intersects(hitBox)) // when window is in focus, but other widgets aren't
 			{
 				scroll_allowed = false;
 				// This is outside scrollbar code, because it can also be scrolled if parent widget is only in focus
-				scrollbar_vertical.Scroll(scroll);
+				scrollbar_vertical.Scroll(wheel_delta * 60.0f);
 			}
 		}
 
@@ -4304,17 +4331,17 @@ namespace wi::gui
 		}
 		return size;
 	}
-	void Window::OnClose(std::function<void(EventArgs args)> func)
+	void Window::OnClose(std::function<void(const EventArgs& args)> func)
 	{
-		onClose = func;
+		onClose = std::move(func);
 	}
-	void Window::OnCollapse(std::function<void(EventArgs args)> func)
+	void Window::OnCollapse(std::function<void(const EventArgs& args)> func)
 	{
-		onCollapse = func;
+		onCollapse = std::move(func);
 	}
 	void Window::OnResize(std::function<void()> func)
 	{
-		onResize = func;
+		onResize = std::move(func);
 	}
 	void Window::SetColor(wi::Color color, int id)
 	{
@@ -4608,7 +4635,7 @@ namespace wi::gui
 		text_R.SetText("");
 		text_R.SetTooltip("Enter value for RED channel (0-255)");
 		text_R.SetDescription("R: ");
-		text_R.OnInputAccepted([this](EventArgs args) {
+		text_R.OnInputAccepted([this](const EventArgs& args) {
 			wi::Color color = GetPickColor();
 			color.setR((uint8_t)args.iValue);
 			SetPickColor(color);
@@ -4623,7 +4650,7 @@ namespace wi::gui
 		text_G.SetText("");
 		text_G.SetTooltip("Enter value for GREEN channel (0-255)");
 		text_G.SetDescription("G: ");
-		text_G.OnInputAccepted([this](EventArgs args) {
+		text_G.OnInputAccepted([this](const EventArgs& args) {
 			wi::Color color = GetPickColor();
 			color.setG((uint8_t)args.iValue);
 			SetPickColor(color);
@@ -4638,7 +4665,7 @@ namespace wi::gui
 		text_B.SetText("");
 		text_B.SetTooltip("Enter value for BLUE channel (0-255)");
 		text_B.SetDescription("B: ");
-		text_B.OnInputAccepted([this](EventArgs args) {
+		text_B.OnInputAccepted([this](const EventArgs& args) {
 			wi::Color color = GetPickColor();
 			color.setB((uint8_t)args.iValue);
 			SetPickColor(color);
@@ -4654,7 +4681,7 @@ namespace wi::gui
 		text_H.SetText("");
 		text_H.SetTooltip("Enter value for HUE channel (0-360)");
 		text_H.SetDescription("H: ");
-		text_H.OnInputAccepted([this](EventArgs args) {
+		text_H.OnInputAccepted([this](const EventArgs& args) {
 			hue = wi::math::Clamp(args.fValue, 0, 360.0f);
 			FireEvents();
 			});
@@ -4667,7 +4694,7 @@ namespace wi::gui
 		text_S.SetText("");
 		text_S.SetTooltip("Enter value for SATURATION channel (0-100)");
 		text_S.SetDescription("S: ");
-		text_S.OnInputAccepted([this](EventArgs args) {
+		text_S.OnInputAccepted([this](const EventArgs& args) {
 			saturation = wi::math::Clamp(args.fValue / 100.0f, 0, 1);
 			FireEvents();
 			});
@@ -4680,7 +4707,7 @@ namespace wi::gui
 		text_V.SetText("");
 		text_V.SetTooltip("Enter value for LUMINANCE channel (0-100)");
 		text_V.SetDescription("V: ");
-		text_V.OnInputAccepted([this](EventArgs args) {
+		text_V.OnInputAccepted([this](const EventArgs& args) {
 			luminance = wi::math::Clamp(args.fValue / 100.0f, 0, 1);
 			FireEvents();
 			});
@@ -4694,7 +4721,7 @@ namespace wi::gui
 		text_hex.SetTooltip("Enter RGBA hex value");
 		text_hex.SetDescription("#");
 		text_hex.font_description.params.scaling = 1.2f;
-		text_hex.OnInputAccepted([this](EventArgs args) {
+		text_hex.OnInputAccepted([this](const EventArgs& args) {
 			wi::Color color(args.sValue.c_str());
 			SetPickColor(color);
 			FireEvents();
@@ -4707,7 +4734,7 @@ namespace wi::gui
 		alphaSlider.SetSize(XMFLOAT2(150, 18));
 		alphaSlider.SetText("A: ");
 		alphaSlider.SetTooltip("Value for ALPHA - TRANSPARENCY channel (0-255)");
-		alphaSlider.OnSlide([this](EventArgs args) {
+		alphaSlider.OnSlide([this](const EventArgs& args) {
 			FireEvents();
 			});
 		AddWidget(&alphaSlider);
@@ -5303,9 +5330,9 @@ namespace wi::gui
 		args.color = GetPickColor();
 		onColorChanged(args);
 	}
-	void ColorPicker::OnColorChanged(std::function<void(EventArgs args)> func)
+	void ColorPicker::OnColorChanged(std::function<void(const EventArgs& args)> func)
 	{
-		onColorChanged = func;
+		onColorChanged = std::move(func);
 	}
 
 
@@ -5316,7 +5343,7 @@ namespace wi::gui
 	{
 		SetName(name);
 		SetText(name);
-		OnSelect([](EventArgs args) {});
+		OnSelect([](const EventArgs& args) {});
 
 		SetColor(wi::Color(100, 100, 100, 100), wi::gui::IDLE);
 		for (int i = FOCUS + 1; i < WIDGETSTATE_COUNT; ++i)
@@ -5521,12 +5548,12 @@ namespace wi::gui
 				}
 			}
 
-			float scroll = wi::input::GetPointer().z * 10;
-			if (scroll && scroll_allowed && scrollbar.IsScrollbarRequired() && pointerHitbox.intersects(hitBox))
+			const float wheel_delta = wi::input::GetPointer().z;
+			if (wheel_delta != 0.0f && scroll_allowed && scrollbar.IsScrollbarRequired() && pointerHitbox.intersects(hitBox))
 			{
 				scroll_allowed = false;
 				// This is outside scrollbar code, because it can also be scrolled if parent widget is only in focus
-				scrollbar.Scroll(scroll);
+				scrollbar.Scroll(wheel_delta * 40.0f);
 			}
 
 			Hitbox2D itemlist_box = GetHitbox_ListArea();
@@ -5826,17 +5853,17 @@ namespace wi::gui
 			wi::font::Draw(item.name, fp, cmd);
 		}
 	}
-	void TreeList::OnSelect(std::function<void(EventArgs args)> func)
+	void TreeList::OnSelect(std::function<void(const EventArgs& args)> func)
 	{
-		onSelect = func;
+		onSelect = std::move(func);
 	}
-	void TreeList::OnDelete(std::function<void(EventArgs args)> func)
+	void TreeList::OnDelete(std::function<void(const EventArgs& args)> func)
 	{
-		onDelete = func;
+		onDelete = std::move(func);
 	}
-	void TreeList::OnDoubleClick(std::function<void(EventArgs args)> func)
+	void TreeList::OnDoubleClick(std::function<void(const EventArgs& args)> func)
 	{
-		onDoubleClick = func;
+		onDoubleClick = std::move(func);
 	}
 	void TreeList::AddItem(const Item& item)
 	{

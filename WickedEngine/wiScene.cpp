@@ -3830,7 +3830,9 @@ namespace wi::scene
 	}
 	void Scene::RunArmatureUpdateSystem(wi::jobsystem::context& ctx)
 	{
-		wi::jobsystem::Dispatch(ctx, (uint32_t)armatures.GetCount(), 1, [&](wi::jobsystem::JobArgs args) {
+		// disable pointer-overflow UBSAN check because adding an offset to a nullptr is UB.
+		// we only calculate but never use the value in that case, so it should be fine
+		wi::jobsystem::Dispatch(ctx, (uint32_t)armatures.GetCount(), 1, [&](wi::jobsystem::JobArgs args) NO_SANITIZE("pointer-overflow") {
 
 			ArmatureComponent& armature = armatures[args.jobIndex];
 			Entity entity = armatures.GetEntity(args.jobIndex);
@@ -5863,7 +5865,7 @@ namespace wi::scene
 
 				if (character.pathfinding_thread == nullptr && character.process_goal)
 				{
-					character.pathfinding_thread = std::make_shared<CharacterComponent::PathfindingThreadContext>();
+					character.pathfinding_thread = wi::allocator::make_shared<CharacterComponent::PathfindingThreadContext>();
 				}
 				if (character.pathfinding_thread)
 				{
@@ -5941,6 +5943,8 @@ namespace wi::scene
 	}
 	void Scene::RunSplineUpdateSystem(wi::jobsystem::context& ctx)
 	{
+		ScopedCPUProfiling("Spline Update");
+
 		// On the main thread, check if any of them require mesh component, etc:
 		for (size_t i = 0; i < splines.GetCount(); ++i)
 		{
@@ -5968,6 +5972,7 @@ namespace wi::scene
 			dirty |= spline.prev_mesh_generation_vertical_subdivision != spline.mesh_generation_vertical_subdivision;
 			dirty |= spline.prev_mesh_generation_nodes != (int)spline.spline_node_entities.size();
 			dirty |= spline.prev_looped != spline.IsLooped();
+			dirty |= spline.prev_filled != spline.IsFilled();
 			dirty |= spline.prev_width != spline.width;
 			dirty |= spline.prev_rotation != spline.rotation;
 
@@ -5982,6 +5987,7 @@ namespace wi::scene
 			spline.prev_width = spline.width;
 			spline.prev_rotation = spline.rotation;
 			spline.prev_looped = spline.IsLooped();
+			spline.prev_filled = spline.IsFilled();
 
 			spline.spline_node_transforms.resize(spline.spline_node_entities.size());
 
@@ -6038,10 +6044,19 @@ namespace wi::scene
 						mesh->indices.clear();
 						size_t vertexCount;
 						size_t indexCount;
+						const bool generateFill = spline.IsLooped() && spline.IsFilled() && spline.mesh_generation_vertical_subdivision == 0;
 						if (spline.mesh_generation_vertical_subdivision == 0)
 						{
-							vertexCount = segmentCount * 2;
-							indexCount = (segmentCount - 1) * 6;
+							if (generateFill)
+							{
+								vertexCount = segmentCount + 1;
+								indexCount = segmentCount * 3;
+							}
+							else
+							{
+								vertexCount = segmentCount * 2;
+								indexCount = (segmentCount - 1) * 6;
+							}
 						}
 						else
 						{
@@ -6105,29 +6120,41 @@ namespace wi::scene
 
 							if (spline.mesh_generation_vertical_subdivision == 0)
 							{
-								// No vertical subdivision, create simple plane (road):
-								const uint32_t startVertex = (uint32_t)mesh->vertex_positions.size();
-
-								XMStoreFloat3(&mesh->vertex_positions.emplace_back(), currentRIGHT);
-								XMStoreFloat3(&mesh->vertex_positions.emplace_back(), currentLEFT);
-
-								XMStoreFloat3(&mesh->vertex_normals.emplace_back(), N);
-								XMStoreFloat3(&mesh->vertex_normals.emplace_back(), N);
-
-								XMStoreFloat4(&mesh->vertex_tangents.emplace_back(), XMVectorSetW(T, 1));
-								XMStoreFloat4(&mesh->vertex_tangents.emplace_back(), XMVectorSetW(T, 1));
-
-								mesh->vertex_uvset_0.push_back(XMFLOAT2(0, dist));
-								mesh->vertex_uvset_0.push_back(XMFLOAT2(1, dist));
-
-								if (i < segmentCount - 1)
+								if (generateFill)
 								{
-									mesh->indices.push_back(startVertex + 0);
-									mesh->indices.push_back(startVertex + 1);
-									mesh->indices.push_back(startVertex + 2);
-									mesh->indices.push_back(startVertex + 2);
-									mesh->indices.push_back(startVertex + 1);
-									mesh->indices.push_back(startVertex + 3);
+									// Filled mode, only generate center point for the fill polygon:
+									XMStoreFloat3(&mesh->vertex_positions.emplace_back(), P);
+									XMStoreFloat3(&mesh->vertex_normals.emplace_back(), N);
+									XMStoreFloat4(&mesh->vertex_tangents.emplace_back(), XMVectorSetW(T, 1));
+
+									mesh->vertex_uvset_0.push_back(XMFLOAT2(0, 0));
+								}
+								else
+								{
+									// No vertical subdivision, create simple plane (road):
+									const uint32_t startVertex = (uint32_t)mesh->vertex_positions.size();
+
+									XMStoreFloat3(&mesh->vertex_positions.emplace_back(), currentRIGHT);
+									XMStoreFloat3(&mesh->vertex_positions.emplace_back(), currentLEFT);
+
+									XMStoreFloat3(&mesh->vertex_normals.emplace_back(), N);
+									XMStoreFloat3(&mesh->vertex_normals.emplace_back(), N);
+
+									XMStoreFloat4(&mesh->vertex_tangents.emplace_back(), XMVectorSetW(T, 1));
+									XMStoreFloat4(&mesh->vertex_tangents.emplace_back(), XMVectorSetW(T, 1));
+
+									mesh->vertex_uvset_0.push_back(XMFLOAT2(0, dist));
+									mesh->vertex_uvset_0.push_back(XMFLOAT2(1, dist));
+
+									if (i < segmentCount - 1)
+									{
+										mesh->indices.push_back(startVertex + 0);
+										mesh->indices.push_back(startVertex + 1);
+										mesh->indices.push_back(startVertex + 2);
+										mesh->indices.push_back(startVertex + 2);
+										mesh->indices.push_back(startVertex + 1);
+										mesh->indices.push_back(startVertex + 3);
+									}
 								}
 							}
 							else
@@ -6163,7 +6190,7 @@ namespace wi::scene
 						{
 							mesh->subsets.emplace_back().materialID = entity;
 						}
-						if (spline.IsLooped() && mesh->vertex_positions.size() > 2)
+						if (spline.IsLooped() && mesh->vertex_positions.size() > 2 && !generateFill)
 						{
 							// force snap end segments onto start segments:
 							if (spline.mesh_generation_vertical_subdivision == 0)
@@ -6180,6 +6207,82 @@ namespace wi::scene
 									mesh->vertex_positions[j] = mesh->vertex_positions[mesh->vertex_positions.size() - verticalSegments + j];
 								}
 							}
+						}
+						// Generate fill triangles for looped splines:
+						if (generateFill && mesh->vertex_positions.size() >= segmentCount)
+						{
+							// Compute centroid of the fill polygon
+							XMVECTOR centroid = XMVectorZero();
+							for (size_t i = 0; i < segmentCount; ++i)
+							{
+								centroid = XMVectorAdd(centroid, XMLoadFloat3(&mesh->vertex_positions[i]));
+							}
+							centroid = XMVectorScale(centroid, 1.0f / float(segmentCount));
+
+							// Compute fill plane normal for UV basis
+							XMVECTOR fillNormal = XMVectorZero();
+							for (size_t i = 0; i < segmentCount; ++i)
+							{
+								size_t nextIdx = (i + 1) % segmentCount;
+								XMVECTOR current = XMLoadFloat3(&mesh->vertex_positions[i]);
+								XMVECTOR next = XMLoadFloat3(&mesh->vertex_positions[nextIdx]);
+								fillNormal = XMVectorAdd(fillNormal, XMVector3Cross(current - centroid, next - centroid));
+							}
+							fillNormal = XMVector3Normalize(fillNormal);
+
+							// Compute UV basis vectors by projecting onto the fill plane
+							XMVECTOR uAxis = XMVector3Normalize(XMVector3Cross(fillNormal, XMVectorSet(0, 1, 0, 0)));
+							if (XMVectorGetX(XMVector3LengthSq(uAxis)) < 0.001f)
+							{
+								uAxis = XMVector3Normalize(XMVector3Cross(fillNormal, XMVectorSet(1, 0, 0, 0)));
+							}
+							XMVECTOR vAxis = XMVector3Normalize(XMVector3Cross(fillNormal, uAxis));
+
+							// Find UV bounds for normalization
+							float minU = FLT_MAX, maxU = -FLT_MAX;
+							float minV = FLT_MAX, maxV = -FLT_MAX;
+							for (size_t i = 0; i < segmentCount; ++i)
+							{
+								XMVECTOR pos = XMLoadFloat3(&mesh->vertex_positions[i]);
+								XMVECTOR offset = pos - centroid;
+								float u = XMVectorGetX(XMVector3Dot(offset, uAxis));
+								float v = XMVectorGetX(XMVector3Dot(offset, vAxis));
+								minU = std::min(minU, u); maxU = std::max(maxU, u);
+								minV = std::min(minV, v); maxV = std::max(maxV, v);
+							}
+							float rangeU = maxU - minU;
+							float rangeV = maxV - minV;
+							if (rangeU < 0.001f) rangeU = 1.0f;
+							if (rangeV < 0.001f) rangeV = 1.0f;
+
+							// Update UVs for edge vertices
+							for (size_t i = 0; i < segmentCount; ++i)
+							{
+								XMVECTOR pos = XMLoadFloat3(&mesh->vertex_positions[i]);
+								XMVECTOR offset = pos - centroid;
+								float u = (XMVectorGetX(XMVector3Dot(offset, uAxis)) - minU) / rangeU;
+								float v = (XMVectorGetX(XMVector3Dot(offset, vAxis)) - minV) / rangeV;
+								mesh->vertex_uvset_0[i] = XMFLOAT2(u, v);
+							}
+
+							// Add centroid vertex
+							const uint32_t centroidIndex = (uint32_t)mesh->vertex_positions.size();
+							XMStoreFloat3(&mesh->vertex_positions.emplace_back(), centroid);
+							mesh->vertex_normals.emplace_back();
+							mesh->vertex_tangents.emplace_back();
+							mesh->vertex_uvset_0.push_back(XMFLOAT2(0.5f, 0.5f)); // center UV
+
+							// Generate triangle fan from centroid to edge vertices
+							for (size_t i = 0; i < segmentCount; ++i)
+							{
+								uint32_t current = (uint32_t)i;
+								uint32_t next = (uint32_t)((i + 1) % segmentCount);
+								mesh->indices.push_back(centroidIndex);
+								mesh->indices.push_back(current);
+								mesh->indices.push_back(next);
+							}
+
+							mesh->ComputeNormals(MeshComponent::COMPUTE_NORMALS_SMOOTH_FAST);
 						}
 						MeshComponent::MeshSubset& subset = mesh->subsets.front();
 						subset.indexCount = (uint32_t)mesh->indices.size();
@@ -6227,8 +6330,9 @@ namespace wi::scene
 			// Compute AABB:
 			if (dirty || (spline.dirty_terrain && spline.terrain_modifier_amount > 0))
 			{
-				spline.aabb = spline.ComputeAABB();
+				spline.PrecomputeSplineBounds(4);
 			}
+
 		});
 		wi::jobsystem::Wait(ctx);
 	}

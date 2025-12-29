@@ -5,7 +5,7 @@ on:
     branches: [ master ]
 
 env:
-  CCACHE_VERSION: 4.11.3
+  CCACHE_VERSION: 4.12.1
   CCACHE_MAXSIZE: 500Mi
   # see https://ccache.dev/manual/latest.html#_precompiled_headers
   CCACHE_SLOPPINESS: pch_defines,time_macros,include_file_mtime,include_file_ctime
@@ -20,6 +20,10 @@ jobs:
       CCACHE_NODIRECT: 1
     steps:
     - uses: actions/checkout@v4
+
+    - uses: microsoft/setup-msbuild@v2
+      with:
+        msbuild-architecture: x64
 
     - name: Restore Ccache database
       id: restore-ccache
@@ -39,7 +43,6 @@ jobs:
     - name: Initial compile
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
         MSBuild WickedEngine.sln /t:OfflineShaderCompiler /m /p:Configuration=Release /p:Platform=x64
 
     - name: Generate shader dump
@@ -51,7 +54,6 @@ jobs:
     - name: Recompile with shader dump
       shell: cmd
       run: |
-        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\Common7\Tools\VsDevCmd.bat"
         MSBuild WickedEngine.sln /t:clean /m /p:Configuration=Release /p:Platform=x64
         MSBuild WickedEngine.sln /t:Editor_Windows /m /p:Configuration=Release /p:Platform=x64
 
@@ -114,22 +116,10 @@ jobs:
         sudo apt update
         sudo apt install libsdl2-dev ccache
 
-    - name: Initial compile
+    - name: Compile with embedded shaders
       run: |
-        mkdir build
-        cd build
-        cmake .. -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DWICKED_ENABLE_IPO=NO
-        make -j$(nproc)
-    - name: Generate shader dump
-      run: |
-        cd build/WickedEngine
-        ./offlineshadercompiler spirv rebuild shaderdump
-        mv wiShaderDump.h ../../WickedEngine/
-
-    - name: Recompile with shader dump
-      run: |
-        cd build
-        make -j $(nproc)
+        CC=${{ matrix.cc }} CXX=${{ matrix.cxx }} cmake -B build -DWICKED_ENABLE_IPO=NO -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DWICKED_EMBED_SHADERS=YES
+        make -C build -j$(nproc)
 
     - name: Save Ccache database
       id: save-ccache

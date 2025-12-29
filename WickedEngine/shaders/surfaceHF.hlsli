@@ -215,6 +215,13 @@ struct Surface
 			f0 = surfaceMap.b = surfaceMap.a = 0;
 		}
 
+#ifndef ENVMAPRENDERING
+		if (GetFrame().options & OPTION_BIT_FORCE_UNLIT)
+#endif // ENVMAPRENDERING
+		{
+			albedo = baseColor.rgb;
+		}
+
 		[branch]
 		if (material.IsUsingSpecularGlossinessWorkflow())
 		{
@@ -302,7 +309,7 @@ struct Surface
 #endif // CARTOON
 		
 #ifndef ENVMAPRENDERING
-		if (GetFrame().options & OPTION_BIT_FORCE_DIFFUSE_LIGHTING)
+		if (GetFrame().options & OPTION_BIT_FORCE_DIFFUSE_LIGHTING || GetFrame().options & OPTION_BIT_FORCE_UNLIT)
 #endif // ENVMAPRENDERING
 		{
 			F = 0;
@@ -441,8 +448,8 @@ struct Surface
 
 			const float lod_uvset0 = compute_texture_lod(65536, 65536, lod_constant0, ray_direction, surf_normal, cone_width);
 			const float lod_uvset1 = compute_texture_lod(65536, 65536, lod_constant1, ray_direction, surf_normal, cone_width);
-			const uint resolution0 = 65536u >> uint(max(0, lod_uvset0));
-			const uint resolution1 = 65536u >> uint(max(0, lod_uvset1));
+			const uint resolution0 = 65536u >> clamp(uint(lod_uvset0), 1u, 16u);
+			const uint resolution1 = 65536u >> clamp(uint(lod_uvset1), 1u, 16u);
 			write_mipmap_feedback(geometry.materialIndex, resolution0, resolution1);
 #endif // SURFACE_LOAD_MIPCONE
 
@@ -779,11 +786,9 @@ struct Surface
 			{
 				uint bucket_bits = load_entitytile(flatTileIndex + bucket);
 				bucket_bits = iterator.mask_entity(bucket, bucket_bits);
-
-#ifndef ENTITY_TILE_UNIFORM
+				
 				// This is the wave scalarizer from Improved Culling - Siggraph 2017 [Drobot]:
 				bucket_bits = WaveReadLaneFirst(WaveActiveBitOr(bucket_bits));
-#endif // ENTITY_TILE_UNIFORM
 
 				[loop]
 				while (WaveActiveAnyTrue(bucket_bits != 0 && decalAccumulation.a < 1 && decalBumpAccumulation.a < 1 && decalSurfaceAccumulationAlpha < 1))
