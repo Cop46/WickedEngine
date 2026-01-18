@@ -29,6 +29,12 @@ constexpr T align(T value, T alignment)
 	return ((value + alignment - T(1)) / alignment) * alignment;
 }
 
+template<typename T>
+constexpr bool is_aligned(T value, T alignment)
+{
+	return align(value, alignment) == value;
+}
+
 template <typename T>
 constexpr T sqr(T x) { return x * x; }
 
@@ -378,7 +384,18 @@ constexpr bool has_flag(E lhs, E rhs)
 {
 	return (lhs & rhs) == rhs;
 }
-
+template<typename T, typename U>
+constexpr void set_flag(T& flags, const U flag, const bool set)
+{
+	if (set)
+	{
+		flags |= static_cast<T>(flag);
+	}
+	else
+	{
+		flags &= ~static_cast<T>(flag);
+	}
+}
 // Extract file name from a path at compile-time
 constexpr const char* relative_path(const char* path)
 {

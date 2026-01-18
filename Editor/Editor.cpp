@@ -81,6 +81,7 @@ enum class EditorActions
 	MOVE_TOGGLE_ACTION,
 	ROTATE_TOGGLE_ACTION,
 	SCALE_TOGGLE_ACTION,
+	LOCAL_GLOBAL_TOGGLE_ACTION,
 
 	// Engine actions
 	SCREENSHOT,
@@ -139,6 +140,7 @@ HotkeyInfo hotkeyActions[size_t(EditorActions::COUNT)] = {
 	{wi::input::BUTTON('1'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//MOVE_TOGGLE_ACTION,
 	{wi::input::BUTTON('2'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//ROTATE_TOGGLE_ACTION,
 	{wi::input::BUTTON('3'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCALE_TOGGLE_ACTION,
+	{wi::input::BUTTON('4'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//LOCAL_GLOBAL_TOGGLE_ACTION,
 	{wi::input::BUTTON::KEYBOARD_BUTTON_F3,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT,
 	{wi::input::BUTTON::KEYBOARD_BUTTON_F4,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT_ALPHA,
 	{wi::input::BUTTON('I'),					/*press=*/ false,		/*control=*/ false,		/*shift=*/ false},	//INSPECTOR_MODE,
@@ -215,6 +217,7 @@ void HotkeyRemap(Editor* main)
 		{"MOVE_TOGGLE_ACTION", EditorActions::MOVE_TOGGLE_ACTION},
 		{"ROTATE_TOGGLE_ACTION", EditorActions::ROTATE_TOGGLE_ACTION},
 		{"SCALE_TOGGLE_ACTION", EditorActions::SCALE_TOGGLE_ACTION},
+		{"LOCAL_GLOBAL_TOGGLE_ACTION", EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION},
 		{"MAKE_NEW_SCREENSHOT", EditorActions::SCREENSHOT},
 		{"MAKE_NEW_SCREENSHOT_ALPHA", EditorActions::SCREENSHOT_ALPHA},
 		{"INSPECTOR_MODE", EditorActions::INSPECTOR_MODE},
@@ -405,6 +408,11 @@ void Editor::SaveWindowSize()
 				config.Commit();
 			}
 		}
+#elif defined(__APPLE__)
+		XMUINT2 size = wi::apple::GetWindowSizeNoScaling(window);
+		config.Set("width", size.x);
+		config.Set("height", size.y);
+		config.Commit();
 #endif
 	}
 }
@@ -999,6 +1007,16 @@ void EditorComponent::Load()
 		GetGUI().AddWidget(&translateButton);
 	}
 
+	localGlobalButton.Create(ICON_GLOBAL_SPACE);
+	localGlobalButton.SetShadowRadius(2);
+	localGlobalButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
+	UpdateLocalGlobalButton();
+	localGlobalButton.OnClick([this](wi::gui::EventArgs args) {
+		translator.isLocalSpace = !translator.isLocalSpace;
+		UpdateLocalGlobalButton();
+	});
+	GetGUI().AddWidget(&localGlobalButton);
+
 	physicsButton.Create(ICON_RIGIDBODY);
 	physicsButton.SetShadowRadius(2);
 	physicsButton.SetTooltip("Toggle Physics Simulation On/Off\n\tOr: press while holding left Ctrl to reset physics bodies");
@@ -1228,6 +1246,26 @@ void EditorComponent::Load()
 	cinemaButton.SetColor(wi::Color(50, 160, 200, 180), wi::gui::WIDGETSTATE::IDLE);
 	cinemaButton.SetColor(wi::Color(120, 200, 200, 255), wi::gui::WIDGETSTATE::FOCUS);
 	cinemaButton.OnClick([this](wi::gui::EventArgs args) {
+		cinema_mode_saved_debugEnvProbes = wi::renderer::GetToDrawDebugEnvProbes();
+		cinema_mode_saved_debugCameras = wi::renderer::GetToDrawDebugCameras();
+		cinema_mode_saved_debugColliders = wi::renderer::GetToDrawDebugColliders();
+		cinema_mode_saved_debugEmitters = wi::renderer::GetToDrawDebugEmitters();
+		cinema_mode_saved_debugForceFields = wi::renderer::GetToDrawDebugForceFields();
+		cinema_mode_saved_debugBoneLines = wi::renderer::GetToDrawDebugBoneLines();
+		cinema_mode_saved_debugPartitionTree = wi::renderer::GetToDrawDebugPartitionTree();
+		cinema_mode_saved_debugSprings = wi::renderer::GetToDrawDebugSprings();
+		cinema_mode_saved_gridHelper = wi::renderer::GetToDrawGridHelper();
+
+		wi::renderer::SetToDrawDebugEnvProbes(false);
+		wi::renderer::SetToDrawDebugCameras(false);
+		wi::renderer::SetToDrawDebugColliders(false);
+		wi::renderer::SetToDrawDebugEmitters(false);
+		wi::renderer::SetToDrawDebugForceFields(false);
+		wi::renderer::SetToDrawDebugBoneLines(false);
+		wi::renderer::SetToDrawDebugPartitionTree(false);
+		wi::renderer::SetToDrawDebugSprings(false);
+		wi::renderer::SetToDrawGridHelper(false);
+
 		if (renderPath != nullptr)
 		{
 			renderPath->GetGUI().SetVisible(false);
@@ -1323,6 +1361,7 @@ void EditorComponent::Load()
 		ss += "Move Toggle: " + GetInputString(EditorActions::MOVE_TOGGLE_ACTION) + "\n";
 		ss += "Rotate Toggle: " + GetInputString(EditorActions::ROTATE_TOGGLE_ACTION) + "\n";
 		ss += "Scale Toggle: " + GetInputString(EditorActions::SCALE_TOGGLE_ACTION) + "\n";
+		ss += "Local/Global Toggle: " + GetInputString(EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION) + "\n";
 		ss += "Reload terrain props: " + GetInputString(EditorActions::RELOAD_TERRAIN_PROPS) + "\n";
 		ss += "Wireframe mode: " + GetInputString(EditorActions::WIREFRAME_MODE) + "\n";
 		ss += "Screenshot (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT) + "\n";
@@ -1609,6 +1648,16 @@ void EditorComponent::Update(float dt)
 		if (!GetGUI().IsVisible())
 		{
 			// Exit cinema mode:
+			wi::renderer::SetToDrawDebugEnvProbes(cinema_mode_saved_debugEnvProbes);
+			wi::renderer::SetToDrawDebugCameras(cinema_mode_saved_debugCameras);
+			wi::renderer::SetToDrawDebugColliders(cinema_mode_saved_debugColliders);
+			wi::renderer::SetToDrawDebugEmitters(cinema_mode_saved_debugEmitters);
+			wi::renderer::SetToDrawDebugForceFields(cinema_mode_saved_debugForceFields);
+			wi::renderer::SetToDrawDebugBoneLines(cinema_mode_saved_debugBoneLines);
+			wi::renderer::SetToDrawDebugPartitionTree(cinema_mode_saved_debugPartitionTree);
+			wi::renderer::SetToDrawDebugSprings(cinema_mode_saved_debugSprings);
+			wi::renderer::SetToDrawGridHelper(cinema_mode_saved_gridHelper);
+
 			if (renderPath != nullptr)
 			{
 				renderPath->GetGUI().SetVisible(true);
@@ -1804,6 +1853,12 @@ void EditorComponent::Update(float dt)
 		componentsWnd.RefreshEntityTree();
 	}
 
+	// Ensure pointer is visible when right mouse button is not held:
+	if (!wi::input::Down(wi::input::MOUSE_BUTTON_RIGHT))
+	{
+		wi::input::HidePointer(false);
+	}
+
 	// Camera control:
 	if (!drive_mode && !wi::backlog::isActive() && !GetGUI().HasFocus())
 	{
@@ -1939,7 +1994,7 @@ void EditorComponent::Update(float dt)
 			moveNew += XMVectorSet(leftStick.x, 0, leftStick.y, 0);
 			moveNew *= speed;
 
-			move = XMVectorLerp(move, moveNew, cameraWnd.accelerationSlider.GetValue() * clampedDT / 0.0166f); // smooth the movement a bit
+			move = XMVectorLerp(move, moveNew, std::min(1.0f, cameraWnd.accelerationSlider.GetValue() * clampedDT / 0.0166f)); // smooth the movement a bit
 			float moveLength = XMVectorGetX(XMVector3Length(move));
 
 			if (moveLength < 0.0001f)
@@ -2818,6 +2873,11 @@ void EditorComponent::Update(float dt)
 			translator.isScalator = !translator.isScalator;
 			translator.isTranslator = false;
 			translator.isRotator = false;
+		}
+		else if (CheckInput(EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION))
+		{
+			translator.isLocalSpace = !translator.isLocalSpace;
+			UpdateLocalGlobalButton();
 		}
 	}
 
@@ -4608,7 +4668,7 @@ void EditorComponent::Render() const
 			vp.height = (float)gui_background_effect.desc.height;
 			device->BindViewports(1, &vp, cmd);
 
-			Rect rect;
+			wi::graphics::Rect rect;
 			rect.from_viewport(vp);
 			device->BindScissorRects(1, &rect, cmd);
 
@@ -5961,6 +6021,20 @@ void EditorComponent::CheckBonePickingEnabled()
 	}
 }
 
+void EditorComponent::UpdateLocalGlobalButton()
+{
+	if (translator.isLocalSpace)
+	{
+		localGlobalButton.SetText(ICON_LOCAL_SPACE);
+		localGlobalButton.SetTooltip("Toggle from Local coordinate space to Global for Translate and Rotate\nHotkey: " + GetInputString(EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION));
+	}
+	else
+	{
+		localGlobalButton.SetText(ICON_GLOBAL_SPACE);
+		localGlobalButton.SetTooltip("Toggle from Global coordinate space to Local for Translate and Rotate\nHotkey: " + GetInputString(EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION));
+	}
+}
+
 void EditorComponent::UpdateDynamicWidgets()
 {
 	float screenW = GetLogicalWidth();
@@ -6167,7 +6241,12 @@ void EditorComponent::UpdateDynamicWidgets()
 	scaleButton.SetSize(XMFLOAT2(hei, hei));
 	scaleButton.SetPos(XMFLOAT2(ofs, y));
 	scaleButton.Update(*this, 0);
-	y += scaleButton.GetSize().y + padding;
+	y += scaleButton.GetSize().y + scaleButton.GetShadowRadius();
+
+	localGlobalButton.SetSize(XMFLOAT2(hei, hei));
+	localGlobalButton.SetPos(XMFLOAT2(ofs, y));
+	localGlobalButton.Update(*this, 0);
+	y += localGlobalButton.GetSize().y + padding;
 
 	physicsButton.SetSize(XMFLOAT2(hei, hei));
 	physicsButton.SetPos(XMFLOAT2(ofs, y));
