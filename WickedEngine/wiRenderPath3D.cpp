@@ -114,6 +114,9 @@ namespace wi
 
 				device->CreateTexture(&desc, nullptr, &rtMain_render);
 				device->SetName(&rtMain_render, "rtMain_render");
+				
+				// Note: graphics API can downgrade sample count for last supported value, this will be reflected in the renderpath setting too
+				msaaSampleCount = std::min(msaaSampleCount, rtMain_render.desc.sample_count);
 			}
 			else
 			{
@@ -2855,7 +2858,7 @@ namespace wi
 			device->CreateTexture(&desc, nullptr, &rtSSR);
 			device->SetName(&rtSSR, "rtSSR");
 
-			wi::renderer::CreateSSRResources(ssrResources, internalResolution);
+			wi::renderer::CreateSSRResources(ssrResources, internalResolution, ssrQuality);
 		}
 		else
 		{
@@ -2908,7 +2911,7 @@ namespace wi
 			device->CreateTexture(&desc, nullptr, &rtSSR);
 			device->SetName(&rtSSR, "rtSSR");
 
-			wi::renderer::CreateRTReflectionResources(rtreflectionResources, internalResolution);
+			wi::renderer::CreateRTReflectionResources(rtreflectionResources, internalResolution, raytracedReflectionsQuality);
 		}
 		else
 		{
@@ -2934,7 +2937,7 @@ namespace wi
 			device->CreateTexture(&desc, nullptr, &rtRaytracedDiffuse);
 			device->SetName(&rtRaytracedDiffuse, "rtRaytracedDiffuse");
 
-			wi::renderer::CreateRTDiffuseResources(rtdiffuseResources, internalResolution);
+			wi::renderer::CreateRTDiffuseResources(rtdiffuseResources, internalResolution, raytracedDiffuseQuality);
 		}
 		else
 		{
