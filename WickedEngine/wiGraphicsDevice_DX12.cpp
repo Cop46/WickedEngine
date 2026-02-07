@@ -39,10 +39,6 @@ namespace wi::graphics
 {
 namespace dx12_internal
 {
-	// Bindless allocation limits:
-	static constexpr int BINDLESS_RESOURCE_CAPACITY = 500000;
-	static constexpr int BINDLESS_SAMPLER_CAPACITY = 256;
-
 #ifdef PLATFORM_XBOX
 // No renderpass API on xbox yet
 #define DISABLE_RENDERPASS
@@ -1040,22 +1036,22 @@ namespace dx12_internal
 	struct RootSignatureOptimizer
 	{
 		static constexpr uint8_t INVALID_ROOT_PARAMETER = 0xFF;
+		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* rootsig_desc = nullptr;
+		// This is the bitflag of all root parameters:
+		uint64_t root_mask = 0ull;
 		// These map shader registers in the binding space (space=0) to root parameters
 		uint8_t CBV[DESCRIPTORBINDER_CBV_COUNT];
 		uint8_t SRV[DESCRIPTORBINDER_SRV_COUNT];
 		uint8_t UAV[DESCRIPTORBINDER_UAV_COUNT];
 		uint8_t SAM[DESCRIPTORBINDER_SAMPLER_COUNT];
 		uint8_t PUSH;
-		// This is the bitflag of all root parameters:
-		uint64_t root_mask = 0ull;
 		// For each root parameter, store some statistics:
 		struct RootParameterStatistics
 		{
-			uint32_t descriptorCopyCount = 0u;
-			bool sampler_table = false;
+			uint16_t descriptorCopyCount = 0;
+			uint16_t is_sampler = 0;
 		};
-		wi::vector<RootParameterStatistics> root_stats;
-		const D3D12_VERSIONED_ROOT_SIGNATURE_DESC* rootsig_desc = nullptr;
+		StackVector<RootParameterStatistics, 64> root_stats;
 
 		void init(const D3D12_VERSIONED_ROOT_SIGNATURE_DESC& desc)
 		{
@@ -1099,7 +1095,7 @@ namespace dx12_internal
 					{
 						const D3D12_DESCRIPTOR_RANGE1& range = param.DescriptorTable.pDescriptorRanges[range_index];
 						stats.descriptorCopyCount += range.NumDescriptors == UINT_MAX ? 0 : range.NumDescriptors;
-						stats.sampler_table = range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
+						stats.is_sampler = range.RangeType == D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER;
 
 						if (range.RegisterSpace != 0)
 							continue; // we only care for the binding space (space=0)
@@ -1428,7 +1424,6 @@ namespace dx12_internal
 		ComPtr<ID3D12RootSignature> rootSignature;
 
 		wi::vector<uint8_t> shadercode;
-		wi::vector<D3D12_INPUT_ELEMENT_DESC> input_elements;
 		D3D_PRIMITIVE_TOPOLOGY primitiveTopology;
 
 		ComPtr<ID3D12VersionedRootSignatureDeserializer> rootsig_deserializer;
@@ -1734,7 +1729,7 @@ std::mutex queue_locker;
 
 			case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
 			{
-				DescriptorHeapGPU& heap = stats.sampler_table ? device->descriptorheap_sam : device->descriptorheap_res;
+				DescriptorHeapGPU& heap = stats.is_sampler ? device->descriptorheap_sam : device->descriptorheap_res;
 				D3D12_GPU_DESCRIPTOR_HANDLE gpu_handle = heap.start_gpu;
 
 				if (stats.descriptorCopyCount == 1 && param.DescriptorTable.pDescriptorRanges[0].RangeType != D3D12_DESCRIPTOR_RANGE_TYPE_CBV)
@@ -1794,8 +1789,8 @@ std::mutex queue_locker;
 				else if (stats.descriptorCopyCount > 0)
 				{
 					D3D12_CPU_DESCRIPTOR_HANDLE cpu_handle = heap.start_cpu;
-					const uint32_t descriptorSize = stats.sampler_table ? device->sampler_descriptor_size : device->resource_descriptor_size;
-					const uint32_t bindless_capacity = stats.sampler_table ? BINDLESS_SAMPLER_CAPACITY : BINDLESS_RESOURCE_CAPACITY;
+					const uint32_t descriptorSize = stats.is_sampler ? device->sampler_descriptor_size : device->resource_descriptor_size;
+					const uint32_t bindless_capacity = stats.is_sampler ? BINDLESS_SAMPLER_CAPACITY : BINDLESS_RESOURCE_CAPACITY;
 
 					// Remarks:
 					//	This is allocating from the global shader visible descriptor heaps in a simple incrementing
@@ -1815,7 +1810,7 @@ std::mutex queue_locker;
 					// The reservation is the maximum amount of descriptors that can be allocated once
 					static constexpr uint32_t wrap_reservation_cbv_srv_uav = DESCRIPTORBINDER_CBV_COUNT + DESCRIPTORBINDER_SRV_COUNT + DESCRIPTORBINDER_UAV_COUNT;
 					static constexpr uint32_t wrap_reservation_sampler = DESCRIPTORBINDER_SAMPLER_COUNT;
-					const uint32_t wrap_reservation = stats.sampler_table ? wrap_reservation_sampler : wrap_reservation_cbv_srv_uav;
+					const uint32_t wrap_reservation = stats.is_sampler ? wrap_reservation_sampler : wrap_reservation_cbv_srv_uav;
 					const uint32_t wrap_effective_size = heap.heapDesc.NumDescriptors - bindless_capacity - wrap_reservation;
 					assert(wrap_reservation >= stats.descriptorCopyCount); // for correct lockless wrap behaviour
 
@@ -2074,49 +2069,28 @@ std::mutex queue_locker;
 			{
 				if (pipeline_hash == x.first)
 				{
-					pipeline = x.second.Get();
+					auto pipeline_internal = to_internal(&x.second);
+					pipeline = pipeline_internal->resource.Get();
 					break;
 				}
 			}
 
 			if (pipeline == nullptr)
 			{
-				// make copy, mustn't overwrite internal_state from here!
-				PipelineState_DX12::PSO_STREAM stream = internal_state->stream;
+				PipelineState just_in_time_pso;
+				bool success = CreatePipelineState(&pso->desc, &just_in_time_pso, &commandlist.renderpass_info);
+				assert(success);
 
-				DXGI_FORMAT DSFormat = _ConvertFormat(commandlist.renderpass_info.ds_format);
-				D3D12_RT_FORMAT_ARRAY formats = {};
-				formats.NumRenderTargets = commandlist.renderpass_info.rt_count;
-				for (uint32_t i = 0; i < commandlist.renderpass_info.rt_count; ++i)
-				{
-					formats.RTFormats[i] = _ConvertFormat(commandlist.renderpass_info.rt_formats[i]);
-				}
-				DXGI_SAMPLE_DESC sampleDesc = {};
-				sampleDesc.Count = commandlist.renderpass_info.sample_count;
-				sampleDesc.Quality = 0;
+				commandlist.pipelines_worker.push_back(std::make_pair(pipeline_hash, just_in_time_pso));
 
-				stream.stream1.DSFormat = DSFormat;
-				stream.stream1.Formats = formats;
-				stream.stream1.SampleDesc = sampleDesc;
-
-				D3D12_PIPELINE_STATE_STREAM_DESC streamDesc = {};
-				streamDesc.pPipelineStateSubobjectStream = &stream;
-				streamDesc.SizeInBytes = sizeof(stream.stream1);
-				if (CheckCapability(GraphicsDeviceCapability::MESH_SHADER))
-				{
-					streamDesc.SizeInBytes += sizeof(stream.stream2);
-				}
-
-				ComPtr<ID3D12PipelineState> newpso;
-				dx12_check(device->CreatePipelineState(&streamDesc, PPV_ARGS(newpso)));
-
-				commandlist.pipelines_worker.push_back(std::make_pair(pipeline_hash, newpso));
-				pipeline = newpso.Get();
+				auto pipeline_internal = to_internal(&just_in_time_pso);
+				pipeline = pipeline_internal->resource.Get();
 			}
 		}
 		else
 		{
-			pipeline = it->second.Get();
+			auto pipeline_internal = to_internal(&it->second);
+			pipeline = pipeline_internal->resource.Get();
 		}
 		assert(pipeline != nullptr);
 
@@ -3471,6 +3445,8 @@ std::mutex queue_locker;
 
 		bool require_format_casting = has_flag(desc->misc_flags, ResourceMiscFlag::TYPED_FORMAT_CASTING);
 
+		texture->desc.mip_levels = GetMipCount(texture->desc);
+
 		HRESULT hr = E_FAIL;
 
 		D3D12MA::ALLOCATION_DESC allocationDesc = {};
@@ -3480,7 +3456,7 @@ std::mutex queue_locker;
 		resourcedesc.Format = _ConvertFormat(desc->format);
 		resourcedesc.Width = desc->width;
 		resourcedesc.Height = desc->height;
-		resourcedesc.MipLevels = desc->mip_levels;
+		resourcedesc.MipLevels = texture->desc.mip_levels;
 		resourcedesc.Layout = D3D12_TEXTURE_LAYOUT_UNKNOWN;
 		resourcedesc.DepthOrArraySize = (UINT16)desc->array_size;
 		resourcedesc.SampleDesc.Count = desc->sample_count;
@@ -3573,13 +3549,8 @@ std::mutex queue_locker;
 			resourceState = D3D12_RESOURCE_STATE_COMMON;
 		}
 
-		if (texture->desc.mip_levels == 0)
-		{
-			texture->desc.mip_levels = GetMipCount(texture->desc.width, texture->desc.height, texture->desc.depth);
-		}
-
 		internal_state->total_size = 0;
-		internal_state->footprints.resize(desc->array_size * std::max(1u, desc->mip_levels));
+		internal_state->footprints.resize(GetTextureSubresourceCount(texture->desc));
 		internal_state->rowSizesInBytes.resize(internal_state->footprints.size());
 		internal_state->numRows.resize(internal_state->footprints.size());
 		device->GetCopyableFootprints(
@@ -4014,8 +3985,11 @@ std::mutex queue_locker;
 		auto internal_state = wi::allocator::make_shared<PipelineState_DX12>();
 		internal_state->allocationhandler = allocationhandler;
 		pso->internal_state = internal_state;
-
 		pso->desc = *desc;
+
+		const RasterizerState& rs_desc = pso->desc.rs != nullptr ? *pso->desc.rs : default_rasterizerstate;
+		const DepthStencilState& dss_desc = pso->desc.dss != nullptr ? *pso->desc.dss : default_depthstencilstate;
+		const BlendState& bs_desc = pso->desc.bs != nullptr ? *pso->desc.bs : default_blendstate;
 
 		auto& stream = internal_state->stream;
 		//stream.stream1.Flags |= D3D12_PIPELINE_STATE_FLAG_DYNAMIC_DEPTH_BIAS; // doesn't work on windows 10
@@ -4109,40 +4083,38 @@ std::mutex queue_locker;
 		assert(internal_state->rootsig_desc != nullptr);
 		internal_state->rootsig_optimizer.init(*internal_state->rootsig_desc);
 
-		RasterizerState pRasterizerStateDesc = pso->desc.rs != nullptr ? *pso->desc.rs : RasterizerState();
 		CD3DX12_RASTERIZER_DESC rs = {};
-		rs.FillMode = _ConvertFillMode(pRasterizerStateDesc.fill_mode);
-		rs.CullMode = _ConvertCullMode(pRasterizerStateDesc.cull_mode);
-		rs.FrontCounterClockwise = pRasterizerStateDesc.front_counter_clockwise;
-		rs.DepthBias = pRasterizerStateDesc.depth_bias;
-		rs.DepthBiasClamp = pRasterizerStateDesc.depth_bias_clamp;
-		rs.SlopeScaledDepthBias = pRasterizerStateDesc.slope_scaled_depth_bias;
-		rs.DepthClipEnable = pRasterizerStateDesc.depth_clip_enable;
-		rs.MultisampleEnable = pRasterizerStateDesc.multisample_enable;
-		rs.AntialiasedLineEnable = pRasterizerStateDesc.antialiased_line_enable;
-		rs.ConservativeRaster = ((CheckCapability(GraphicsDeviceCapability::CONSERVATIVE_RASTERIZATION) && pRasterizerStateDesc.conservative_rasterization_enable) ? D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON : D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF);
-		rs.ForcedSampleCount = pRasterizerStateDesc.forced_sample_count;
+		rs.FillMode = _ConvertFillMode(rs_desc.fill_mode);
+		rs.CullMode = _ConvertCullMode(rs_desc.cull_mode);
+		rs.FrontCounterClockwise = rs_desc.front_counter_clockwise;
+		rs.DepthBias = rs_desc.depth_bias;
+		rs.DepthBiasClamp = rs_desc.depth_bias_clamp;
+		rs.SlopeScaledDepthBias = rs_desc.slope_scaled_depth_bias;
+		rs.DepthClipEnable = rs_desc.depth_clip_enable;
+		rs.MultisampleEnable = rs_desc.multisample_enable;
+		rs.AntialiasedLineEnable = rs_desc.antialiased_line_enable;
+		rs.ConservativeRaster = ((CheckCapability(GraphicsDeviceCapability::CONSERVATIVE_RASTERIZATION) && rs_desc.conservative_rasterization_enable) ? D3D12_CONSERVATIVE_RASTERIZATION_MODE_ON : D3D12_CONSERVATIVE_RASTERIZATION_MODE_OFF);
+		rs.ForcedSampleCount = rs_desc.forced_sample_count;
 		stream.stream1.RS = rs;
 
-		DepthStencilState pDepthStencilStateDesc = pso->desc.dss != nullptr ? *pso->desc.dss : DepthStencilState();
 		CD3DX12_DEPTH_STENCIL_DESC1 dss = {};
-		dss.DepthEnable = pDepthStencilStateDesc.depth_enable;
-		dss.DepthWriteMask = _ConvertDepthWriteMask(pDepthStencilStateDesc.depth_write_mask);
-		dss.DepthFunc = _ConvertComparisonFunc(pDepthStencilStateDesc.depth_func);
-		dss.StencilEnable = pDepthStencilStateDesc.stencil_enable;
-		dss.StencilReadMask = pDepthStencilStateDesc.stencil_read_mask;
-		dss.StencilWriteMask = pDepthStencilStateDesc.stencil_write_mask;
-		dss.FrontFace.StencilDepthFailOp = _ConvertStencilOp(pDepthStencilStateDesc.front_face.stencil_depth_fail_op);
-		dss.FrontFace.StencilFailOp = _ConvertStencilOp(pDepthStencilStateDesc.front_face.stencil_fail_op);
-		dss.FrontFace.StencilFunc = _ConvertComparisonFunc(pDepthStencilStateDesc.front_face.stencil_func);
-		dss.FrontFace.StencilPassOp = _ConvertStencilOp(pDepthStencilStateDesc.front_face.stencil_pass_op);
-		dss.BackFace.StencilDepthFailOp = _ConvertStencilOp(pDepthStencilStateDesc.back_face.stencil_depth_fail_op);
-		dss.BackFace.StencilFailOp = _ConvertStencilOp(pDepthStencilStateDesc.back_face.stencil_fail_op);
-		dss.BackFace.StencilFunc = _ConvertComparisonFunc(pDepthStencilStateDesc.back_face.stencil_func);
-		dss.BackFace.StencilPassOp = _ConvertStencilOp(pDepthStencilStateDesc.back_face.stencil_pass_op);
+		dss.DepthEnable = dss_desc.depth_enable;
+		dss.DepthWriteMask = _ConvertDepthWriteMask(dss_desc.depth_write_mask);
+		dss.DepthFunc = _ConvertComparisonFunc(dss_desc.depth_func);
+		dss.StencilEnable = dss_desc.stencil_enable;
+		dss.StencilReadMask = dss_desc.stencil_read_mask;
+		dss.StencilWriteMask = dss_desc.stencil_write_mask;
+		dss.FrontFace.StencilDepthFailOp = _ConvertStencilOp(dss_desc.front_face.stencil_depth_fail_op);
+		dss.FrontFace.StencilFailOp = _ConvertStencilOp(dss_desc.front_face.stencil_fail_op);
+		dss.FrontFace.StencilFunc = _ConvertComparisonFunc(dss_desc.front_face.stencil_func);
+		dss.FrontFace.StencilPassOp = _ConvertStencilOp(dss_desc.front_face.stencil_pass_op);
+		dss.BackFace.StencilDepthFailOp = _ConvertStencilOp(dss_desc.back_face.stencil_depth_fail_op);
+		dss.BackFace.StencilFailOp = _ConvertStencilOp(dss_desc.back_face.stencil_fail_op);
+		dss.BackFace.StencilFunc = _ConvertComparisonFunc(dss_desc.back_face.stencil_func);
+		dss.BackFace.StencilPassOp = _ConvertStencilOp(dss_desc.back_face.stencil_pass_op);
 		if (CheckCapability(GraphicsDeviceCapability::DEPTH_BOUNDS_TEST))
 		{
-			dss.DepthBoundsTestEnable = pDepthStencilStateDesc.depth_bounds_test_enable;
+			dss.DepthBoundsTestEnable = dss_desc.depth_bounds_test_enable;
 		}
 		else
 		{
@@ -4150,29 +4122,27 @@ std::mutex queue_locker;
 		}
 		stream.stream1.DSS = dss;
 
-		BlendState pBlendStateDesc = pso->desc.bs != nullptr ? *pso->desc.bs : BlendState();
 		CD3DX12_BLEND_DESC bd = {};
-		bd.AlphaToCoverageEnable = pBlendStateDesc.alpha_to_coverage_enable;
-		bd.IndependentBlendEnable = pBlendStateDesc.independent_blend_enable;
+		bd.AlphaToCoverageEnable = bs_desc.alpha_to_coverage_enable;
+		bd.IndependentBlendEnable = bs_desc.independent_blend_enable;
 		for (int i = 0; i < 8; ++i)
 		{
-			bd.RenderTarget[i].BlendEnable = pBlendStateDesc.render_target[i].blend_enable;
-			bd.RenderTarget[i].SrcBlend = _ConvertBlend(pBlendStateDesc.render_target[i].src_blend);
-			bd.RenderTarget[i].DestBlend = _ConvertBlend(pBlendStateDesc.render_target[i].dest_blend);
-			bd.RenderTarget[i].BlendOp = _ConvertBlendOp(pBlendStateDesc.render_target[i].blend_op);
-			bd.RenderTarget[i].SrcBlendAlpha = _ConvertAlphaBlend(pBlendStateDesc.render_target[i].src_blend_alpha);
-			bd.RenderTarget[i].DestBlendAlpha = _ConvertAlphaBlend(pBlendStateDesc.render_target[i].dest_blend_alpha);
-			bd.RenderTarget[i].BlendOpAlpha = _ConvertBlendOp(pBlendStateDesc.render_target[i].blend_op_alpha);
-			bd.RenderTarget[i].RenderTargetWriteMask = _ParseColorWriteMask(pBlendStateDesc.render_target[i].render_target_write_mask);
+			bd.RenderTarget[i].BlendEnable = bs_desc.render_target[i].blend_enable;
+			bd.RenderTarget[i].SrcBlend = _ConvertBlend(bs_desc.render_target[i].src_blend);
+			bd.RenderTarget[i].DestBlend = _ConvertBlend(bs_desc.render_target[i].dest_blend);
+			bd.RenderTarget[i].BlendOp = _ConvertBlendOp(bs_desc.render_target[i].blend_op);
+			bd.RenderTarget[i].SrcBlendAlpha = _ConvertAlphaBlend(bs_desc.render_target[i].src_blend_alpha);
+			bd.RenderTarget[i].DestBlendAlpha = _ConvertAlphaBlend(bs_desc.render_target[i].dest_blend_alpha);
+			bd.RenderTarget[i].BlendOpAlpha = _ConvertBlendOp(bs_desc.render_target[i].blend_op_alpha);
+			bd.RenderTarget[i].RenderTargetWriteMask = _ParseColorWriteMask(bs_desc.render_target[i].render_target_write_mask);
 		}
 		stream.stream1.BD = bd;
 
-		auto& elements = internal_state->input_elements;
+		D3D12_INPUT_ELEMENT_DESC elements[D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT] = {};
 		D3D12_INPUT_LAYOUT_DESC il = {};
 		if (pso->desc.il != nullptr)
 		{
-			il.NumElements = (uint32_t)pso->desc.il->elements.size();
-			elements.resize(il.NumElements);
+			il.NumElements = std::min((uint32_t)pso->desc.il->elements.size(), (uint32_t)D3D12_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT);
 			for (uint32_t i = 0; i < il.NumElements; ++i)
 			{
 				elements[i].SemanticName = pso->desc.il->elements[i].semantic_name.c_str();
@@ -4189,8 +4159,8 @@ std::mutex queue_locker;
 					elements[i].InstanceDataStepRate = 1;
 				}
 			}
+			il.pInputElementDescs = elements;
 		}
-		il.pInputElementDescs = elements.data();
 		stream.stream1.IL = il;
 
 		stream.stream1.SampleMask = pso->desc.sample_mask;
@@ -5361,12 +5331,6 @@ std::mutex queue_locker;
 					{
 						pipelines_global[x.first] = x.second;
 					}
-					else
-					{
-						allocationhandler->destroylocker.lock();
-						allocationhandler->destroyer_pipelines.push_back(std::make_pair(x.second, FRAMECOUNT));
-						allocationhandler->destroylocker.unlock();
-					}
 				}
 				commandlist.pipelines_worker.clear();
 			}
@@ -5739,18 +5703,10 @@ std::mutex queue_locker;
 	{
 		allocationhandler->destroylocker.lock();
 
-		for (auto& x : pipelines_global)
-		{
-			allocationhandler->destroyer_pipelines.push_back(std::make_pair(x.second, FRAMECOUNT));
-		}
 		pipelines_global.clear();
 
 		for (auto& x : commandlists)
 		{
-			for (auto& y : x->pipelines_worker)
-			{
-				allocationhandler->destroyer_pipelines.push_back(std::make_pair(y.second, FRAMECOUNT));
-			}
 			x->pipelines_worker.clear();
 		}
 		allocationhandler->destroylocker.unlock();

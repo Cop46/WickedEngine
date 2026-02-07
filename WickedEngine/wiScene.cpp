@@ -274,7 +274,6 @@ namespace wi::scene
 			desc.stride = (uint32_t)device->GetTopLevelAccelerationStructureInstanceSize();
 			desc.size = desc.stride * instanceArraySize * 2; // *2 to grow fast
 			desc.usage = Usage::UPLOAD;
-			desc.alignment = 16ull; // vulkan
 			if (TLAS_instancesUpload->desc.size < desc.size)
 			{
 				for (int i = 0; i < arraysize(TLAS_instancesUpload); ++i)
@@ -4193,16 +4192,30 @@ namespace wi::scene
 
 			if (textureStreamingFeedbackMapped != nullptr)
 			{
-				const uint32_t request_packed = textureStreamingFeedbackMapped[args.jobIndex];
-				if (request_packed != 0)
+				if (material.IsTextureStreamingDisabled())
 				{
-					const uint32_t request_uvset0 = request_packed & 0xFFFF;
-					const uint32_t request_uvset1 = (request_packed >> 16u) & 0xFFFF;
+					// Request maximum resolution to keep textures fully loaded
 					for (auto& slot : material.textures)
 					{
 						if (slot.resource.IsValid())
 						{
-							slot.resource.StreamingRequestResolution(slot.uvset == 0 ? request_uvset0 : request_uvset1);
+							slot.resource.StreamingRequestResolution(65536);
+						}
+					}
+				}
+				else
+				{
+					const uint32_t request_packed = textureStreamingFeedbackMapped[args.jobIndex];
+					if (request_packed != 0)
+					{
+						const uint32_t request_uvset0 = request_packed & 0xFFFF;
+						const uint32_t request_uvset1 = (request_packed >> 16u) & 0xFFFF;
+						for (auto& slot : material.textures)
+						{
+							if (slot.resource.IsValid())
+							{
+								slot.resource.StreamingRequestResolution(slot.uvset == 0 ? request_uvset0 : request_uvset1);
+							}
 						}
 					}
 				}
@@ -6295,14 +6308,16 @@ namespace wi::scene
 								mesh->indices.push_back(current);
 								mesh->indices.push_back(next);
 							}
-
+						}
+						assert(vertexCount == mesh->vertex_positions.size());
+						assert(indexCount == mesh->indices.size());
+						if (generateFill)
+						{
 							mesh->ComputeNormals(spline.fill_normals_mode);
 						}
 						MeshComponent::MeshSubset& subset = mesh->subsets.front();
 						subset.indexCount = (uint32_t)mesh->indices.size();
 						subset.indexOffset = 0;
-						assert(vertexCount == mesh->vertex_positions.size());
-						assert(indexCount == mesh->indices.size());
 						mesh->CreateRenderData();
 					}
 					ObjectComponent* object = objects.GetComponent(entity);

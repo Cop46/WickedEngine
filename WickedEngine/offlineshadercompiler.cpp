@@ -327,25 +327,23 @@ wi::vector<ShaderEntry> shaders = {
 	{"objectVS_prepass", wi::graphics::ShaderStage::VS },
 	{"objectVS_prepass_alphatest", wi::graphics::ShaderStage::VS },
 	{"objectVS_prepass_tessellation", wi::graphics::ShaderStage::VS },
-	{"objectVS_prepass_alphatest_tessellation", wi::graphics::ShaderStage::VS },
 	{"objectVS_simple_tessellation", wi::graphics::ShaderStage::VS },
 	{"shadowVS", wi::graphics::ShaderStage::VS },
 	{"shadowVS_alphatest", wi::graphics::ShaderStage::VS },
 	{"shadowVS_transparent", wi::graphics::ShaderStage::VS },
 	{"screenVS", wi::graphics::ShaderStage::VS },
+	{"voxelgridVS", wi::graphics::ShaderStage::VS },
 	{"trailVS", wi::graphics::ShaderStage::VS },
 
 
 
 	{"objectDS", wi::graphics::ShaderStage::DS },
 	{"objectDS_prepass", wi::graphics::ShaderStage::DS },
-	{"objectDS_prepass_alphatest", wi::graphics::ShaderStage::DS },
 	{"objectDS_simple", wi::graphics::ShaderStage::DS },
 
 
 	{"objectHS", wi::graphics::ShaderStage::HS },
 	{"objectHS_prepass", wi::graphics::ShaderStage::HS },
-	{"objectHS_prepass_alphatest", wi::graphics::ShaderStage::HS },
 	{"objectHS_simple", wi::graphics::ShaderStage::HS },
 
 	{"emittedparticleMS", wi::graphics::ShaderStage::MS },
@@ -407,6 +405,7 @@ int main(int argc, char* argv[])
 	*out << "\tdisable_optimization : \tShaders will be compiled without optimizations\n";
 	*out << "\tstrip_reflection : \tReflection will be stripped from shader binary to reduce file size\n";
 	*out << "\tshaderdump : \t\tShaders will be saved to wiShaderDump.h C++ header file (can be combined with \"rebuild\")\n";
+	*out << "\tdebuginfo : \t\tKeep symbol data for shader debugging\n";
 	*out << "\tquiet : \t\tOnly print errors\n";
 	*out << "\tsm6.1 : \t\tIncrease all compilations to shader model 6.1\n";
 	*out << "\tsm6.2 : \t\tIncrease all compilations to shader model 6.2\n";
@@ -463,6 +462,12 @@ int main(int argc, char* argv[])
 	{
 		compile_flags |= wi::shadercompiler::Flags::DISABLE_OPTIMIZATION;
 		*out << "disable_optimization ";
+	}
+
+	if (wi::arguments::HasArgument("debuginfo"))
+	{
+		compile_flags |= wi::shadercompiler::Flags::KEEP_DEBUG_INFORMATION;
+		*out << "debuginfo ";
 	}
 
 	if (wi::arguments::HasArgument("strip_reflection"))

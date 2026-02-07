@@ -8,13 +8,13 @@
 #include "wiTimer.h"
 #include "wiBacklog.h"
 
+#include <Metal/MTL4AccelerationStructure.hpp>
+
 namespace wi::graphics
 {
 
 namespace metal_internal
 {
-	static constexpr uint64_t bindless_resource_capacity = 500000;
-	static constexpr uint64_t bindless_sampler_capacity = 256;
 	static constexpr MTL::SparsePageSize sparse_page_size = MTL::SparsePageSize256;
 
 	constexpr MTL::AttributeFormat _ConvertAttributeFormat(Format value)
@@ -1083,6 +1083,45 @@ using namespace metal_internal;
 		commandlist.barriers.clear();
 	}
 
+	void GraphicsDevice_Metal::clear_flush(CommandList cmd)
+	{
+		CommandList_Metal& commandlist = GetCommandList(cmd);
+		if (commandlist.texture_clears.empty())
+			return;
+		
+		if (commandlist.compute_encoder.get() != nullptr)
+		{
+			commandlist.compute_encoder->endEncoding();
+			commandlist.compute_encoder.reset();
+		}
+		NS::SharedPtr<NS::AutoreleasePool> autorelease_pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
+		constexpr size_t batching = 8; // batch up to 8 clears into one pass (probably more will not be supported by renderpass)
+		size_t offset = 0;
+		while (offset < commandlist.texture_clears.size())
+		{
+			NS::SharedPtr<MTL4::RenderPassDescriptor> descriptor = NS::TransferPtr(MTL4::RenderPassDescriptor::alloc()->init());
+			NS::SharedPtr<MTL::RenderPassColorAttachmentDescriptor> color_attachment_descriptors[8];
+			for (size_t i = 0; (i < batching) && ((offset + i) < commandlist.texture_clears.size()); ++i)
+			{
+				const size_t index = offset + i;
+				NS::SharedPtr<MTL::RenderPassColorAttachmentDescriptor>& color_attachment_descriptor = color_attachment_descriptors[i];
+				color_attachment_descriptor = NS::TransferPtr(MTL::RenderPassColorAttachmentDescriptor::alloc()->init());
+				const uint32_t value = commandlist.texture_clears[index].second;
+				color_attachment_descriptor->setTexture(commandlist.texture_clears[index].first.get());
+				color_attachment_descriptor->setClearColor(MTL::ClearColor::Make((value & 0xFF) / 255.0f, ((value >> 8u) & 0xFF) / 255.0f, ((value >> 16u) & 0xFF) / 255.0f, ((value >> 24u) & 0xFF) / 255.0f));
+				color_attachment_descriptor->setLoadAction(MTL::LoadActionClear);
+				color_attachment_descriptor->setStoreAction(MTL::StoreActionStore);
+				descriptor->colorAttachments()->setObject(color_attachment_descriptor.get(), i);
+			}
+			MTL4::RenderCommandEncoder* encoder = commandlist.commandbuffer->renderCommandEncoder(descriptor.get());
+			encoder->setLabel(NS::String::string("ClearUAV", NS::UTF8StringEncoding));
+			encoder->barrierAfterStages(MTL::StageAll, MTL::StageAll, MTL4::VisibilityOptionNone); // TODO: flickering issues in several places without this
+			encoder->endEncoding();
+			offset += batching;
+		}
+		commandlist.texture_clears.clear();
+	}
+
 	void GraphicsDevice_Metal::pso_validate(CommandList cmd)
 	{
 		CommandList_Metal& commandlist = GetCommandList(cmd);
@@ -1149,10 +1188,10 @@ using namespace metal_internal;
 			commandlist.render_encoder->setRenderPipelineState(internal_state->render_pipeline.get());
 			commandlist.render_encoder->setDepthStencilState(internal_state->depth_stencil_state.get());
 		}
-		
-		const RasterizerState& rs = commandlist.active_pso->desc.rs == nullptr ? RasterizerState() : *commandlist.active_pso->desc.rs;
+
+		const RasterizerState& rs_desc = pso->desc.rs != nullptr ? *pso->desc.rs : default_rasterizerstate;
 		MTL::CullMode cull_mode = {};
-		switch (rs.cull_mode)
+		switch (rs_desc.cull_mode)
 		{
 			case CullMode::BACK:
 				cull_mode = MTL::CullModeBack;
@@ -1165,10 +1204,10 @@ using namespace metal_internal;
 				break;
 		}
 		commandlist.render_encoder->setCullMode(cull_mode);
-		commandlist.render_encoder->setDepthBias((float)rs.depth_bias, rs.slope_scaled_depth_bias, rs.depth_bias_clamp);
-		commandlist.render_encoder->setDepthClipMode(rs.depth_clip_enable ? MTL::DepthClipModeClip : MTL::DepthClipModeClamp);
+		commandlist.render_encoder->setDepthBias((float)rs_desc.depth_bias, rs_desc.slope_scaled_depth_bias, rs_desc.depth_bias_clamp);
+		commandlist.render_encoder->setDepthClipMode(rs_desc.depth_clip_enable ? MTL::DepthClipModeClip : MTL::DepthClipModeClamp);
 		MTL::TriangleFillMode fill_mode = {};
-		switch (rs.fill_mode)
+		switch (rs_desc.fill_mode)
 		{
 			case FillMode::SOLID:
 				fill_mode = MTL::TriangleFillModeFill;
@@ -1178,7 +1217,7 @@ using namespace metal_internal;
 				break;
 		}
 		commandlist.render_encoder->setTriangleFillMode(fill_mode);
-		commandlist.render_encoder->setFrontFacingWinding(rs.front_counter_clockwise ? MTL::WindingCounterClockwise : MTL::WindingClockwise);
+		commandlist.render_encoder->setFrontFacingWinding(rs_desc.front_counter_clockwise ? MTL::WindingCounterClockwise : MTL::WindingClockwise);
 		
 		switch (pso->desc.pt)
 		{
@@ -1243,6 +1282,7 @@ using namespace metal_internal;
 	}
 	void GraphicsDevice_Metal::predispatch(CommandList cmd)
 	{
+		clear_flush(cmd);
 		CommandList_Metal& commandlist = GetCommandList(cmd);
 		if (commandlist.compute_encoder.get() == nullptr)
 		{
@@ -1270,6 +1310,7 @@ using namespace metal_internal;
 	}
 	void GraphicsDevice_Metal::precopy(CommandList cmd)
 	{
+		clear_flush(cmd);
 		CommandList_Metal& commandlist = GetCommandList(cmd);
 		if (commandlist.compute_encoder.get() == nullptr)
 		{
@@ -1334,29 +1375,29 @@ using namespace metal_internal;
 		argument_table_desc->setMaxTextureBindCount(0);
 		argument_table_desc->setMaxSamplerStateBindCount(0);
 		
-		descriptor_heap_res = NS::TransferPtr(device->newBuffer(bindless_resource_capacity * sizeof(IRDescriptorTableEntry), MTL::ResourceStorageModeShared));
+		descriptor_heap_res = NS::TransferPtr(device->newBuffer(BINDLESS_RESOURCE_CAPACITY * sizeof(IRDescriptorTableEntry), MTL::ResourceStorageModeShared));
 		descriptor_heap_res->setLabel(NS::TransferPtr(NS::String::alloc()->init("descriptor_heap_res", NS::UTF8StringEncoding)).get());
 		
-		const uint64_t real_bindless_sampler_capacity = std::min(bindless_sampler_capacity, (uint64_t)device->maxArgumentBufferSamplerCount());
+		const uint64_t real_bindless_sampler_capacity = std::min((uint64_t)BINDLESS_SAMPLER_CAPACITY, (uint64_t)device->maxArgumentBufferSamplerCount());
 		descriptor_heap_sam = NS::TransferPtr(device->newBuffer(real_bindless_sampler_capacity * sizeof(IRDescriptorTableEntry), MTL::ResourceStorageModeShared));
 		descriptor_heap_sam->setLabel(NS::TransferPtr(NS::String::alloc()->init("descriptor_heap_sam", NS::UTF8StringEncoding)).get());
 		
 		descriptor_heap_res_data = (IRDescriptorTableEntry*)descriptor_heap_res->contents();
 		descriptor_heap_sam_data = (IRDescriptorTableEntry*)descriptor_heap_sam->contents();
 		
-		allocationhandler->free_bindless_res.reserve(bindless_resource_capacity);
+		allocationhandler->free_bindless_res.reserve(BINDLESS_RESOURCE_CAPACITY);
 		allocationhandler->free_bindless_sam.reserve(real_bindless_sampler_capacity);
 		for (int i = 0; i < real_bindless_sampler_capacity; ++i)
 		{
 			allocationhandler->free_bindless_sam.push_back((int)real_bindless_sampler_capacity - i - 1);
 		}
-		for (int i = 0; i < bindless_resource_capacity; ++i)
+		for (int i = 0; i < BINDLESS_RESOURCE_CAPACITY; ++i)
 		{
-			allocationhandler->free_bindless_res.push_back((int)bindless_resource_capacity - i - 1);
+			allocationhandler->free_bindless_res.push_back((int)BINDLESS_RESOURCE_CAPACITY - i - 1);
 		}
 		
 		NS::SharedPtr<MTL::ResidencySetDescriptor> residency_set_descriptor = NS::TransferPtr(MTL::ResidencySetDescriptor::alloc()->init());
-		residency_set_descriptor->setInitialCapacity(bindless_resource_capacity + real_bindless_sampler_capacity);
+		residency_set_descriptor->setInitialCapacity(BINDLESS_RESOURCE_CAPACITY + real_bindless_sampler_capacity);
 		NS::Error* error = nullptr;
 		allocationhandler->residency_set = NS::TransferPtr(device->newResidencySet(residency_set_descriptor.get(), &error));
 		if (error != nullptr)
@@ -1371,7 +1412,7 @@ using namespace metal_internal;
 		
 #ifdef USE_TEXTURE_VIEW_POOL
 		NS::SharedPtr<MTL::ResourceViewPoolDescriptor> view_pool_desc = NS::TransferPtr(MTL::ResourceViewPoolDescriptor::alloc()->init());
-		view_pool_desc->setResourceViewCount(bindless_resource_capacity);
+		view_pool_desc->setResourceViewCount(BINDLESS_RESOURCE_CAPACITY);
 		texture_view_pool = NS::TransferPtr(device->newTextureViewPool(view_pool_desc.get(), &error));
 		if (error != nullptr)
 		{
@@ -1656,11 +1697,8 @@ using namespace metal_internal;
 		
 		const bool sparse = has_flag(desc->misc_flags, ResourceMiscFlag::SPARSE);
 		const bool aliasing_storage = has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_BUFFER) || has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_TEXTURE_NON_RT_DS) || has_flag(desc->misc_flags, ResourceMiscFlag::ALIASING_TEXTURE_RT_DS);
-		
-		if (texture->desc.mip_levels == 0)
-		{
-			texture->desc.mip_levels = GetMipCount(texture->desc.width, texture->desc.height, texture->desc.depth);
-		}
+
+		texture->desc.mip_levels = GetMipCount(texture->desc);
 		
 		NS::SharedPtr<MTL::TextureDescriptor> descriptor = NS::TransferPtr(MTL::TextureDescriptor::alloc()->init());
 		descriptor->setWidth(desc->width);
@@ -1895,7 +1933,7 @@ using namespace metal_internal;
 				uint32_t width = desc->width;
 				uint32_t height = desc->height;
 				uint32_t depth = desc->depth;
-				for (uint32_t mip = 0; mip < desc->mip_levels; ++mip)
+				for (uint32_t mip = 0; mip < texture->desc.mip_levels; ++mip)
 				{
 					const SubresourceData& subresourceData = initial_data[initDataIdx++];
 					const uint32_t block_size = GetFormatBlockSize(desc->format);
@@ -2227,6 +2265,9 @@ using namespace metal_internal;
 		internal_state->allocationhandler = allocationhandler;
 		pso->internal_state = internal_state;
 		pso->desc = *desc;
+
+		const DepthStencilState& dss_desc = pso->desc.dss != nullptr ? *pso->desc.dss : default_depthstencilstate;
+		const BlendState& bs_desc = pso->desc.bs != nullptr ? *pso->desc.bs : default_blendstate;
 		
 		if (desc->vs != nullptr)
 		{
@@ -2347,17 +2388,16 @@ using namespace metal_internal;
 				NS::TransferPtr(MTL::RenderPipelineColorAttachmentDescriptor::alloc()->init()),
 				NS::TransferPtr(MTL::RenderPipelineColorAttachmentDescriptor::alloc()->init()),
 			};
-			const BlendState& bs = desc->bs == nullptr ? BlendState() : *desc->bs;
 			if (internal_state->descriptor.get() != nullptr)
-				internal_state->descriptor->setAlphaToCoverageEnabled(bs.alpha_to_coverage_enable);
+				internal_state->descriptor->setAlphaToCoverageEnabled(bs_desc.alpha_to_coverage_enable);
 			else
-				internal_state->ms_descriptor->setAlphaToCoverageEnabled(bs.alpha_to_coverage_enable);
+				internal_state->ms_descriptor->setAlphaToCoverageEnabled(bs_desc.alpha_to_coverage_enable);
 			for (uint32_t i = 0; i < renderpass_info->rt_count; ++i)
 			{
 				MTL::RenderPipelineColorAttachmentDescriptor& attachment = *attachments[i].get();
 				attachment.setPixelFormat(_ConvertPixelFormat(renderpass_info->rt_formats[i]));
 				
-				const BlendState::RenderTargetBlendState& bs_rt = bs.render_target[i];
+				const BlendState::RenderTargetBlendState& bs_rt = bs_desc.render_target[i];
 				MTL::ColorWriteMask color_write_mask = {};
 				if (has_flag(bs_rt.render_target_write_mask, ColorWrite::ENABLE_RED))
 				{
@@ -2415,31 +2455,30 @@ using namespace metal_internal;
 			else
 				internal_state->ms_descriptor->setRasterSampleCount(sample_count);
 			
-			const DepthStencilState& dss = desc->dss == nullptr ? DepthStencilState() : *desc->dss;
 			NS::SharedPtr<MTL::DepthStencilDescriptor> depth_stencil_desc = NS::TransferPtr(MTL::DepthStencilDescriptor::alloc()->init());
-			if (dss.depth_enable && renderpass_info->ds_format != Format::UNKNOWN)
+			if (dss_desc.depth_enable && renderpass_info->ds_format != Format::UNKNOWN)
 			{
-				depth_stencil_desc->setDepthCompareFunction(_ConvertCompareFunction(dss.depth_func));
-				depth_stencil_desc->setDepthWriteEnabled(dss.depth_write_mask == DepthWriteMask::ALL);
+				depth_stencil_desc->setDepthCompareFunction(_ConvertCompareFunction(dss_desc.depth_func));
+				depth_stencil_desc->setDepthWriteEnabled(dss_desc.depth_write_mask == DepthWriteMask::ALL);
 			}
 			NS::SharedPtr<MTL::StencilDescriptor> stencil_front;
 			NS::SharedPtr<MTL::StencilDescriptor> stencil_back;
-			if (dss.stencil_enable && IsFormatStencilSupport(renderpass_info->ds_format))
+			if (dss_desc.stencil_enable && IsFormatStencilSupport(renderpass_info->ds_format))
 			{
 				stencil_front = NS::TransferPtr(MTL::StencilDescriptor::alloc()->init());
 				stencil_back = NS::TransferPtr(MTL::StencilDescriptor::alloc()->init());
-				stencil_front->setReadMask(dss.stencil_read_mask);
-				stencil_front->setWriteMask(dss.stencil_write_mask);
-				stencil_front->setStencilCompareFunction(_ConvertCompareFunction(dss.front_face.stencil_func));
-				stencil_front->setStencilFailureOperation(_ConvertStencilOperation(dss.front_face.stencil_fail_op));
-				stencil_front->setDepthFailureOperation(_ConvertStencilOperation(dss.front_face.stencil_depth_fail_op));
-				stencil_front->setDepthStencilPassOperation(_ConvertStencilOperation(dss.front_face.stencil_pass_op));
-				stencil_back->setReadMask(dss.stencil_read_mask);
-				stencil_back->setWriteMask(dss.stencil_write_mask);
-				stencil_back->setStencilCompareFunction(_ConvertCompareFunction(dss.back_face.stencil_func));
-				stencil_back->setStencilFailureOperation(_ConvertStencilOperation(dss.back_face.stencil_fail_op));
-				stencil_back->setDepthFailureOperation(_ConvertStencilOperation(dss.back_face.stencil_depth_fail_op));
-				stencil_back->setDepthStencilPassOperation(_ConvertStencilOperation(dss.back_face.stencil_pass_op));
+				stencil_front->setReadMask(dss_desc.stencil_read_mask);
+				stencil_front->setWriteMask(dss_desc.stencil_write_mask);
+				stencil_front->setStencilCompareFunction(_ConvertCompareFunction(dss_desc.front_face.stencil_func));
+				stencil_front->setStencilFailureOperation(_ConvertStencilOperation(dss_desc.front_face.stencil_fail_op));
+				stencil_front->setDepthFailureOperation(_ConvertStencilOperation(dss_desc.front_face.stencil_depth_fail_op));
+				stencil_front->setDepthStencilPassOperation(_ConvertStencilOperation(dss_desc.front_face.stencil_pass_op));
+				stencil_back->setReadMask(dss_desc.stencil_read_mask);
+				stencil_back->setWriteMask(dss_desc.stencil_write_mask);
+				stencil_back->setStencilCompareFunction(_ConvertCompareFunction(dss_desc.back_face.stencil_func));
+				stencil_back->setStencilFailureOperation(_ConvertStencilOperation(dss_desc.back_face.stencil_fail_op));
+				stencil_back->setDepthFailureOperation(_ConvertStencilOperation(dss_desc.back_face.stencil_depth_fail_op));
+				stencil_back->setDepthStencilPassOperation(_ConvertStencilOperation(dss_desc.back_face.stencil_pass_op));
 				depth_stencil_desc->setFrontFaceStencil(stencil_front.get());
 				depth_stencil_desc->setBackFaceStencil(stencil_back.get());
 			}
@@ -3390,6 +3429,7 @@ using namespace metal_internal;
 	}
 	void GraphicsDevice_Metal::RenderPassBegin(const SwapChain* swapchain, CommandList cmd)
 	{
+		clear_flush(cmd);
 		NS::SharedPtr<NS::AutoreleasePool> autorelease_pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
 		CommandList_Metal& commandlist = GetCommandList(cmd);
 		if (commandlist.compute_encoder.get() != nullptr)
@@ -3443,6 +3483,7 @@ using namespace metal_internal;
 	}
 	void GraphicsDevice_Metal::RenderPassBegin(const RenderPassImage* images, uint32_t image_count, const GPUQueryHeap* occlusionqueries, CommandList cmd, RenderPassFlags flags)
 	{
+		clear_flush(cmd);
 		NS::SharedPtr<NS::AutoreleasePool> autorelease_pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
 		CommandList_Metal& commandlist = GetCommandList(cmd);
 		if (commandlist.compute_encoder.get() != nullptr)
@@ -4465,24 +4506,21 @@ using namespace metal_internal;
 		CommandList_Metal& commandlist = GetCommandList(cmd);
 		if (resource->IsTexture())
 		{
-			if (commandlist.compute_encoder.get() != nullptr)
-			{
-				commandlist.compute_encoder->endEncoding();
-				commandlist.compute_encoder.reset();
-			}
 			auto internal_state = to_internal<Texture>(resource);
-			NS::SharedPtr<NS::AutoreleasePool> autorelease_pool = NS::TransferPtr(NS::AutoreleasePool::alloc()->init());
-			NS::SharedPtr<MTL4::RenderPassDescriptor> descriptor = NS::TransferPtr(MTL4::RenderPassDescriptor::alloc()->init());
-			NS::SharedPtr<MTL::RenderPassColorAttachmentDescriptor> color_attachment_descriptor = NS::TransferPtr(MTL::RenderPassColorAttachmentDescriptor::alloc()->init());
-			color_attachment_descriptor->setTexture(internal_state->texture.get());
-			color_attachment_descriptor->setClearColor(MTL::ClearColor::Make((value & 0xFF) / 255.0f, ((value >> 8u) & 0xFF) / 255.0f, ((value >> 16u) & 0xFF) / 255.0f, ((value >> 24u) & 0xFF) / 255.0f));
-			color_attachment_descriptor->setLoadAction(MTL::LoadActionClear);
-			color_attachment_descriptor->setStoreAction(MTL::StoreActionStore);
-			descriptor->colorAttachments()->setObject(color_attachment_descriptor.get(), 0);
-			MTL4::RenderCommandEncoder* encoder = commandlist.commandbuffer->renderCommandEncoder(descriptor.get());
-			encoder->barrierAfterStages(MTL::StageAll, MTL::StageAll, MTL4::VisibilityOptionNone); // TODO: flickering issues in several places without this
-			commandlist.barriers.clear();
-			encoder->endEncoding();
+			bool found = false;
+			for (auto& x : commandlist.texture_clears)
+			{
+				if (x.first.get() == internal_state->texture.get())
+				{
+					// Avoid adding batched clear command twice
+					found = true;
+					break;
+				}
+			}
+			if (!found)
+			{
+				commandlist.texture_clears.push_back(std::make_pair(internal_state->texture, value));
+			}
 		}
 		else if (resource->IsBuffer())
 		{
