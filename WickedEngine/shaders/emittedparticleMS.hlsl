@@ -10,7 +10,7 @@ static const float3 BILLBOARD[] = {
 };
 static const uint BILLBOARD_VERTEXCOUNT = 4;
 
-ByteAddressBuffer counterBuffer : register(t0);
+StructuredBuffer<ParticleCounters> counterBuffer : register(t0);
 StructuredBuffer<Particle> particleBuffer : register(t1);
 StructuredBuffer<uint> culledIndirectionBuffer : register(t2);
 StructuredBuffer<uint> culledIndirectionBuffer2 : register(t3);
@@ -22,9 +22,9 @@ static const uint PRIMITIVECOUNT = THREADCOUNT_MESH_SHADER * 2;
 struct VertextoPixel_MS
 {
 	float4 pos : SV_POSITION;
-	float clip : SV_ClipDistance0;
-	half4 tex : TEXCOORD0;
+	float4 tex : TEXCOORD0;
 	half2 unrotated_uv : UNROTATED_UV;
+	float clip : SV_ClipDistance0;
 };
 struct VertextoPixel_MS_PRIM
 {
@@ -43,7 +43,7 @@ void main(
 	out primitives VertextoPixel_MS_PRIM sharedPrimitives[PRIMITIVECOUNT],
     out indices uint3 triangles[PRIMITIVECOUNT])
 {
-	uint particleCount = counterBuffer.Load(PARTICLECOUNTER_OFFSET_CULLEDCOUNT);
+	uint particleCount = counterBuffer[0].culledCount;
 	uint realGroupCount = min(THREADCOUNT_MESH_SHADER, particleCount - gid * THREADCOUNT_MESH_SHADER);
 
     // Set number of outputs

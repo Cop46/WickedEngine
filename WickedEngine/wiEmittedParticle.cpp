@@ -227,8 +227,9 @@ namespace wi
 			GPUBufferDesc bd;
 			bd.usage = Usage::DEFAULT;
 			bd.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
-			bd.size = sizeof(counters);
-			bd.misc_flags = ResourceMiscFlag::BUFFER_RAW;
+			bd.stride = sizeof(counters);
+			bd.size = bd.stride;
+			bd.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
 			device->CreateBuffer(&bd, &counters, &counterBuffer);
 			device->SetName(&counterBuffer, "EmittedParticleSystem::counterBuffer");
 		}
@@ -240,11 +241,9 @@ namespace wi
 			// Indirect Execution buffer:
 			bd.usage = Usage::DEFAULT;
 			bd.bind_flags = BindFlag::UNORDERED_ACCESS;
-			bd.misc_flags = ResourceMiscFlag::BUFFER_RAW | ResourceMiscFlag::INDIRECT_ARGS;
-			bd.size =
-				align((uint64_t)sizeof(IndirectDispatchArgs), (uint64_t)IndirectDispatchArgsAlignment) +
-				align((uint64_t)sizeof(IndirectDispatchArgs), (uint64_t)IndirectDispatchArgsAlignment) +
-				align((uint64_t)sizeof(IndirectDrawArgsInstanced), (uint64_t)IndirectDrawArgsAlignment);
+			bd.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED | ResourceMiscFlag::INDIRECT_ARGS;
+			bd.stride = sizeof(EmitterIndirectArgs);
+			bd.size = bd.stride;
 			device->CreateBufferZeroed(&bd, &indirectBuffers);
 			device->SetName(&indirectBuffers, "EmittedParticleSystem::indirectBuffers");
 
@@ -618,7 +617,7 @@ namespace wi
 					&sphGridCells,
 				};
 				device->BindUAVs(uav_partition, 0, arraysize(uav_partition), cmd);
-				device->DispatchIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION, cmd);
+				device->DispatchIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 				{
 					GPUBarrier barriers[] = {
 						GPUBarrier::Memory(&sphGridCells),
@@ -663,7 +662,7 @@ namespace wi
 					&sphParticleCells,
 				};
 				device->BindUAVs(uav_binning, 0, arraysize(uav_binning), cmd);
-				device->DispatchIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION, cmd);
+				device->DispatchIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 				{
 					GPUBarrier barriers[] = {
 						GPUBarrier::Buffer(&sphGridCells, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE_COMPUTE),
@@ -690,7 +689,7 @@ namespace wi
 					&densityBuffer
 				};
 				device->BindUAVs(uav_density, 0, arraysize(uav_density), cmd);
-				device->DispatchIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION, cmd);
+				device->DispatchIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 				device->Barrier(GPUBarrier::Memory(), cmd);
 				device->EventEnd(cmd);
 
@@ -709,7 +708,7 @@ namespace wi
 					&particleBuffer,
 				};
 				device->BindUAVs(uav_force, 0, arraysize(uav_force), cmd);
-				device->DispatchIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION, cmd);
+				device->DispatchIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 				device->Barrier(GPUBarrier::Memory(), cmd);
 				device->EventEnd(cmd);
 
@@ -760,7 +759,7 @@ namespace wi
 					device->BindComputeShader(&simulateCS, cmd);
 				}
 			}
-			device->DispatchIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DISPATCHSIMULATION, cmd);
+			device->DispatchIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 			{
 				GPUBarrier barriers[] = {
 					GPUBarrier::Memory(),
@@ -775,7 +774,7 @@ namespace wi
 
 		if (IsSorted())
 		{
-			wi::gpusortlib::Sort(MAX_PARTICLES, distanceBuffer, counterBuffer, PARTICLECOUNTER_OFFSET_CULLEDCOUNT, culledIndirectionBuffer, cmd);
+			wi::gpusortlib::Sort(MAX_PARTICLES, distanceBuffer, counterBuffer, offsetof(ParticleCounters, culledCount), culledIndirectionBuffer, cmd);
 		}
 
 		if (!IsPaused() && dt > 0)
@@ -818,7 +817,7 @@ namespace wi
 
 		// Statistics is copied to readback:
 		const uint32_t oldest_stat_index = wi::graphics::GetDevice()->GetBufferIndex();
-		device->CopyResource(&statisticsReadbackBuffer[oldest_stat_index], &counterBuffer, cmd);
+		device->CopyBuffer(&statisticsReadbackBuffer[oldest_stat_index], 0, &counterBuffer, 0, sizeof(ParticleCounters), cmd);
 
 		{
 			const GPUBarrier barriers[] = {
@@ -868,11 +867,11 @@ namespace wi
 
 		if (ALLOW_MESH_SHADER && device->CheckCapability(GraphicsDeviceCapability::MESH_SHADER))
 		{
-			device->DispatchMeshIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DRAWPARTICLES, cmd);
+			device->DispatchMeshIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 		}
 		else
 		{
-			device->DrawInstancedIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DRAWPARTICLES, cmd);
+			device->DrawInstancedIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, draw), cmd);
 		}
 
 		if (wi::renderer::GetWireframeMode() == wi::renderer::WIREFRAME_OVERLAY)
@@ -880,11 +879,11 @@ namespace wi
 			device->BindPipelineState(&PSO_wire, cmd);
 			if (ALLOW_MESH_SHADER && device->CheckCapability(GraphicsDeviceCapability::MESH_SHADER))
 			{
-				device->DispatchMeshIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DRAWPARTICLES, cmd);
+				device->DispatchMeshIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, dispatch), cmd);
 			}
 			else
 			{
-				device->DrawInstancedIndirect(&indirectBuffers, ARGUMENTBUFFER_OFFSET_DRAWPARTICLES, cmd);
+				device->DrawInstancedIndirect(&indirectBuffers, offsetof(EmitterIndirectArgs, draw), cmd);
 			}
 		}
 

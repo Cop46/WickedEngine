@@ -3544,7 +3544,7 @@ std::mutex queue_locker;
 
 		D3D12_RESOURCE_STATES resourceState = _ParseResourceState(texture->desc.layout);
 
-		if (initial_data != nullptr)
+		if (initial_data != nullptr || (resourcedesc.Flags & D3D12_RESOURCE_FLAG_ALLOW_SIMULTANEOUS_ACCESS))
 		{
 			resourceState = D3D12_RESOURCE_STATE_COMMON;
 		}
@@ -5701,15 +5701,12 @@ std::mutex queue_locker;
 
 	void GraphicsDevice_DX12::ClearPipelineStateCache()
 	{
-		allocationhandler->destroylocker.lock();
-
 		pipelines_global.clear();
 
 		for (auto& x : commandlists)
 		{
 			x->pipelines_worker.clear();
 		}
-		allocationhandler->destroylocker.unlock();
 	}
 
 	Texture GraphicsDevice_DX12::GetBackBuffer(const SwapChain* swapchain) const

@@ -9361,7 +9361,6 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 			push.resolution.y = desc.height;
 			push.resolution_rcp.x = 1.0f / push.resolution.x;
 			push.resolution_rcp.y = 1.0f / push.resolution.y;
-			push.texture_input = device->GetDescriptorIndex(&envrenderingColorBuffer, SubresourceType::SRV);
 			push.texture_output = device->GetDescriptorIndex(&envrenderingColorBuffer, SubresourceType::UAV);
 
 			device->PushConstants(&push, sizeof(push), cmd);
@@ -9425,7 +9424,6 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 			push.resolution.y = desc.height;
 			push.resolution_rcp.x = 1.0f / push.resolution.x;
 			push.resolution_rcp.y = 1.0f / push.resolution.y;
-			push.texture_input = device->GetDescriptorIndex(&envrenderingColorBuffer, SubresourceType::SRV);
 			push.texture_output = device->GetDescriptorIndex(&envrenderingColorBuffer, SubresourceType::UAV);
 
 			if (probe.IsRealTime())
@@ -10857,6 +10855,14 @@ void RayTraceScene(
 	{
 		PushBarrier(GPUBarrier::Image(output_primitiveID, ResourceState::UNORDERED_ACCESS, output_primitiveID->desc.layout));
 	}
+	if (output_depth != nullptr)
+	{
+		PushBarrier(GPUBarrier::Image(output_depth, ResourceState::UNORDERED_ACCESS, output_depth->desc.layout));
+	}
+	if (output_stencil != nullptr)
+	{
+		PushBarrier(GPUBarrier::Image(output_stencil, ResourceState::UNORDERED_ACCESS, output_depth->desc.layout));
+	}
 
 	PushBarrier(GPUBarrier::Image(&output, ResourceState::UNORDERED_ACCESS, output.desc.layout));
 	FlushBarriers(cmd);
@@ -12046,7 +12052,7 @@ void SurfelGI(
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
-		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, SURFEL_INDIRECT_OFFSET_ITERATE, cmd);
+		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, offsetof(SurfelIndirectArgs, iterate), cmd);
 
 		{
 			GPUBarrier barriers[] = {
@@ -12110,7 +12116,7 @@ void SurfelGI(
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
-		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, SURFEL_INDIRECT_OFFSET_ITERATE, cmd);
+		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, offsetof(SurfelIndirectArgs, iterate), cmd);
 
 		{
 			GPUBarrier barriers[] = {
@@ -12146,7 +12152,7 @@ void SurfelGI(
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
-		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, SURFEL_INDIRECT_OFFSET_RAYTRACE, cmd);
+		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, offsetof(SurfelIndirectArgs, raytrace), cmd);
 
 		{
 			GPUBarrier barriers[] = {
@@ -12187,7 +12193,7 @@ void SurfelGI(
 			device->Barrier(barriers, arraysize(barriers), cmd);
 		}
 
-		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, SURFEL_INDIRECT_OFFSET_INTEGRATE, cmd);
+		device->DispatchIndirect(&scene.surfelgi.indirectBuffer, offsetof(SurfelIndirectArgs, integrate), cmd);
 
 		{
 			GPUBarrier barriers[] = {
@@ -12348,7 +12354,6 @@ void DDGI(
 			GPUBarrier::Buffer(&scene.ddgi.ray_buffer, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE_COMPUTE),
 			GPUBarrier::Image(&scene.ddgi.depth_texture, ResourceState::SHADER_RESOURCE_COMPUTE, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Buffer(&scene.ddgi.variance_buffer, ResourceState::SHADER_RESOURCE_COMPUTE, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&scene.ddgi.raycount_buffer, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE_COMPUTE),
 			GPUBarrier::Buffer(&scene.ddgi.probe_buffer, ResourceState::SHADER_RESOURCE_COMPUTE, ResourceState::UNORDERED_ACCESS),
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
