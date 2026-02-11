@@ -703,7 +703,7 @@ namespace vulkan_internal
 				}
 				else
 				{
-					allocationhandler->destroyer_bindlessStorageTexelBuffers.push_back(std::make_pair(x.index, framecount));
+					allocationhandler->destroyer_bindlessStorageBuffers.push_back(std::make_pair(x.index, framecount));
 				}
 			}
 			subresources_srv.clear();
@@ -3710,7 +3710,7 @@ using namespace vulkan_internal;
 						allocationhandler->allocator,
 						&bufferInfo,
 						&create_info,
-						16ull,
+						buffer->desc.alignment,
 						&internal_state->resource,
 						&internal_state->allocation,
 						nullptr
