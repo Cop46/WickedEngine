@@ -120,6 +120,7 @@ bool debugCameras = false;
 bool debugColliders = false;
 bool debugSprings = false;
 bool gridHelper = false;
+XMFLOAT4 gridHelperColor = XMFLOAT4(1, 1, 1, 0.75f);
 bool advancedLightCulling = true;
 bool variableRateShadingClassification = false;
 bool variableRateShadingClassificationDebug = false;
@@ -4645,7 +4646,7 @@ void UpdatePerFrameData(
 			int texture = -1;
 			if (probe.texture.IsValid())
 			{
-				texture = device->GetDescriptorIndex(&probe.texture, SubresourceType::SRV);
+				texture = device->GetDescriptorIndex(&probe.texture, SubresourceType::SRV, probe.subresource);
 			}
 
 			shadermatrix.r[0] = XMVectorSetW(shadermatrix.r[0], *(float*)&texture);
@@ -8275,7 +8276,7 @@ void DrawDebugWorld(
 			XMStoreFloat4x4(&sb.g_xTransform, XMMatrixTranslationFromVector(XMLoadFloat3(&probe.position)));
 			device->BindDynamicConstantBuffer(sb, CB_GETBINDSLOT(MiscCB), cmd);
 
-			device->BindResource(&probe.texture, 0, cmd);
+			device->BindResource(&probe.texture, 0, cmd, probe.subresource);
 
 			device->Draw(vertexCount_uvsphere, 0, cmd);
 		}
@@ -8335,41 +8336,35 @@ void DrawDebugWorld(
 
 		device->BindPipelineState(&PSO_debug[DEBUGRENDERING_GRID], cmd);
 
-		static float alpha = 0.75f;
+		const float alpha = gridHelperColor.w;
 		const float channel_min = 0.2f;
-		static uint32_t gridVertexCount = 0;
-		static GPUBuffer grid;
-		if (!grid.IsValid())
+
+		const float h = 0.01f; // avoid z-fight with zero plane
+		const int a = 20;
+		XMFLOAT4 verts[((a + 1) * 2 + (a + 1) * 2) * 2];
+
+		int count = 0;
+		for (int i = 0; i <= a; ++i)
 		{
-			const float h = 0.01f; // avoid z-fight with zero plane
-			const int a = 20;
-			XMFLOAT4 verts[((a + 1) * 2 + (a + 1) * 2) * 2];
+			verts[count++] = XMFLOAT4(i - a * 0.5f, h, -a * 0.5f, 1);
+			verts[count++] = (i == a / 2 ? XMFLOAT4(channel_min, channel_min, 1, alpha) : gridHelperColor);
 
-			int count = 0;
-			for (int i = 0; i <= a; ++i)
-			{
-				verts[count++] = XMFLOAT4(i - a * 0.5f, h, -a * 0.5f, 1);
-				verts[count++] = (i == a / 2 ? XMFLOAT4(channel_min, channel_min, 1, alpha) : XMFLOAT4(1, 1, 1, alpha));
-
-				verts[count++] = XMFLOAT4(i - a * 0.5f, h, +a * 0.5f, 1);
-				verts[count++] = (i == a / 2 ? XMFLOAT4(channel_min, channel_min, 1, alpha) : XMFLOAT4(1, 1, 1, alpha));
-			}
-			for (int j = 0; j <= a; ++j)
-			{
-				verts[count++] = XMFLOAT4(-a * 0.5f, h, j - a * 0.5f, 1);
-				verts[count++] = (j == a / 2 ? XMFLOAT4(1, channel_min, channel_min, alpha) : XMFLOAT4(1, 1, 1, alpha));
-
-				verts[count++] = XMFLOAT4(+a * 0.5f, h, j - a * 0.5f, 1);
-				verts[count++] = (j == a / 2 ? XMFLOAT4(1, channel_min, channel_min, alpha) : XMFLOAT4(1, 1, 1, alpha));
-			}
-
-			gridVertexCount = arraysize(verts) / 2;
-
-			GPUBufferDesc bd;
-			bd.size = sizeof(verts);
-			bd.bind_flags = BindFlag::VERTEX_BUFFER;
-			device->CreateBuffer(&bd, verts, &grid);
+			verts[count++] = XMFLOAT4(i - a * 0.5f, h, +a * 0.5f, 1);
+			verts[count++] = (i == a / 2 ? XMFLOAT4(channel_min, channel_min, 1, alpha) : gridHelperColor);
 		}
+		for (int j = 0; j <= a; ++j)
+		{
+			verts[count++] = XMFLOAT4(-a * 0.5f, h, j - a * 0.5f, 1);
+			verts[count++] = (j == a / 2 ? XMFLOAT4(1, channel_min, channel_min, alpha) : gridHelperColor);
+
+			verts[count++] = XMFLOAT4(+a * 0.5f, h, j - a * 0.5f, 1);
+			verts[count++] = (j == a / 2 ? XMFLOAT4(1, channel_min, channel_min, alpha) : gridHelperColor);
+		}
+
+		const uint32_t gridVertexCount = arraysize(verts) / 2;
+
+		auto mem = device->AllocateGPU(sizeof(verts), cmd);
+		std::memcpy(mem.data, verts, sizeof(verts));
 
 		MiscCB sb;
 		XMStoreFloat4x4(&sb.g_xTransform, camera.GetViewProjection());
@@ -8378,12 +8373,15 @@ void DrawDebugWorld(
 		device->BindDynamicConstantBuffer(sb, CB_GETBINDSLOT(MiscCB), cmd);
 
 		const GPUBuffer* vbs[] = {
-			&grid,
+			&mem.buffer,
 		};
 		const uint32_t strides[] = {
 			sizeof(XMFLOAT4) + sizeof(XMFLOAT4),
 		};
-		device->BindVertexBuffers(vbs, 0, arraysize(vbs), strides, nullptr, cmd);
+		const uint64_t offsets[] = {
+			mem.offset
+		};
+		device->BindVertexBuffers(vbs, 0, arraysize(vbs), strides, offsets, cmd);
 		device->Draw(gridVertexCount, 0, cmd);
 
 		device->EventEnd(cmd);
@@ -9582,21 +9580,21 @@ void RefreshImpostors(const Scene& scene, CommandList cmd)
 				RenderPassImage::RenderTarget(
 					&scene.impostorRenderTarget_Albedo_MSAA,
 					RenderPassImage::LoadOp::CLEAR,
-					RenderPassImage::StoreOp::STORE,
+					RenderPassImage::StoreOp::DONTCARE,
 					ResourceState::RENDERTARGET,
 					ResourceState::RENDERTARGET
 				),
 				RenderPassImage::RenderTarget(
 					&scene.impostorRenderTarget_Normal_MSAA,
 					RenderPassImage::LoadOp::CLEAR,
-					RenderPassImage::StoreOp::STORE,
+					RenderPassImage::StoreOp::DONTCARE,
 					ResourceState::RENDERTARGET,
 					ResourceState::RENDERTARGET
 				),
 				RenderPassImage::RenderTarget(
 					&scene.impostorRenderTarget_Surface_MSAA,
 					RenderPassImage::LoadOp::CLEAR,
-					RenderPassImage::StoreOp::STORE,
+					RenderPassImage::StoreOp::DONTCARE,
 					ResourceState::RENDERTARGET,
 					ResourceState::RENDERTARGET
 				),
@@ -19063,6 +19061,14 @@ void SetToDrawDebugSprings(bool param) { debugSprings = param; }
 bool GetToDrawDebugSprings() { return debugSprings; }
 bool GetToDrawGridHelper() { return gridHelper; }
 void SetToDrawGridHelper(bool value) { gridHelper = value; }
+void SetGridHelperColor(const XMFLOAT4& value)
+{
+	gridHelperColor = value;
+}
+XMFLOAT4 GetGridHelperColor()
+{
+	return gridHelperColor;
+}
 bool GetToDrawVoxelHelper() { return VXGI_DEBUG; }
 void SetToDrawVoxelHelper(bool value, int clipmap_level) { VXGI_DEBUG = value; VXGI_DEBUG_CLIPMAP = clipmap_level; }
 void SetDebugLightCulling(bool enabled) { debugLightCulling = enabled; }

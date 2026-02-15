@@ -462,6 +462,8 @@ namespace wi::gui
 		void SetOverScroll(float amount) { overscroll = amount; }
 		// Check whether the scrollbar is required (when the items don't fit and scrolling could be used)
 		bool IsScrollbarRequired() const { return scrollbar_granularity < 1; }
+		// Check whether the scrollbar is at the beginning
+		bool IsScrolledToBegin() const { return scrollbar_delta <= 0; }
 		void SetSafeArea(float value) { safe_area = value; }
 
 		enum SCROLLBAR_STATE
@@ -831,7 +833,15 @@ namespace wi::gui
 				if (res.IsValid())
 				{
 					const wi::graphics::Texture& tex = res.GetTexture();
-					h_aspect = (float)tex.desc.height / (float)tex.desc.width;
+					if (has_flag(tex.desc.misc_flags, wi::graphics::ResourceMiscFlag::TEXTURECUBE))
+					{
+						// fixed aspect for cubemap cross:
+						h_aspect = 3.0f / 4.0f;
+					}
+					else
+					{
+						h_aspect = (float)tex.desc.height / (float)tex.desc.width;
+					}
 				}
 				const float w = width - x - padding - widget.GetShadowRadius();
 				widget.SetSize(XMFLOAT2(w, w * h_aspect));
