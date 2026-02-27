@@ -1055,8 +1055,6 @@ void LoadShaders()
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_MOTIONBLUR_CHEAP], "motionblurCS_cheap.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_BLOOMSEPARATE], "bloomseparateCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE], "aerialPerspectiveCS.cso"); });
-	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE_CAPTURE], "aerialPerspectiveCS_capture.cso"); });
-	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE_CAPTURE_MSAA], "aerialPerspectiveCS_capture_MSAA.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_SHAPENOISE], "volumetricCloud_shapenoiseCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_DETAILNOISE], "volumetricCloud_detailnoiseCS.cso"); });
 	wi::jobsystem::Execute(ctx, [](wi::jobsystem::JobArgs args) { LoadShader(ShaderStage::CS, shaders[CSTYPE_POSTPROCESS_VOLUMETRICCLOUDS_CURLNOISE], "volumetricCloud_curlnoiseCS.cso"); });
@@ -2893,6 +2891,7 @@ void ClearWorld(Scene& scene)
 // Don't store this structure on heap!
 struct SHCAM
 {
+	XMMATRIX view;
 	XMMATRIX view_projection;
 	Frustum frustum;					// This frustum can be used for intersection test with wiPrimitive primitives
 	BoundingFrustum boundingfrustum;	// This boundingfrustum can be used for frustum vs frustum intersection test
@@ -2906,6 +2905,7 @@ struct SHCAM
 		const XMVECTOR up = XMVector3TransformNormal(default_up, rot);
 		const XMMATRIX V = XMMatrixLookToLH(E, to, up);
 		const XMMATRIX P = XMMatrixPerspectiveFovLH(fov, aspect, farPlane, nearPlane);
+		view = V;
 		view_projection = XMMatrixMultiply(V, P);
 		frustum.Create(view_projection);
 
@@ -3036,6 +3036,7 @@ inline void CreateDirLightShadowCams(const LightComponent& light, CameraComponen
 			_max.z = _center.z + ext;
 
 			const XMMATRIX lightProjection = XMMatrixOrthographicOffCenterLH(_min.x, _max.x, _min.y, _max.y, _max.z, _min.z); // notice reversed Z!
+			shcams[cascade].view = lightView;
 			shcams[cascade].view_projection = XMMatrixMultiply(lightView, lightProjection);
 		}
 
@@ -3070,7 +3071,7 @@ inline void CreateCubemapCameras(const XMFLOAT3& position, float zNearP, float z
 	shcams[5].init(position, XMFLOAT4(0, 0.707f, 0.707f, 0), zNearP, zFarP, XM_PIDIV2); //-z
 }
 
-ForwardEntityMaskCB ForwardEntityCullingCPU(const Visibility& vis, const AABB& batch_aabb, RENDERPASS renderPass)
+ForwardEntityMaskCB ForwardEntityCullingCPU(const Visibility& vis, const AABB& batch_aabb)
 {
 	// Performs CPU light culling for a renderable batch:
 	//	Similar to GPU-based tiled light culling, but this is only for simple forward passes (drawcall-granularity)
@@ -3107,17 +3108,14 @@ ForwardEntityMaskCB ForwardEntityCullingCPU(const Visibility& vis, const AABB& b
 		}
 	}
 
-	if (renderPass != RENDERPASS_ENVMAPCAPTURE)
+	for (size_t i = 0; i < std::min(size_t(32), vis.visibleEnvProbes.size()); ++i)
 	{
-		for (size_t i = 0; i < std::min(size_t(32), vis.visibleEnvProbes.size()); ++i)
+		const uint32_t probeIndex = vis.visibleEnvProbes[vis.visibleEnvProbes.size() - 1 - i]; // note: reverse order, for correct blending!
+		const AABB& probe_aabb = vis.scene->aabb_probes[probeIndex];
+		if (probe_aabb.intersects(batch_aabb))
 		{
-			const uint32_t probeIndex = vis.visibleEnvProbes[vis.visibleEnvProbes.size() - 1 - i]; // note: reverse order, for correct blending!
-			const AABB& probe_aabb = vis.scene->aabb_probes[probeIndex];
-			if (probe_aabb.intersects(batch_aabb))
-			{
-				const uint8_t bucket_place = uint8_t(i % 32);
-				cb.xForwardEnvProbeMask |= 1 << bucket_place;
-			}
+			const uint8_t bucket_place = uint8_t(i % 32);
+			cb.xForwardEnvProbeMask |= 1 << bucket_place;
 		}
 	}
 
@@ -3244,7 +3242,7 @@ void RenderMeshes(
 
 		if (forwardLightmaskRequest)
 		{
-			ForwardEntityMaskCB cb = ForwardEntityCullingCPU(vis, instancedBatch.aabb, renderPass);
+			ForwardEntityMaskCB cb = ForwardEntityCullingCPU(vis, instancedBatch.aabb);
 			device->BindDynamicConstantBuffer(cb, CB_GETBINDSLOT(ForwardEntityMaskCB), cmd);
 		}
 
@@ -4710,12 +4708,13 @@ void UpdatePerFrameData(
 
 			shaderentity.SetIndices(matrixCounter, 0);
 
-			const uint cascade_count = std::min(uint(light.cascade_distances.size() + vis.scene->character_dedicated_shadows.size()), MATRIXARRAY_COUNT - matrixCounter);
+			const uint32_t max_viewport_count = std::min(device->GetMaxViewportCount(), 16u);
+			const uint cascade_count = std::min(std::min(uint(light.cascade_distances.size() + vis.scene->character_dedicated_shadows.size()), MATRIXARRAY_COUNT - matrixCounter), max_viewport_count);
 			shaderentity.SetShadowCascadeCount(cascade_count);
 
 			if (shadowmap && cascade_count > 0)
 			{
-				SHCAM* shcams = (SHCAM*)alloca(sizeof(SHCAM) * cascade_count);
+				SHCAM shcams[16];
 				CreateDirLightShadowCams(light, *vis.camera, shcams, cascade_count, shadow_rect, vis.scene->character_dedicated_shadows.data(), vis.scene->character_dedicated_shadows.size());
 				for (size_t cascade = 0; cascade < cascade_count; ++cascade)
 				{
@@ -5095,13 +5094,11 @@ void UpdateRenderData(
 
 	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND], textures[TEXTYPE_3D_WIND].desc.layout, ResourceState::UNORDERED_ACCESS));
 	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND_PREV], textures[TEXTYPE_3D_WIND_PREV].desc.layout, ResourceState::UNORDERED_ACCESS));
-	PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_2D_CAUSTICS], textures[TEXTYPE_2D_CAUSTICS].desc.layout, ResourceState::UNORDERED_ACCESS));
 	PushBarrier(GPUBarrier::Buffer(&buffers[BUFFERTYPE_INDIRECT_DEBUG_0], ResourceState::VERTEX_BUFFER | ResourceState::INDIRECT_ARGUMENT, ResourceState::COPY_SRC));
 	FlushBarriers(cmd);
 
 	device->ClearUAV(&textures[TEXTYPE_3D_WIND], 0, cmd);
 	device->ClearUAV(&textures[TEXTYPE_3D_WIND_PREV], 0, cmd);
-	device->ClearUAV(&textures[TEXTYPE_2D_CAUSTICS], 0, cmd);
 	PushBarrier(GPUBarrier::Memory());
 
 	device->CopyBuffer(&indirectDebugStatsReadback[device->GetBufferIndex()], 0, &buffers[BUFFERTYPE_INDIRECT_DEBUG_0], 0, sizeof(IndirectDrawArgsInstanced), cmd);
@@ -5226,17 +5223,6 @@ void UpdateRenderData(
 		}
 		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_WIND].desc.layout));
 		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_3D_WIND_PREV], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_3D_WIND_PREV].desc.layout));
-		device->EventEnd(cmd);
-		wi::profiler::EndRange(range);
-	}
-	{
-		auto range = wi::profiler::BeginRangeGPU("Caustics", cmd);
-		device->EventBegin("Caustics", cmd);
-		device->BindComputeShader(&shaders[CSTYPE_CAUSTICS], cmd);
-		device->BindUAV(&textures[TEXTYPE_2D_CAUSTICS], 0, cmd);
-		const TextureDesc& desc = textures[TEXTYPE_2D_CAUSTICS].GetDesc();
-		device->Dispatch(desc.width / 8, desc.height / 8, 1, cmd);
-		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_2D_CAUSTICS], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_2D_CAUSTICS].desc.layout));
 		device->EventEnd(cmd);
 		wi::profiler::EndRange(range);
 	}
@@ -5445,6 +5431,22 @@ void UpdateRenderDataAsync(
 	for (size_t i = 0; i < vis.scene->terrains.GetCount(); ++i)
 	{
 		vis.scene->terrains[i].UpdateVirtualTexturesGPU(cmd);
+	}
+
+	// Caustic effect:
+	{
+		auto range = wi::profiler::BeginRangeGPU("Caustics", cmd);
+		device->EventBegin("Caustics", cmd);
+		device->Barrier(GPUBarrier::Image(&textures[TEXTYPE_2D_CAUSTICS], textures[TEXTYPE_2D_CAUSTICS].desc.layout, ResourceState::UNORDERED_ACCESS), cmd);
+		device->ClearUAV(&textures[TEXTYPE_2D_CAUSTICS], 0, cmd);
+		device->Barrier(GPUBarrier::Memory(&textures[TEXTYPE_2D_CAUSTICS]), cmd);
+		device->BindComputeShader(&shaders[CSTYPE_CAUSTICS], cmd);
+		device->BindUAV(&textures[TEXTYPE_2D_CAUSTICS], 0, cmd);
+		const TextureDesc& desc = textures[TEXTYPE_2D_CAUSTICS].GetDesc();
+		device->Dispatch(desc.width / 8, desc.height / 8, 1, cmd);
+		PushBarrier(GPUBarrier::Image(&textures[TEXTYPE_2D_CAUSTICS], ResourceState::UNORDERED_ACCESS, textures[TEXTYPE_2D_CAUSTICS].desc.layout));
+		device->EventEnd(cmd);
+		wi::profiler::EndRange(range);
 	}
 
 	// Wetmaps will be initialized:
@@ -6699,7 +6701,10 @@ void DrawShadowmaps(
 
 	const XMVECTOR EYE = vis.camera->GetEye();
 
-	const uint32_t max_viewport_count = device->GetMaxViewportCount();
+	const uint32_t max_viewport_count = std::min(device->GetMaxViewportCount(), 16u);
+	Viewport viewports[16];
+	wi::graphics::Rect scissors[16];
+	SHCAM shcams[16];
 
 	const RenderPassImage rp[] = {
 		RenderPassImage::DepthStencil(
@@ -6745,9 +6750,6 @@ void DrawShadowmaps(
 			if (cascade_count == 0)
 				break;
 
-			Viewport* viewports = (Viewport*)alloca(sizeof(Viewport) * cascade_count);
-			wi::graphics::Rect* scissors = (wi::graphics::Rect*)alloca(sizeof(wi::graphics::Rect) * cascade_count);
-			SHCAM* shcams = (SHCAM*)alloca(sizeof(SHCAM) * cascade_count);
 			CreateDirLightShadowCams(light, *vis.camera, shcams, cascade_count, shadow_rect, vis.scene->character_dedicated_shadows.data(), vis.scene->character_dedicated_shadows.size());
 
 			for (size_t i = 0; i < vis.scene->aabb_objects.size(); ++i)
@@ -6800,6 +6802,7 @@ void DrawShadowmaps(
 			{
 				for (uint32_t cascade = 0; cascade < cascade_count; ++cascade)
 				{
+					XMStoreFloat4x4(&cb.cameras[cascade].view, shcams[cascade].view);
 					XMStoreFloat4x4(&cb.cameras[cascade].view_projection, shcams[cascade].view_projection);
 					cb.cameras[cascade].output_index = cascade;
 					for (int i = 0; i < arraysize(cb.cameras[cascade].frustum.planes); ++i)
@@ -6811,12 +6814,11 @@ void DrawShadowmaps(
 					cb.cameras[cascade].forward.y = -light.direction.y;
 					cb.cameras[cascade].forward.z = -light.direction.z;
 
-					Viewport vp;
+					Viewport& vp = viewports[cascade];
 					vp.top_left_x = float(shadow_rect.x + cascade * shadow_rect.w);
 					vp.top_left_y = float(shadow_rect.y);
 					vp.width = float(shadow_rect.w);
 					vp.height = float(shadow_rect.h);
-					viewports[cascade] = vp; // instead of reference, copy it to be sure every member is initialized (alloca)
 					scissors[cascade].from_viewport(vp);
 				}
 
@@ -6835,6 +6837,7 @@ void DrawShadowmaps(
 				cb.cameras[0].position = vis.camera->Eye;
 				for (uint32_t cascade = 0; cascade < std::min(2u + (uint32_t)vis.scene->character_dedicated_shadows.size(), cascade_count); ++cascade)
 				{
+					XMStoreFloat4x4(&cb.cameras[0].view, shcams[cascade].view);
 					XMStoreFloat4x4(&cb.cameras[0].view_projection, shcams[cascade].view_projection);
 					cb.cameras[0].options = SHADERCAMERA_OPTION_ORTHO;
 					if (cascade < vis.scene->character_dedicated_shadows.size())
@@ -6865,6 +6868,40 @@ void DrawShadowmaps(
 						if (material != nullptr)
 						{
 							hair.Draw(*material, RENDERPASS_SHADOW, cmd);
+						}
+					}
+				}
+			}
+
+			if (!vis.visibleEmitters.empty())
+			{
+				cb.cameras[0].position = vis.camera->Eye;
+				for (uint32_t cascade = 0; cascade < std::min(2u + (uint32_t)vis.scene->character_dedicated_shadows.size(), cascade_count); ++cascade)
+				{
+					XMStoreFloat4x4(&cb.cameras[0].view, shcams[cascade].view);
+					XMStoreFloat4x4(&cb.cameras[0].view_projection, shcams[cascade].view_projection);
+					cb.cameras[0].options = SHADERCAMERA_OPTION_ORTHO;
+					device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
+
+					Viewport vp;
+					vp.top_left_x = float(shadow_rect.x + cascade * shadow_rect.w);
+					vp.top_left_y = float(shadow_rect.y);
+					vp.width = float(shadow_rect.w);
+					vp.height = float(shadow_rect.h);
+					device->BindViewports(1, &vp, cmd);
+
+					wi::graphics::Rect scissor;
+					scissor.from_viewport(vp);
+					device->BindScissorRects(1, &scissor, cmd);
+
+					for (uint32_t emitterIndex : vis.visibleEmitters)
+					{
+						const EmittedParticleSystem& emitter = vis.scene->emitters[emitterIndex];
+						Entity entity = vis.scene->emitters.GetEntity(emitterIndex);
+						const MaterialComponent* material = vis.scene->materials.GetComponent(entity);
+						if (material != nullptr)
+						{
+							emitter.DrawForShadowmap(*material, cmd);
 						}
 					}
 				}
@@ -6929,6 +6966,7 @@ void DrawShadowmaps(
 
 			if (!renderQueue.empty() || !renderQueue_transparent.empty())
 			{
+				XMStoreFloat4x4(&cb.cameras[0].view, shcam.view);
 				XMStoreFloat4x4(&cb.cameras[0].view_projection, shcam.view_projection);
 				cb.cameras[0].output_index = 0;
 				for (int i = 0; i < arraysize(cb.cameras[0].frustum.planes); ++i)
@@ -6958,6 +6996,7 @@ void DrawShadowmaps(
 			{
 				cb.cameras[0].position = vis.camera->Eye;
 				cb.cameras[0].options = SHADERCAMERA_OPTION_NONE;
+				XMStoreFloat4x4(&cb.cameras[0].view, shcam.view);
 				XMStoreFloat4x4(&cb.cameras[0].view_projection, shcam.view_projection);
 				device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
 
@@ -6982,6 +7021,37 @@ void DrawShadowmaps(
 					if (material != nullptr)
 					{
 						hair.Draw(*material, RENDERPASS_SHADOW, cmd);
+					}
+				}
+			}
+
+			if (!vis.visibleEmitters.empty())
+			{
+				cb.cameras[0].position = vis.camera->Eye;
+				cb.cameras[0].options = SHADERCAMERA_OPTION_NONE;
+				XMStoreFloat4x4(&cb.cameras[0].view, shcam.view);
+				XMStoreFloat4x4(&cb.cameras[0].view_projection, shcam.view_projection);
+				device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
+
+				Viewport vp;
+				vp.top_left_x = float(shadow_rect.x);
+				vp.top_left_y = float(shadow_rect.y);
+				vp.width = float(shadow_rect.w);
+				vp.height = float(shadow_rect.h);
+				device->BindViewports(1, &vp, cmd);
+
+				wi::graphics::Rect scissor;
+				scissor.from_viewport(vp);
+				device->BindScissorRects(1, &scissor, cmd);
+
+				for (uint32_t emitterIndex : vis.visibleEmitters)
+				{
+					const EmittedParticleSystem& emitter = vis.scene->emitters[emitterIndex];
+					Entity entity = vis.scene->emitters.GetEntity(emitterIndex);
+					const MaterialComponent* material = vis.scene->materials.GetComponent(entity);
+					if (material != nullptr)
+					{
+						emitter.DrawForShadowmap(*material, cmd);
 					}
 				}
 			}
@@ -7020,6 +7090,7 @@ void DrawShadowmaps(
 				// Check if cubemap face frustum is visible from main camera, otherwise, it will be skipped:
 				if (cam_frustum.Intersects(cameras[shcam].boundingfrustum))
 				{
+					XMStoreFloat4x4(&cb.cameras[camera_count].view, cameras[shcam].view);
 					XMStoreFloat4x4(&cb.cameras[camera_count].view_projection, cameras[shcam].view_projection);
 					// We no longer have a straight mapping from camera to viewport:
 					//	- there will be always 6 viewports
@@ -7107,21 +7178,15 @@ void DrawShadowmaps(
 			if (!vis.visibleHairs.empty())
 			{
 				cb.cameras[0].position = vis.camera->Eye;
-				for (uint32_t shcam = 0; shcam < arraysize(cameras); ++shcam)
+				for (uint32_t cami = 0; cami < camera_count; ++cami)
 				{
+					const uint32_t shcam = cb.cameras[cami].output_index;
+					XMStoreFloat4x4(&cb.cameras[0].view, cameras[shcam].view);
 					XMStoreFloat4x4(&cb.cameras[0].view_projection, cameras[shcam].view_projection);
 					device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
 
-					Viewport vp;
-					vp.top_left_x = float(shadow_rect.x + shcam * shadow_rect.w);
-					vp.top_left_y = float(shadow_rect.y);
-					vp.width = float(shadow_rect.w);
-					vp.height = float(shadow_rect.h);
-					device->BindViewports(1, &vp, cmd);
-
-					wi::graphics::Rect scissor;
-					scissor.from_viewport(vp);
-					device->BindScissorRects(1, &scissor, cmd);
+					device->BindViewports(1, &vp[shcam], cmd);
+					device->BindScissorRects(1, &scissors[shcam], cmd);
 
 					for (uint32_t hairIndex : vis.visibleHairs)
 					{
@@ -7133,6 +7198,32 @@ void DrawShadowmaps(
 						if (material != nullptr)
 						{
 							hair.Draw(*material, RENDERPASS_SHADOW, cmd);
+						}
+					}
+				}
+			}
+
+			if (!vis.visibleEmitters.empty())
+			{
+				cb.cameras[0].position = vis.camera->Eye;
+				for (uint32_t cami = 0; cami < camera_count; ++cami)
+				{
+					const uint32_t shcam = cb.cameras[cami].output_index;
+					XMStoreFloat4x4(&cb.cameras[0].view, cameras[shcam].view);
+					XMStoreFloat4x4(&cb.cameras[0].view_projection, cameras[shcam].view_projection);
+					device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
+
+					device->BindViewports(1, &vp[shcam], cmd);
+					device->BindScissorRects(1, &scissors[shcam], cmd);
+
+					for (uint32_t emitterIndex : vis.visibleEmitters)
+					{
+						const EmittedParticleSystem& emitter = vis.scene->emitters[emitterIndex];
+						Entity entity = vis.scene->emitters.GetEntity(emitterIndex);
+						const MaterialComponent* material = vis.scene->materials.GetComponent(entity);
+						if (material != nullptr)
+						{
+							emitter.DrawForShadowmap(*material, cmd);
 						}
 					}
 				}
@@ -9003,12 +9094,12 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 
 	BindCommonResources(cmd);
 
-	const float zNearP = vis.camera->zNearP;
-	const float zFarP = vis.camera->zFarP;
-	const float zNearPRcp = 1.0f / zNearP;
-	const float zFarPRcp = 1.0f / zFarP;
-
 	auto render_probe = [&](const EnvironmentProbeComponent& probe, const AABB& probe_aabb) {
+
+		const float zNearP = vis.camera->zNearP;
+		const float zFarP = probe.view_distance < 0 ? vis.camera->zFarP : probe.view_distance;
+		const float zNearPRcp = 1.0f / zNearP;
+		const float zFarPRcp = 1.0f / zFarP;
 
 		Viewport vp;
 		vp.height = vp.width = (float)probe.texture.desc.width;
@@ -9045,7 +9136,6 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 			XMStoreFloat4(&cb.cameras[i].frustum_corners.cornersFAR[1], XMVector3TransformCoord(XMVectorSet(1, 1, 0, 1), invVP));
 			XMStoreFloat4(&cb.cameras[i].frustum_corners.cornersFAR[2], XMVector3TransformCoord(XMVectorSet(-1, -1, 0, 1), invVP));
 			XMStoreFloat4(&cb.cameras[i].frustum_corners.cornersFAR[3], XMVector3TransformCoord(XMVectorSet(1, -1, 0, 1), invVP));
-
 		}
 		device->BindDynamicConstantBuffer(cb, CBSLOT_RENDERER_CAMERA, cmd);
 
@@ -9108,14 +9198,11 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 			if (!envrenderingDepthBuffer.IsValid())
 			{
 				desc.mip_levels = 1;
-				desc.bind_flags = BindFlag::DEPTH_STENCIL | BindFlag::SHADER_RESOURCE;
+				desc.bind_flags = BindFlag::DEPTH_STENCIL;
 				desc.format = format_depthbuffer_envprobe;
-				desc.layout = ResourceState::SHADER_RESOURCE;
+				desc.layout = ResourceState::DEPTHSTENCIL;
 				desc.sample_count = required_sample_count;
-				if (required_sample_count == 1)
-				{
-					desc.misc_flags = ResourceMiscFlag::TEXTURECUBE;
-				}
+				desc.misc_flags = ResourceMiscFlag::TRANSIENT_ATTACHMENT;
 				device->CreateTexture(&desc, nullptr, &envrenderingDepthBuffer);
 				device->SetName(&envrenderingDepthBuffer, "envrenderingDepthBuffer");
 				render_textures[id_depth.raw] = envrenderingDepthBuffer;
@@ -9150,6 +9237,8 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 					subresource_index = device->CreateSubresource(&envrenderingColorBuffer, SubresourceType::SRV, 0, envrenderingColorBuffer.desc.array_size, i, 1);
 					assert(subresource_index == i);
 					subresource_index = device->CreateSubresource(&envrenderingColorBuffer, SubresourceType::UAV, 0, envrenderingColorBuffer.desc.array_size, i, 1);
+					assert(subresource_index == i);
+					subresource_index = device->CreateSubresource(&envrenderingColorBuffer, SubresourceType::RTV, 0, envrenderingColorBuffer.desc.array_size, i, 1);
 					assert(subresource_index == i);
 				}
 
@@ -9250,10 +9339,7 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 				RenderPassImage::DepthStencil(
 					&envrenderingDepthBuffer,
 					RenderPassImage::LoadOp::CLEAR,
-					RenderPassImage::StoreOp::STORE,
-					ResourceState::SHADER_RESOURCE,
-					ResourceState::DEPTHSTENCIL,
-					ResourceState::SHADER_RESOURCE
+					RenderPassImage::StoreOp::DONTCARE
 				),
 			};
 			device->RenderPassBegin(rp, arraysize(rp), cmd);
@@ -9261,21 +9347,18 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 		else
 		{
 			const RenderPassImage rp[] = {
-				RenderPassImage::DepthStencil(
-					&envrenderingDepthBuffer,
-					RenderPassImage::LoadOp::CLEAR,
-					RenderPassImage::StoreOp::STORE,
-					ResourceState::SHADER_RESOURCE,
-					ResourceState::DEPTHSTENCIL,
-					ResourceState::SHADER_RESOURCE
-				),
 				RenderPassImage::RenderTarget(
 					&envrenderingColorBuffer,
 					RenderPassImage::LoadOp::CLEAR,
 					RenderPassImage::StoreOp::STORE,
 					ResourceState::SHADER_RESOURCE,
 					ResourceState::SHADER_RESOURCE
-				)
+				),
+				RenderPassImage::DepthStencil(
+					&envrenderingDepthBuffer,
+					RenderPassImage::LoadOp::CLEAR,
+					RenderPassImage::StoreOp::DONTCARE
+				),
 			};
 			device->RenderPassBegin(rp, arraysize(rp), cmd);
 		}
@@ -9295,17 +9378,21 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 					if (object.IsRenderable() && !object.IsNotVisibleInReflections())
 					{
 						uint8_t camera_mask = 0;
+						uint8_t probe_lod = 0xFF;
 						for (uint32_t camera_index = 0; camera_index < arraysize(cameras); ++camera_index)
 						{
 							if (cameras[camera_index].frustum.CheckBoxFast(aabb))
 							{
 								camera_mask |= 1 << camera_index;
+
+								const uint8_t candidate_lod = (uint8_t)vis.scene->ComputeObjectLODForView(object, aabb, vis.scene->meshes[object.mesh_index], cameras[camera_index].view_projection);
+								probe_lod = std::min(probe_lod, candidate_lod);
 							}
 						}
 						if (camera_mask == 0)
 							continue;
 
-						renderQueue.add(object.mesh_index, uint32_t(i), 0, object.sort_bits, camera_mask);
+						renderQueue.add(object.mesh_index, uint32_t(i), 0, object.sort_bits, camera_mask, probe_lod);
 					}
 				}
 			}
@@ -9330,53 +9417,20 @@ void RefreshEnvProbes(const Visibility& vis, CommandList cmd)
 			device->DrawInstanced(240, 6, 0, 0, cmd); // 6 instances so it will be replicated for every cubemap face
 		}
 
+		if (vis.scene->ocean.IsValid() && vis.scene->weather.IsOceanEnabled())
+		{
+			ForwardEntityMaskCB cb = ForwardEntityCullingCPU(vis, vis.scene->ocean.GetAABB(probe.position));
+			device->BindDynamicConstantBuffer(cb, CB_GETBINDSLOT(ForwardEntityMaskCB), cmd);
+
+			vis.scene->ocean.RenderForCubemap(cmd);
+		}
+
 		if (probe_aabb.layerMask & vis.layerMask) // only draw light visualizers if this is a hand placed probe
 		{
 			DrawLightVisualizers(vis, cmd, 6); // 6 instances so it will be replicated for every cubemap face
 		}
 
 		device->RenderPassEnd(cmd);
-
-		// Compute Aerial Perspective for environment map
-		if (vis.scene->weather.IsRealisticSky() && vis.scene->weather.IsRealisticSkyAerialPerspective() && (probe_aabb.layerMask & vis.layerMask))
-		{
-			if (probe.IsMSAA())
-			{
-				device->EventBegin("Aerial Perspective Capture [MSAA]", cmd);
-				device->BindComputeShader(&shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE_CAPTURE_MSAA], cmd);
-			}
-			else
-			{
-				device->EventBegin("Aerial Perspective Capture", cmd);
-				device->BindComputeShader(&shaders[CSTYPE_POSTPROCESS_AERIALPERSPECTIVE_CAPTURE], cmd);
-			}
-
-			device->BindResource(&envrenderingDepthBuffer, 0, cmd);
-
-			TextureDesc desc = envrenderingColorBuffer.GetDesc();
-
-			AerialPerspectiveCapturePushConstants push = {};
-			push.resolution.x = desc.width;
-			push.resolution.y = desc.height;
-			push.resolution_rcp.x = 1.0f / push.resolution.x;
-			push.resolution_rcp.y = 1.0f / push.resolution.y;
-			push.texture_output = device->GetDescriptorIndex(&envrenderingColorBuffer, SubresourceType::UAV);
-
-			device->PushConstants(&push, sizeof(push), cmd);
-
-			device->Barrier(GPUBarrier::Image(&envrenderingColorBuffer, ResourceState::SHADER_RESOURCE, ResourceState::UNORDERED_ACCESS), cmd);
-
-			device->Dispatch(
-				(desc.width + POSTPROCESS_BLOCKSIZE - 1) / POSTPROCESS_BLOCKSIZE,
-				(desc.height + POSTPROCESS_BLOCKSIZE - 1) / POSTPROCESS_BLOCKSIZE,
-				6,
-				cmd
-			);
-
-			device->Barrier(GPUBarrier::Image(&envrenderingColorBuffer, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE), cmd);
-
-			device->EventEnd(cmd);
-		}
 
 		GenerateMipChain(envrenderingColorBuffer, MIPGENFILTER_LINEAR, cmd);
 
@@ -11251,7 +11305,7 @@ void ComputeLuminance(
 			cmd
 		);
 
-		device->Barrier(GPUBarrier::Memory(), cmd);
+		device->Barrier(GPUBarrier::Memory(&res.luminance), cmd);
 	}
 
 	// Pass 2 : Reduce into 1x1 texture
@@ -11579,7 +11633,7 @@ void Visibility_Prepare(
 		{
 			device->ClearUAV(res.primitiveID_resolved, 0, cmd);
 		}
-		device->Barrier(GPUBarrier::Memory(), cmd);
+		device->Barrier(cmd);
 
 		device->BindComputeShader(&shaders[msaa ? CSTYPE_VISIBILITY_RESOLVE_MSAA : CSTYPE_VISIBILITY_RESOLVE], cmd);
 
@@ -11638,7 +11692,7 @@ void Visibility_Surface(
 	device->ClearUAV(&res.texture_roughness, 0, cmd);
 	device->ClearUAV(&res.texture_payload_0, 0, cmd);
 	device->ClearUAV(&res.texture_payload_1, 0, cmd);
-	device->Barrier(GPUBarrier::Memory(), cmd);
+	device->Barrier(cmd);
 
 	device->BindResource(&res.binned_tiles, 0, cmd);
 	device->BindUAV(&output, 0, cmd);
@@ -11693,7 +11747,7 @@ void Visibility_Surface_Reduced(
 
 	device->ClearUAV(&res.texture_normals, 0, cmd);
 	device->ClearUAV(&res.texture_roughness, 0, cmd);
-	device->Barrier(GPUBarrier::Memory(), cmd);
+	device->Barrier(cmd);
 
 	device->BindResource(&res.binned_tiles, 0, cmd);
 	device->BindUAV(&res.texture_normals, 1, cmd);
@@ -11832,7 +11886,7 @@ void SurfelGI_Coverage(
 	}
 	device->ClearUAV(&res.result_halfres, 0, cmd);
 	device->ClearUAV(&res.result, 0, cmd);
-	device->Barrier(GPUBarrier::Memory(), cmd);
+	device->Barrier(cmd);
 
 
 	// Coverage:
@@ -11924,18 +11978,11 @@ void SurfelGI(
 	if (!scene.surfelgi.cleared)
 	{
 		scene.surfelgi.cleared = true;
-		GPUBarrier barriers[] = {
-			GPUBarrier::Image(&scene.surfelgi.momentsTexture, scene.surfelgi.momentsTexture.desc.layout, ResourceState::UNORDERED_ACCESS),
-		};
-		device->Barrier(barriers, arraysize(barriers), cmd);
+		device->Barrier(GPUBarrier::Image(&scene.surfelgi.momentsTexture, scene.surfelgi.momentsTexture.desc.layout, ResourceState::UNORDERED_ACCESS), cmd);
 		device->ClearUAV(&scene.surfelgi.momentsTexture, 0, cmd);
 		device->ClearUAV(&scene.surfelgi.varianceBuffer, 0, cmd);
-		for (auto& x : barriers)
-		{
-			std::swap(x.image.layout_before, x.image.layout_after);
-		}
-		device->Barrier(barriers, arraysize(barriers), cmd);
-		device->Barrier(GPUBarrier::Memory(), cmd);
+		device->Barrier(GPUBarrier::Image(&scene.surfelgi.momentsTexture, ResourceState::UNORDERED_ACCESS, scene.surfelgi.momentsTexture.desc.layout), cmd);
+		device->Barrier(GPUBarrier::Memory(&scene.surfelgi.varianceBuffer), cmd);
 	}
 
 	// Grid reset:
@@ -15815,10 +15862,6 @@ void Postprocess_DepthOfField(
 			GPUBarrier::Image(&res.texture_postfilter, res.texture_postfilter.desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&res.texture_alpha2, res.texture_alpha2.desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&output, output.desc.layout, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tile_statistics, ResourceState::UNDEFINED, ResourceState::COPY_DST),
-			GPUBarrier::Buffer(&res.buffer_tiles_earlyexit, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tiles_cheap, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tiles_expensive, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
 	}
@@ -16229,10 +16272,6 @@ void Postprocess_MotionBlur(
 			GPUBarrier::Image(&res.texture_tilemin, res.texture_tilemin.desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&res.texture_neighborhoodmax, res.texture_neighborhoodmax.desc.layout, ResourceState::UNORDERED_ACCESS),
 			GPUBarrier::Image(&output, output.desc.layout, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tile_statistics, ResourceState::UNDEFINED, ResourceState::COPY_DST),
-			GPUBarrier::Buffer(&res.buffer_tiles_earlyexit, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tiles_cheap, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
-			GPUBarrier::Buffer(&res.buffer_tiles_expensive, ResourceState::UNDEFINED, ResourceState::UNORDERED_ACCESS),
 		};
 		device->Barrier(barriers, arraysize(barriers), cmd);
 	}
@@ -16776,7 +16815,7 @@ void VolumetricClouds_Capture(
 	{
 		device->ClearUAV(&scene.cloudmap, 0, cmd);
 		device->ClearUAV(&scene.cloudmap_variance, 0, cmd);
-		device->Barrier(GPUBarrier::Memory(), cmd);
+		device->Barrier(cmd);
 	}
 
 	device->Dispatch(
@@ -17166,15 +17205,19 @@ void Postprocess_FSR(
 		{
 			GPUBarrier barriers[] = {
 				GPUBarrier::Image(&temp, temp.desc.layout, ResourceState::UNORDERED_ACCESS),
+				GPUBarrier::Image(&output, output.desc.layout, ResourceState::UNORDERED_ACCESS),
 			};
 			device->Barrier(barriers, arraysize(barriers), cmd);
 		}
+
+		device->ClearUAV(&temp, 0, cmd);
+		device->ClearUAV(&output, 0, cmd);
+		device->Barrier(cmd);
 
 		device->Dispatch((desc.width + 15) / 16, (desc.height + 15) / 16, 1, cmd);
 
 		{
 			GPUBarrier barriers[] = {
-				GPUBarrier::Memory(),
 				GPUBarrier::Image(&temp, ResourceState::UNORDERED_ACCESS, temp.desc.layout),
 			};
 			device->Barrier(barriers, arraysize(barriers), cmd);
@@ -17196,18 +17239,10 @@ void Postprocess_FSR(
 		};
 		device->BindUAVs(uavs, 0, arraysize(uavs), cmd);
 
-		{
-			GPUBarrier barriers[] = {
-				GPUBarrier::Image(&output, output.desc.layout, ResourceState::UNORDERED_ACCESS),
-			};
-			device->Barrier(barriers, arraysize(barriers), cmd);
-		}
-
 		device->Dispatch((desc.width + 15) / 16, (desc.height + 15) / 16, 1, cmd);
 
 		{
 			GPUBarrier barriers[] = {
-				GPUBarrier::Memory(),
 				GPUBarrier::Image(&output, ResourceState::UNORDERED_ACCESS, output.desc.layout),
 			};
 			device->Barrier(barriers, arraysize(barriers), cmd);

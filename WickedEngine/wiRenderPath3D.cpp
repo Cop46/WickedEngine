@@ -180,7 +180,7 @@ namespace wi
 			desc.width = internalResolution.x / 4;
 			desc.height = internalResolution.y / 4;
 			desc.mip_levels = std::min(8u, (uint32_t)std::log2(std::max(desc.width, desc.height)));
-			device->CreateTexture(&desc, nullptr, &rtSceneCopy);
+			device->CreateTextureZeroed(&desc, &rtSceneCopy);
 			device->SetName(&rtSceneCopy, "rtSceneCopy");
 			desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS | BindFlag::RENDER_TARGET; // render target for aliasing
 			device->CreateTexture(&desc, nullptr, &rtSceneCopy_tmp, &rtPrimitiveID);
@@ -188,12 +188,6 @@ namespace wi
 
 			device->CreateMipgenSubresources(rtSceneCopy);
 			device->CreateMipgenSubresources(rtSceneCopy_tmp);
-
-			// because this is used by SSR and SSGI before it gets a chance to be normally rendered, it MUST be cleared!
-			CommandList cmd = device->BeginCommandList();
-			device->Barrier(GPUBarrier::Image(&rtSceneCopy, rtSceneCopy.desc.layout, ResourceState::UNORDERED_ACCESS), cmd);
-			device->ClearUAV(&rtSceneCopy, 0, cmd);
-			device->Barrier(GPUBarrier::Image(&rtSceneCopy, ResourceState::UNORDERED_ACCESS, rtSceneCopy.desc.layout), cmd);
 		}
 		{
 			TextureDesc desc;
@@ -866,17 +860,11 @@ namespace wi
 			);
 			wi::renderer::UpdateRenderData(visibility_main, frameCB, cmd);
 
-			uint32_t num_barriers = 2;
 			GPUBarrier barriers[] = {
 				GPUBarrier::Image(&debugUAV, debugUAV.desc.layout, ResourceState::UNORDERED_ACCESS),
 				GPUBarrier::Aliasing(&rtPostprocess, &rtPrimitiveID),
-				GPUBarrier::Image(&rtMain, rtMain.desc.layout, ResourceState::SHADER_RESOURCE_COMPUTE), // prepares transition for discard in dx12
 			};
-			if (visibility_shading_in_compute)
-			{
-				num_barriers++;
-			}
-			device->Barrier(barriers, num_barriers, cmd);
+			device->Barrier(barriers, arraysize(barriers), cmd);
 
 		});
 
@@ -1197,67 +1185,9 @@ namespace wi
 			});
 		}
 
-		CommandList cmd_ocean;
-		if (scene->weather.IsOceanEnabled() && scene->ocean.IsValid())
-		{
-			// Ocean simulation can be updated async to opaque passes:
-			cmd_ocean = device->BeginCommandList(QUEUE_COMPUTE);
-			if (cmd_occlusionculling.IsValid())
-			{
-				// Ocean occlusion culling must be waited
-				device->WaitCommandList(cmd_ocean, cmd_occlusionculling);
-			}
-			wi::renderer::UpdateOcean(visibility_main, cmd_ocean);
-
-			// Copying to readback is done on copy queue to use DMA instead of compute warps:
-			CommandList cmd_oceancopy = device->BeginCommandList(QUEUE_COPY);
-			device->WaitCommandList(cmd_oceancopy, cmd_ocean);
-			wi::renderer::ReadbackOcean(visibility_main, cmd_oceancopy);
-		}
-
-		// Shadow maps:
-		CommandList cmd_shadowmap;
-		if (getShadowsEnabled())
-		{
-			cmd_shadowmap = device->BeginCommandList();
-			cmd = cmd_shadowmap;
-			wi::jobsystem::Execute(ctx, [this, cmd](wi::jobsystem::JobArgs args) {
-				wi::renderer::DrawShadowmaps(visibility_main, cmd);
-			});
-		}
-
-		if (wi::renderer::GetVXGIEnabled() && getSceneUpdateEnabled())
-		{
-			cmd = device->BeginCommandList();
-			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
-				wi::renderer::VXGI_Voxelize(visibility_main, cmd);
-			});
-		}
-
-		// Updating textures:
-		CommandList cmd_updatetextures;
-		if (getSceneUpdateEnabled())
-		{
-			cmd_updatetextures = device->BeginCommandList();
-			cmd = cmd_updatetextures;
-			device->WaitCommandList(cmd, cmd_prepareframe_async);
-			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
-				wi::renderer::BindCommonResources(cmd);
-				wi::renderer::BindCameraCB(
-					*camera,
-					camera_previous,
-					camera_reflection,
-					cmd
-				);
-				wi::renderer::RefreshLightmaps(*scene, cmd);
-				wi::renderer::RefreshEnvProbes(visibility_main, cmd);
-				wi::renderer::PaintDecals(*scene, cmd);
-			});
-		}
-
+		// Planar reflections depth prepass:
 		if (getReflectionsEnabled() && visibility_main.IsRequestedPlanarReflections())
 		{
-			// Planar reflections depth prepass:
 			cmd = device->BeginCommandList();
 			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
 
@@ -1318,8 +1248,74 @@ namespace wi
 				device->EventEnd(cmd);
 
 			});
+		}
 
-			// Planar reflections color pass:
+		CommandList cmd_ocean;
+		if (scene->weather.IsOceanEnabled() && scene->ocean.IsValid())
+		{
+			// Ocean simulation can be updated async to opaque passes:
+			cmd_ocean = device->BeginCommandList(QUEUE_COMPUTE);
+			if (cmd_occlusionculling.IsValid())
+			{
+				// Ocean occlusion culling must be waited
+				device->WaitCommandList(cmd_ocean, cmd_occlusionculling);
+			}
+			wi::renderer::UpdateOcean(visibility_main, cmd_ocean);
+
+			// Copying to readback is done on copy queue to use DMA instead of compute warps:
+			CommandList cmd_oceancopy = device->BeginCommandList(QUEUE_COPY);
+			device->WaitCommandList(cmd_oceancopy, cmd_ocean);
+			wi::renderer::ReadbackOcean(visibility_main, cmd_oceancopy);
+		}
+
+		// Shadow maps:
+		CommandList cmd_shadowmap;
+		if (getShadowsEnabled())
+		{
+			cmd_shadowmap = device->BeginCommandList();
+			cmd = cmd_shadowmap;
+			device->WaitCommandList(cmd, cmd_prepareframe_async); // shadow map waits for UpdateRenderDataAsync (particle-shadowmap interaction)
+			wi::jobsystem::Execute(ctx, [this, cmd](wi::jobsystem::JobArgs args) {
+				wi::renderer::DrawShadowmaps(visibility_main, cmd);
+			});
+		}
+
+		if (wi::renderer::GetVXGIEnabled() && getSceneUpdateEnabled())
+		{
+			cmd = device->BeginCommandList();
+			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
+				wi::renderer::VXGI_Voxelize(visibility_main, cmd);
+			});
+		}
+
+		// Updating textures:
+		CommandList cmd_updatetextures;
+		if (getSceneUpdateEnabled())
+		{
+			cmd_updatetextures = device->BeginCommandList();
+			cmd = cmd_updatetextures;
+			device->WaitCommandList(cmd, cmd_prepareframe_async);
+			if (cmd_ocean.IsValid())
+			{
+				device->WaitCommandList(cmd, cmd_ocean);
+			}
+			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
+				wi::renderer::BindCommonResources(cmd);
+				wi::renderer::BindCameraCB(
+					*camera,
+					camera_previous,
+					camera_reflection,
+					cmd
+				);
+				wi::renderer::RefreshLightmaps(*scene, cmd);
+				wi::renderer::RefreshEnvProbes(visibility_main, cmd);
+				wi::renderer::PaintDecals(*scene, cmd);
+			});
+		}
+
+		// Planar reflections color pass:
+		if (getReflectionsEnabled() && visibility_main.IsRequestedPlanarReflections())
+		{
 			cmd = device->BeginCommandList();
 			wi::jobsystem::Execute(ctx, [cmd, this](wi::jobsystem::JobArgs args) {
 
@@ -1454,15 +1450,6 @@ namespace wi
 				);
 			}
 
-			// Depth buffers were created on COMPUTE queue, so make them available for pixel shaders here:
-			{
-				GPUBarrier barriers[] = {
-					GPUBarrier::Image(&rtLinearDepth, rtLinearDepth.desc.layout, ResourceState::SHADER_RESOURCE),
-					GPUBarrier::Image(&depthBuffer_Copy, depthBuffer_Copy.desc.layout, ResourceState::SHADER_RESOURCE),
-				};
-				device->Barrier(barriers, arraysize(barriers), cmd);
-			}
-
 			if (wi::renderer::GetRaytracedShadowsEnabled() || wi::renderer::GetScreenSpaceShadowsEnabled())
 			{
 				GPUBarrier barrier = GPUBarrier::Image(&rtShadow, rtShadow.desc.layout, ResourceState::SHADER_RESOURCE);
@@ -1491,11 +1478,23 @@ namespace wi
 				// Cut off outline source from linear depth:
 				device->EventBegin("Outline Source", cmd);
 
-				RenderPassImage rp[] = {
-					RenderPassImage::RenderTarget(&rtOutlineSource, RenderPassImage::LoadOp::CLEAR),
-					RenderPassImage::DepthStencil(&depthBuffer_Main, RenderPassImage::LoadOp::LOAD)
-				};
-				device->RenderPassBegin(rp, arraysize(rp), cmd);
+				if (getMSAASampleCount() > 1)
+				{
+					RenderPassImage rp[] = {
+						RenderPassImage::RenderTarget(&rtOutlineSource_MSAA, RenderPassImage::LoadOp::CLEAR, RenderPassImage::StoreOp::DONTCARE, ResourceState::RENDERTARGET, ResourceState::RENDERTARGET),
+						RenderPassImage::DepthStencil(&depthBuffer_Main, RenderPassImage::LoadOp::LOAD),
+						RenderPassImage::Resolve(&rtOutlineSource)
+					};
+					device->RenderPassBegin(rp, arraysize(rp), cmd);
+				}
+				else
+				{
+					RenderPassImage rp[] = {
+						RenderPassImage::RenderTarget(&rtOutlineSource, RenderPassImage::LoadOp::CLEAR),
+						RenderPassImage::DepthStencil(&depthBuffer_Main, RenderPassImage::LoadOp::LOAD)
+					};
+					device->RenderPassBegin(rp, arraysize(rp), cmd);
+				}
 				wi::image::Params params;
 				params.enableFullScreen();
 				params.stencilRefMode = wi::image::STENCILREFMODE_ENGINE;
@@ -1577,12 +1576,6 @@ namespace wi
 			{
 				rp[0].loadop = RenderPassImage::LoadOp::LOAD;
 				wi::renderer::PostProcess_MeshBlend_Resolve(meshblendResources, rtMain, rp, rp_count, cmd);
-			}
-
-			if (wi::renderer::GetRaytracedShadowsEnabled() || wi::renderer::GetScreenSpaceShadowsEnabled())
-			{
-				GPUBarrier barrier = GPUBarrier::Image(&rtShadow, ResourceState::SHADER_RESOURCE, rtShadow.desc.layout);
-				device->Barrier(&barrier, 1, cmd);
 			}
 
 			if (rtAO.IsValid())
@@ -1741,16 +1734,6 @@ namespace wi
 			RenderVolumetrics(cmd);
 
 			RenderTransparents(cmd);
-
-			// Depth buffers expect a non-pixel shader resource state as they are generated on compute queue:
-			{
-				GPUBarrier barriers[] = {
-					GPUBarrier::Image(&rtLinearDepth, ResourceState::SHADER_RESOURCE, rtLinearDepth.desc.layout),
-					GPUBarrier::Image(&depthBuffer_Copy, ResourceState::SHADER_RESOURCE, depthBuffer_Copy.desc.layout),
-					GPUBarrier::Image(&debugUAV, ResourceState::UNORDERED_ACCESS, debugUAV.desc.layout),
-				};
-				device->Barrier(barriers, arraysize(barriers), cmd);
-			}
 		});
 
 		RenderCameraComponents(ctx);
@@ -1759,6 +1742,9 @@ namespace wi
 		cmd = cmd_postprocess;
 		wi::jobsystem::Execute(ctx, [this, cmd](wi::jobsystem::JobArgs args) {
 			RenderPostprocessChain(cmd);
+
+			GraphicsDevice* device = wi::graphics::GetDevice();
+			device->Barrier(GPUBarrier::Image(&debugUAV, ResourceState::UNORDERED_ACCESS, debugUAV.desc.layout), cmd);
 		});
 
 		cmd = device->BeginCommandList(QUEUE_COPY);
@@ -2335,15 +2321,7 @@ namespace wi
 		const Texture* rt_write = &rtPostprocess;
 
 		// rtPostprocess aliasing transition:
-		{
-			GPUBarrier barriers[] = {
-				GPUBarrier::Aliasing(&rtPrimitiveID, &rtPostprocess),
-				GPUBarrier::Image(&rtPostprocess, rtPostprocess.desc.layout, ResourceState::UNORDERED_ACCESS),
-			};
-			device->Barrier(barriers, arraysize(barriers), cmd);
-			device->ClearUAV(&rtPostprocess, 0, cmd);
-			device->Barrier(GPUBarrier::Image(&rtPostprocess, ResourceState::UNORDERED_ACCESS, rtPostprocess.desc.layout), cmd);
-		}
+		device->Barrier(GPUBarrier::Aliasing(&rtPrimitiveID, &rtPostprocess), cmd);
 
 		// 1.) HDR post process chain
 		{
@@ -3207,6 +3185,7 @@ namespace wi
 
 			if (getMSAASampleCount() > 1)
 			{
+				desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
 				desc.width = internalResolution.x;
 				desc.height = internalResolution.y;
 				desc.sample_count = 1;
@@ -3240,10 +3219,21 @@ namespace wi
 			desc.height = internalResolution.y;
 			device->CreateTexture(&desc, nullptr, &rtOutlineSource);
 			device->SetName(&rtOutlineSource, "rtOutlineSource");
+
+			if (getMSAASampleCount() > 1)
+			{
+				desc.bind_flags = BindFlag::RENDER_TARGET;
+				desc.sample_count = getMSAASampleCount();
+				desc.misc_flags = ResourceMiscFlag::TRANSIENT_ATTACHMENT;
+				desc.layout = ResourceState::RENDERTARGET;
+				device->CreateTexture(&desc, nullptr, &rtOutlineSource_MSAA);
+				device->SetName(&rtOutlineSource_MSAA, "rtOutlineSource_MSAA");
+			}
 		}
 		else
 		{
 			rtOutlineSource = {};
+			rtOutlineSource_MSAA = {};
 		}
 	}
 

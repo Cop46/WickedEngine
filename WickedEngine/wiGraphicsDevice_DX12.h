@@ -60,6 +60,16 @@ namespace wi::graphics
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawIndexedInstancedIndirectCommandSignature;
 		Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchMeshIndirectCommandSignature;
 
+		// Multi count draw command signatures (when drawID is used) need to be created with valid root signature, so they are delayed until shader creation:
+		struct MultiDrawSignature
+		{
+			Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawInstancedIndirectCountCommandSignature;
+			Microsoft::WRL::ComPtr<ID3D12CommandSignature> drawIndexedInstancedIndirectCountCommandSignature;
+			Microsoft::WRL::ComPtr<ID3D12CommandSignature> dispatchMeshIndirectCountCommandSignature;
+		};
+		mutable std::mutex multidraw_signature_locker;
+		mutable wi::unordered_map<ID3D12RootSignature*, MultiDrawSignature> multidraw_signatures;
+
 		wi::vector<GUID> video_decode_profile_list;
 
 		bool deviceRemoved = false;
@@ -108,6 +118,7 @@ namespace wi::graphics
 				Microsoft::WRL::ComPtr<ID3D12CommandAllocator> commandAllocator;
 				Microsoft::WRL::ComPtr<ID3D12GraphicsCommandList> commandList;
 				Microsoft::WRL::ComPtr<ID3D12Fence> fence;
+				uint64_t fenceValue = 0;
 				GPUBuffer uploadbuffer;
 				inline bool IsValid() const { return commandList != nullptr; }
 			};

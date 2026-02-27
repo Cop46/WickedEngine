@@ -10,7 +10,7 @@ class nullbuf_t : public std::streambuf
 {
 protected:
 	virtual int_type overflow(int_type ch) override
-    {
+	{
 		return traits_type::not_eof(ch);
 	}
 } nullbuf;
@@ -174,8 +174,6 @@ wi::vector<ShaderEntry> shaders = {
 	{"shadingRateClassificationCS", wi::graphics::ShaderStage::CS },
 	{"shadingRateClassificationCS_DEBUG", wi::graphics::ShaderStage::CS },
 	{"aerialPerspectiveCS", wi::graphics::ShaderStage::CS },
-	{"aerialPerspectiveCS_capture", wi::graphics::ShaderStage::CS },
-	{"aerialPerspectiveCS_capture_MSAA", wi::graphics::ShaderStage::CS },
 	{"skyAtmosphere_cameraVolumeLutCS", wi::graphics::ShaderStage::CS },
 	{"skyAtmosphere_transmittanceLutCS", wi::graphics::ShaderStage::CS },
 	{"skyAtmosphere_skyViewLutCS", wi::graphics::ShaderStage::CS },
@@ -226,10 +224,12 @@ wi::vector<ShaderEntry> shaders = {
 	{"lightmap_expandCS", wi::graphics::ShaderStage::CS },
 
 
-	{"emittedparticlePS_soft", wi::graphics::ShaderStage::PS },
 	{"imagePS", wi::graphics::ShaderStage::PS },
+	{"emittedparticlePS_soft", wi::graphics::ShaderStage::PS },
+	{"emittedparticlePS_shadow", wi::graphics::ShaderStage::PS },
 	{"emittedparticlePS_soft_lighting", wi::graphics::ShaderStage::PS },
 	{"oceanSurfacePS", wi::graphics::ShaderStage::PS },
+	{"oceanSurfacePS_envmap", wi::graphics::ShaderStage::PS },
 	{"hairparticlePS", wi::graphics::ShaderStage::PS },
 	{"hairparticlePS_simple", wi::graphics::ShaderStage::PS },
 	{"hairparticlePS_prepass", wi::graphics::ShaderStage::PS },
@@ -290,6 +290,7 @@ wi::vector<ShaderEntry> shaders = {
 
 	{"hairparticleVS", wi::graphics::ShaderStage::VS },
 	{"emittedparticleVS", wi::graphics::ShaderStage::VS },
+	{"emittedparticleVS_shadow", wi::graphics::ShaderStage::VS },
 	{"imageVS", wi::graphics::ShaderStage::VS },
 	{"fontVS", wi::graphics::ShaderStage::VS },
 	{"voxelVS", wi::graphics::ShaderStage::VS },

@@ -289,6 +289,8 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
     </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)emittedparticlePS_shadow.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)emittedparticleVS_shadow.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)extractStencilBitPS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
@@ -345,6 +347,7 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_prepass_depthonly_alphatest.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)oceanSurfacePS_envmap.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)paintdecalPS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
@@ -738,8 +741,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)aerialPerspectiveCS.hlsl" />
-    <FxCompile Include="$(MSBuildThisFileDirectory)aerialPerspectiveCS_capture.hlsl" />
-    <FxCompile Include="$(MSBuildThisFileDirectory)aerialPerspectiveCS_capture_MSAA.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)skyAtmosphere_cameraVolumeLutCS.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)skyAtmosphere_skyLuminanceLutCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
