@@ -23,7 +23,6 @@
     <None Include="$(MSBuildThisFileDirectory)ColorSpaceUtility.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)cone.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)cube.hlsli" />
-    <None Include="$(MSBuildThisFileDirectory)cullingShaderHF.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)cylinder.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)depthoffieldHF.hlsli" />
     <None Include="$(MSBuildThisFileDirectory)emittedparticleHF.hlsli" />
@@ -211,10 +210,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)causticsCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)chromatic_aberrationCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
@@ -294,6 +289,10 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)extractStencilBitPS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatCS.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatPS.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatVS.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splat_indirectCS.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)hairparticlePS_prepass_depthonly.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
@@ -348,12 +347,14 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)oceanSurfacePS_envmap.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)oceanSurfacePS_shadowmap.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)paintdecalPS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)paintdecalVS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Vertex</ShaderType>
     </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)radix_sortCS.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)rtshadow_upsampleCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
@@ -402,9 +403,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Vertex</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Vertex</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Vertex</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)ddgi_debugPS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)ddgi_debugVS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Vertex</ShaderType>
@@ -882,10 +880,7 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_indirect_prepareCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
-    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_analyzeCS.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_surfaceCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
@@ -894,19 +889,12 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_resolveCS_MSAA.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_shadeCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_skyCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_velocityCS.hlsl" />
+    <FxCompile Include="$(MSBuildThisFileDirectory)voidPS.hlsl" />
     <FxCompile Include="$(MSBuildThisFileDirectory)volumetricCloud_renderCS_capture.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderModel Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">4.0</ShaderModel>
@@ -1430,46 +1418,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_kickoffSortCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortInnerCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortStepCS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)hairparticlePS_prepass.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
@@ -1624,36 +1572,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_ADVANCED.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_ADVANCED_DEBUG.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_DEBUG.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)lightShaftsCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
@@ -1663,16 +1581,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Compute</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightVisualizerPS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)luminancePass1CS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
@@ -1875,16 +1783,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
       <FileType>Document</FileType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_debug.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_hologram.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
@@ -1896,16 +1794,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_paintradius.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_simple.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
@@ -2147,16 +2035,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)shadowPS_water.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)sharpenCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
@@ -2377,16 +2255,6 @@
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Geometry</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Geometry</ShaderType>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)voxelPS.hlsl">
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|x64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|ARM64'">Pixel</ShaderType>
-      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|ARM64'">Pixel</ShaderType>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)vxgi_temporalCS.hlsl">
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'">Compute</ShaderType>
       <ShaderType Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">Compute</ShaderType>
@@ -2478,7 +2346,7 @@
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_FFTGenerator.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_Font.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_FSR2.h" />
-    <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_GPUSortLib.h" />
+    <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_GaussianSplat.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_HairParticle.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_Image.h" />
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_Ocean.h" />

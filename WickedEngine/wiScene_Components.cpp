@@ -435,7 +435,6 @@ namespace wi::scene
 		{
 			material.sampler_descriptor = sampler_descriptor;
 		}
-		material.sampler_clamp_descriptor = device->GetDescriptorIndex(wi::renderer::GetSampler(wi::enums::SAMPLER_OBJECTSHADER_CLAMP));
 
 		if (shaderType == SHADERTYPE_INTERIORMAPPING && textures[BASECOLORMAP].resource.IsValid() && !has_flag(textures[BASECOLORMAP].resource.GetTexture().GetDesc().misc_flags, ResourceMiscFlag::TEXTURECUBE))
 		{
@@ -1952,6 +1951,20 @@ namespace wi::scene
 	void MeshComponent::Recenter()
 	{
 		const XMFLOAT3 center = aabb.getCenter();
+
+		for (auto& pos : vertex_positions)
+		{
+			pos.x -= center.x;
+			pos.y -= center.y;
+			pos.z -= center.z;
+		}
+
+		CreateRenderData();
+	}
+	void MeshComponent::RecenterToTop()
+	{
+		XMFLOAT3 center = aabb.getCenter();
+		center.y += aabb.getHalfWidth().y;
 
 		for (auto& pos : vertex_positions)
 		{

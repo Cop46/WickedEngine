@@ -630,6 +630,10 @@ namespace wi::physics
 				{
 					settings.mObjectLayer = Layers::NON_MOVING;
 				}
+				if (physicscomponent.IsLocked2D())
+				{
+					settings.mAllowedDOFs = EAllowedDOFs::Plane2D;
+				}
 
 				physicsobject.friction = settings.mFriction;
 				physicsobject.restitution = settings.mRestitution;
@@ -1724,6 +1728,10 @@ namespace wi::physics
 					part.mObjectLayer = Layers::MOVING;
 					part.mOverrideMassProperties = EOverrideMassProperties::CalculateInertia;
 					part.mMassPropertiesOverride.mMass = masses[p];
+					if (humanoid.IsRagdoll2D())
+					{
+						part.mAllowedDOFs = EAllowedDOFs::Plane2D | EAllowedDOFs::RotationX | EAllowedDOFs::RotationY; // ragdoll parts are allowed to rotate in XY, this fixes ragdoll facing issue where it would be always forced to face +Z
+					}
 
 					// First part is the root, doesn't have a parent and doesn't have a constraint
 					if (p == 0)
@@ -1861,6 +1869,7 @@ namespace wi::physics
 				PhysicsSystem& physics_system = ((PhysicsScene*)physics_scene.get())->physics_system;
 				BodyInterface& body_interface = physics_system.GetBodyInterface(); // locking version because this is called from job system!
 
+				std::scoped_lock lck(scene.locker);
 				int c = 0;
 				for (auto& x : rigidbodies)
 				{
@@ -1906,6 +1915,7 @@ namespace wi::physics
 				PhysicsSystem& physics_system = ((PhysicsScene*)physics_scene.get())->physics_system;
 				BodyInterface& body_interface = physics_system.GetBodyInterface(); // locking version because this is called from job system!
 
+				std::scoped_lock lck(scene.locker);
 				int c = 0;
 				for (auto& x : rigidbodies)
 				{

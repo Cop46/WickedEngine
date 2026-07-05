@@ -38,6 +38,7 @@ namespace wi::primitive
 		AABB transform(const XMFLOAT4X4& mat) const;
 		XMFLOAT3 getCenter() const;
 		XMFLOAT3 getHalfWidth() const;
+		XMFLOAT3 getExtents() const;
 		XMMATRIX getAsBoxMatrix() const;
 		XMMATRIX getUnormRemapMatrix() const;
 		float getArea() const;
@@ -203,7 +204,9 @@ namespace wi::primitive
 		{
 			XMStoreFloat3(&origin, newOrigin);
 			XMStoreFloat3(&direction, newDirection);
-			XMStoreFloat3(&direction_inverse, XMVectorReciprocal(newDirection));
+			direction_inverse.x = direction.x == 0 ? FLT_MAX : 1.0f / direction.x;
+			direction_inverse.y = direction.y == 0 ? FLT_MAX : 1.0f / direction.y;
+			direction_inverse.z = direction.z == 0 ? FLT_MAX : 1.0f / direction.z;
 			TMin = newTMin;
 			TMax = newTMax;
 		}

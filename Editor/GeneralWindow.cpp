@@ -5,7 +5,7 @@ using namespace wi::graphics;
 using namespace wi::ecs;
 using namespace wi::scene;
 
-static const std::string languages_directory = "languages/";
+static const std::string languages_directory = wi::helper::GetCurrentPath() + "/languages/";
 
 enum class Theme : uint64_t
 {
@@ -1256,6 +1256,23 @@ void GeneralWindow::Create(EditorComponent* _editor)
 		editor->guiScalingCombo.SetShadowColor(wi::Color::Transparent());
 		editor->guiScalingCombo.SetShadowHighlightSpread(0.2f);
 		for (auto& sprite : editor->guiScalingCombo.sprites)
+		{
+			//sprite.params.enableHighlight();
+			if (gui_round_enabled) {
+				sprite.params.enableCornerRounding();
+				sprite.params.corners_rounding[0].radius = gui_round_radius_default;
+				sprite.params.corners_rounding[1].radius = gui_round_radius_default;
+				sprite.params.corners_rounding[2].radius = gui_round_radius_default;
+				sprite.params.corners_rounding[3].radius = gui_round_radius_default;
+			} else {
+				sprite.params.disableCornerRounding();
+			}
+		}
+
+		editor->is2DModeButton.SetShadowRadius(1);
+		editor->is2DModeButton.SetShadowColor(wi::Color::Transparent());
+		editor->is2DModeButton.SetShadowHighlightSpread(0.2f);
+		for (auto& sprite : editor->is2DModeButton.sprites)
 		{
 			//sprite.params.enableHighlight();
 			if (gui_round_enabled) {

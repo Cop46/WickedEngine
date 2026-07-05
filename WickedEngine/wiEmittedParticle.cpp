@@ -169,7 +169,7 @@ namespace wi
 			bd.usage = Usage::DEFAULT;
 			bd.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::UNORDERED_ACCESS;
 			bd.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
-			bd.stride = sizeof(float);
+			bd.stride = sizeof(uint32_t);
 			bd.size = bd.stride * MAX_PARTICLES;
 			auto init_distances = [&](void* dest) {
 				float* distances = (float*)dest;
@@ -346,6 +346,12 @@ namespace wi
 		center = transform.GetPosition();
 
 		emit += (float)count * dt;
+
+		if (!bursted_on_create && burst_on_create > 0)
+		{
+			bursted_on_create = true;
+			Burst(burst_on_create);
+		}
 
 		emit += burst;
 		burst = 0;
@@ -780,7 +786,9 @@ namespace wi
 
 		if (IsSorted())
 		{
+			device->Barrier(GPUBarrier::Buffer(&distanceBuffer, ResourceState::SHADER_RESOURCE_COMPUTE, ResourceState::UNORDERED_ACCESS), cmd);
 			wi::gpusortlib::Sort(MAX_PARTICLES, distanceBuffer, counterBuffer, offsetof(ParticleCounters, culledCount), culledIndirectionBuffer, cmd);
+			device->Barrier(GPUBarrier::Buffer(&distanceBuffer, ResourceState::UNORDERED_ACCESS, ResourceState::SHADER_RESOURCE_COMPUTE), cmd);
 		}
 
 		if (!IsPaused() && dt > 0)
@@ -1270,6 +1278,11 @@ namespace wi
 				opacityCurveControlPeakEnd = opacityCurveControlPeakStart;
 			}
 
+			if (seri.GetVersion() >= 3)
+			{
+				archive >> burst_on_create;
+			}
+
 		}
 		else
 		{
@@ -1324,6 +1337,11 @@ namespace wi
 			if (seri.GetVersion() >= 2)
 			{
 				archive << opacityCurveControlPeakEnd;
+			}
+
+			if (seri.GetVersion() >= 3)
+			{
+				archive << burst_on_create;
 			}
 		}
 	}

@@ -70,10 +70,10 @@ inline half4 unpack_utangent(in uint value)
 inline uint pack_rgba(in half4 value)
 {
 	uint retVal = 0;
-	retVal |= (uint)(value.x * 255.0) << 0u;
-	retVal |= (uint)(value.y * 255.0) << 8u;
-	retVal |= (uint)(value.z * 255.0) << 16u;
-	retVal |= (uint)(value.w * 255.0) << 24u;
+	retVal |= (uint)(saturate(value.x) * 255.0) << 0u;
+	retVal |= (uint)(saturate(value.y) * 255.0) << 8u;
+	retVal |= (uint)(saturate(value.z) * 255.0) << 16u;
+	retVal |= (uint)(saturate(value.w) * 255.0) << 24u;
 	return retVal;
 }
 inline half4 unpack_rgba(in uint value)
@@ -83,6 +83,25 @@ inline half4 unpack_rgba(in uint value)
 	retVal.y = (half)((value >> 8u) & 0xFF) / 255.0;
 	retVal.z = (half)((value >> 16u) & 0xFF) / 255.0;
 	retVal.w = (half)((value >> 24u) & 0xFF) / 255.0;
+	return retVal;
+}
+
+inline uint pack_rgb10a2(in half4 value)
+{
+	uint retVal = 0;
+	retVal |= (uint)(saturate(value.x) * 1023.0) << 0u;
+	retVal |= (uint)(saturate(value.y) * 1023.0) << 10u;
+	retVal |= (uint)(saturate(value.z) * 1023.0) << 20u;
+	retVal |= (uint)(saturate(value.w) * 3.0) << 30u;
+	return retVal;
+}
+inline half4 unpack_rgb10a2(in uint value)
+{
+	half4 retVal;
+	retVal.x = (half)((value >> 0u) & 1023) / 1023.0;
+	retVal.y = (half)((value >> 10u) & 1023) / 1023.0;
+	retVal.z = (half)((value >> 20u) & 1023) / 1023.0;
+	retVal.w = (half)((value >> 30u) & 3) / 3.0;
 	return retVal;
 }
 
@@ -157,7 +176,7 @@ inline uint2 unpack_pixel(uint value)
 
 uint pack_unorm16x2(float2 value)
 {
-	return uint(saturate(value.x) * 65535.0) | (uint(saturate(value.x) * 65535.0) << 16u);
+	return uint(saturate(value.x) * 65535.0) | (uint(saturate(value.y) * 65535.0) << 16u);
 }
 uint2 pack_unorm16x4(float4 value)
 {
@@ -301,7 +320,9 @@ float3x3 adjoint(in float4x4 m)
 		"SRV(t0, space = 205, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
 		"SRV(t0, space = 206, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
 		"SRV(t0, space = 207, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
-		"SRV(t0, space = 208, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)" \
+		"SRV(t0, space = 208, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 209, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)," \
+		"SRV(t0, space = 210, offset = 0, numDescriptors = unbounded, flags = DESCRIPTORS_VOLATILE | DATA_VOLATILE)" \
 	"), " \
 	"StaticSampler(s100, addressU = TEXTURE_ADDRESS_CLAMP, addressV = TEXTURE_ADDRESS_CLAMP, addressW = TEXTURE_ADDRESS_CLAMP, filter = FILTER_MIN_MAG_MIP_LINEAR)," \
 	"StaticSampler(s101, addressU = TEXTURE_ADDRESS_WRAP, addressV = TEXTURE_ADDRESS_WRAP, addressW = TEXTURE_ADDRESS_WRAP, filter = FILTER_MIN_MAG_MIP_LINEAR)," \
@@ -508,6 +529,7 @@ RWTexture2D<uint4> bindless_rwtextures_uint4[] : register(space115);
 #endif // __spirv__
 
 #include "ShaderInterop_Renderer.h"
+#include "ShaderInterop_GaussianSplat.h"
 
 #if defined(__PSSL__) || (defined(__hlsl_dx_compiler) && !defined(__spirv__) && __SHADER_TARGET_MAJOR >= 6 && __SHADER_TARGET_MINOR >= 6)
 static const BindlessResource<StructuredBuffer<ShaderMeshInstance> > bindless_structured_meshinstance;
@@ -517,8 +539,10 @@ static const BindlessResource<StructuredBuffer<ShaderCluster> > bindless_structu
 static const BindlessResource<StructuredBuffer<ShaderClusterBounds> > bindless_structured_cluster_bounds;
 static const BindlessResource<StructuredBuffer<ShaderMaterial> > bindless_structured_material;
 static const BindlessResource<StructuredBuffer<uint> > bindless_structured_uint;
+static const BindlessResource<StructuredBuffer<uint2> > bindless_structured_uint2;
 static const BindlessResource<StructuredBuffer<ShaderTerrainChunk> > bindless_structured_terrain_chunks;
-static const BindlessResource<StructuredBuffer<DDGIProbe> > bindless_structured_ddi_probes;
+static const BindlessResource<StructuredBuffer<DDGIProbe> > bindless_structured_ddgi_probes;
+static const BindlessResource<StructuredBuffer<GaussianSplat> > bindless_structured_gaussian_splats;
 #elif defined(__spirv__)
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderMeshInstance> bindless_structured_meshinstance[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderGeometry> bindless_structured_geometry[];
@@ -527,8 +551,10 @@ static const BindlessResource<StructuredBuffer<DDGIProbe> > bindless_structured_
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderClusterBounds> bindless_structured_cluster_bounds[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderMaterial> bindless_structured_material[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<uint> bindless_structured_uint[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<uint2> bindless_structured_uint2[];
 [[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[];
-[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<DDGIProbe> bindless_structured_ddgi_probes[];
+[[vk::binding(0, DESCRIPTOR_SET_BINDLESS_STORAGE_BUFFER)]] StructuredBuffer<GaussianSplat> bindless_structured_gaussian_splats[];
 #else
 StructuredBuffer<ShaderMeshInstance> bindless_structured_meshinstance[] : register(space200);
 StructuredBuffer<ShaderGeometry> bindless_structured_geometry[] : register(space201);
@@ -537,8 +563,10 @@ StructuredBuffer<ShaderCluster> bindless_structured_cluster[] : register(space20
 StructuredBuffer<ShaderClusterBounds> bindless_structured_cluster_bounds[] : register(space204);
 StructuredBuffer<ShaderMaterial> bindless_structured_material[] : register(space205);
 StructuredBuffer<uint> bindless_structured_uint[] : register(space206);
-StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[] : register(space207);
-StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[] : register(space208);
+StructuredBuffer<uint2> bindless_structured_uint2[] : register(space207);
+StructuredBuffer<ShaderTerrainChunk> bindless_structured_terrain_chunks[] : register(space208);
+StructuredBuffer<DDGIProbe> bindless_structured_ddgi_probes[] : register(space209);
+StructuredBuffer<GaussianSplat> bindless_structured_gaussian_splats[] : register(space210);
 #endif // defined(__PSSL__) || (defined(__hlsl_dx_compiler) && !defined(__spirv__) && __SHADER_TARGET_MAJOR >= 6 && __SHADER_TARGET_MINOR >= 6)
 
 // Note: these are macros, the SPIRV compilation is a LOT slower and uses a LOT more memory when functions return large structs, issue: https://github.com/microsoft/DirectXShaderCompiler/issues/7493
@@ -553,12 +581,12 @@ StructuredBuffer<DDGIProbe> bindless_structured_ddi_probes[] : register(space208
 #define load_material(materialIndex) (bindless_structured_material[descriptor_index(GetScene().materialbuffer)][materialIndex])
 #define load_entity(entityIndex) (GetFrame().entityArray[entityIndex])
 #define load_entitymatrix(matrixIndex) (GetFrame().matrixArray[matrixIndex])
+#define load_entityculling(entityIndex) (GetFrame().entityCullingArray[entityIndex])
 #ifdef TRANSPARENT
-#define load_entitytile(tileIndex) (bindless_structured_uint[GetCamera().buffer_entitytiles_index][GetCamera().entity_culling_tile_bucket_count_flat + tileIndex])
+#define load_entitytile(camera, tileIndex) (bindless_structured_uint[descriptor_index(camera.buffer_entitytiles_index)][camera.entity_culling_tile_offset_transparent + tileIndex])
 #else
-#define load_entitytile(tileIndex) (bindless_structured_uint[GetCamera().buffer_entitytiles_index][tileIndex])
+#define load_entitytile(camera, tileIndex) (bindless_structured_uint[descriptor_index(camera.buffer_entitytiles_index)][camera.entity_culling_tile_offset + tileIndex])
 #endif // TRANSPARENT
-
 
 inline void write_mipmap_feedback(uint materialIndex, float4 uvsets_dx, float4 uvsets_dy)
 {
@@ -643,12 +671,17 @@ struct PrimitiveID
 	uint subsetIndex;
 	bool maybe_clustered;
 
+	uint materialIndex; // only available when unpacking from meshlet data, in this case the PRIMITIVEID_FROM_MESHLET_OPTIMIZED define can be used
+	uint shaderType; // only available when unpacking from meshlet data, in this case the PRIMITIVEID_FROM_MESHLET_OPTIMIZED define can be used
+
 	inline void init()
 	{
 		primitiveIndex = 0;
 		instanceIndex = 0;
 		subsetIndex = 0;
 		maybe_clustered = false;
+		materialIndex = 0;
+		shaderType = 0;
 	}
 
 	// These packing methods require meshlet data, and pack into 32 bits:
@@ -676,26 +709,30 @@ struct PrimitiveID
 		primitiveIndex = meshlet.primitiveOffset + meshletPrimitiveIndex;
 		instanceIndex = meshlet.instanceIndex;
 		subsetIndex = meshlet.geometryIndex - inst.geometryOffset;
+		materialIndex = meshlet.materialIndex_shaderType & 0xFFFFFF;
+		shaderType = meshlet.materialIndex_shaderType >> 24u;
 		maybe_clustered = true;
 	}
 
 	// These packing methods don't need meshlets, but they are packed into 64 bits:
-	uint2 pack2()
+	inline uint2 pack2()
 	{
 		// 32 bit primitiveIndex + 1 valid check
 		// 24 bit instanceIndex
 		// 8  bit subsetIndex
 		return uint2(primitiveIndex + 1, (instanceIndex & 0xFFFFFF) | ((subsetIndex & 0xFF) << 24u));
 	}
-	void unpack2(uint2 value)
+	inline void unpack2(uint2 value)
 	{
 		primitiveIndex = value.x - 1; // remove valid check
 		instanceIndex = value.y & 0xFFFFFF;
 		subsetIndex = (value.y >> 24u) & 0xFF;
+		materialIndex = 0;
+		shaderType = 0;
 		maybe_clustered = false;
 	}
 
-	uint3 tri()
+	inline uint3 tri()
 	{
 		ShaderMeshInstance inst = load_instance(instanceIndex);
 		ShaderGeometry geometry = load_geometry(inst.geometryOffset + subsetIndex);
@@ -705,21 +742,18 @@ struct PrimitiveID
 			const uint clusterID = primitiveIndex >> 7u;
 			const uint triangleID = primitiveIndex & 0x7F;
 			ShaderCluster cluster = bindless_structured_cluster[NonUniformResourceIndex(descriptor_index(geometry.vb_clu))][clusterID];
-			uint i0 = cluster.vertices[cluster.triangles[triangleID].i0()];
-			uint i1 = cluster.vertices[cluster.triangles[triangleID].i1()];
-			uint i2 = cluster.vertices[cluster.triangles[triangleID].i2()];
+			const uint i0 = cluster.vertices[cluster.triangles[triangleID].i0()];
+			const uint i1 = cluster.vertices[cluster.triangles[triangleID].i1()];
+			const uint i2 = cluster.vertices[cluster.triangles[triangleID].i2()];
 			return uint3(i0, i1, i2);
 		}
 		const uint startIndex = primitiveIndex * 3 + geometry.indexOffset;
 		Buffer<uint> indexBuffer = bindless_buffers_uint[NonUniformResourceIndex(descriptor_index(geometry.ib))];
-		uint i0 = indexBuffer[startIndex + 0];
-		uint i1 = indexBuffer[startIndex + 1];
-		uint i2 = indexBuffer[startIndex + 2];
+		const uint i0 = indexBuffer[startIndex + 0];
+		const uint i1 = indexBuffer[startIndex + 1];
+		const uint i2 = indexBuffer[startIndex + 2];
 		return uint3(i0, i1, i2);
 	}
-	uint i0() { return tri().x; }
-	uint i1() { return tri().y; }
-	uint i2() { return tri().z; }
 };
 
 #define texture_random64x64 bindless_textures[descriptor_index(GetFrame().texture_random64x64_index)]
@@ -732,16 +766,13 @@ struct PrimitiveID
 #define texture_cameravolumelut bindless_textures3D_half4[descriptor_index(GetFrame().texture_cameravolumelut_index)]
 #define texture_wind bindless_textures3D[descriptor_index(GetFrame().texture_wind_index)]
 #define texture_wind_prev bindless_textures3D[descriptor_index(GetFrame().texture_wind_prev_index)]
-#define texture_caustics bindless_textures_half4[descriptor_index(GetFrame().texture_caustics_index)]
 #define scene_acceleration_structure bindless_accelerationstructures[descriptor_index(GetScene().TLAS)]
 
 #define texture_depth bindless_textures_float[descriptor_index(GetCamera().texture_depth_index)]
 #define texture_depth_history bindless_textures_float[descriptor_index(GetCamera().texture_depth_index_prev)]
-#define texture_lineardepth bindless_textures_float[descriptor_index(GetCamera().texture_lineardepth_index)]
 #define texture_primitiveID bindless_textures_uint[descriptor_index(GetCamera().texture_primitiveID_index)]
 #define texture_velocity bindless_textures_float2[descriptor_index(GetCamera().texture_velocity_index)]
-#define texture_normal bindless_textures_float2[descriptor_index(GetCamera().texture_normal_index)]
-#define texture_roughness bindless_textures_float[descriptor_index(GetCamera().texture_roughness_index)]
+#define texture_normal_roughness bindless_textures_half4[descriptor_index(GetCamera().texture_normal_roughness_index)]
 
 // Note: defines can be better for choosing between half/float by compiler than "static const float"
 #define PI 3.14159265358979323846
@@ -957,19 +988,19 @@ inline half3 box_to_uv(in half3 box)
 
 float acosFast(float x)
 {
-    // Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
-    // This is the approximation of degree 1, with a max absolute error of 9.0x10^-3
-    float y = abs(x);
-    float p = -0.1565827 * y + 1.570796;
-    p *= sqrt(1.0 - y);
-    return x >= 0.0 ? p : PI - p;
+	// Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
+	// This is the approximation of degree 1, with a max absolute error of 9.0x10^-3
+	float y = abs(x);
+	float p = -0.1565827 * y + 1.570796;
+	p *= sqrt(1.0 - y);
+	return x >= 0.0 ? p : PI - p;
 }
 
 float acosFastPositive(float x)
 {
-    // Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
-    float p = -0.1565827 * x + 1.570796;
-    return p * sqrt(1.0 - x);
+	// Lagarde 2014, "Inverse trigonometric functions GPU optimization for AMD GCN architecture"
+	float p = -0.1565827 * x + 1.570796;
+	return p * sqrt(1.0 - x);
 }
 
 inline half3 GetSunColor() { return unpack_half3(GetWeather().sun_color); } // sun color with intensity applied
@@ -1352,19 +1383,36 @@ inline float3x3 compute_tangent_frame(float3 N, float3 P, float2 UV)
 }
 
 // Computes linear depth from post-projection depth
-inline float compute_lineardepth(in float z, in float near, in float far, in bool ortho = false)
+//	This version can be used without camera struct with raw values
+template<typename T>
+inline T compute_lineardepth(in T z, in float near, in float far, in bool ortho = false)
 {
 	if (ortho)
 		return near + (1 - z) * (far - near); // ortho
 
 	// Perspective:
-	float z_n = 2 * z - 1;
-	float lin = 2 * far * near / (near + far - z_n * (near - far));
-	return lin;
+	return 2 * far * near / (near + far - (z * 2 - 1) * (near - far));
 }
-inline float compute_lineardepth(in float z)
+// Computes linear depth from post-projection depth
+//	This version uses camera constant buffer with some precomputed values for optimization:
+template<typename T>
+inline T compute_lineardepth(in T z, in ShaderCamera camera)
 {
-	return compute_lineardepth(z, GetCamera().z_near, GetCamera().z_far, GetCamera().IsOrtho());
+	if (camera.IsOrtho())
+		return camera.z_near + (1 - z) * camera.far_sub_near; // ortho
+
+	// Perspective:
+	return camera.far_mul_near_mul_2 / (camera.near_plus_far - (z * 2 - 1) * camera.near_sub_far);
+}
+template<typename T>
+inline T compute_lineardepth(in T z)
+{
+	return compute_lineardepth(z, GetCamera());
+}
+template<typename T>
+inline T compute_lineardepth_normalized(in T z)
+{
+	return compute_lineardepth(z) * GetCamera().z_far_rcp;
 }
 
 // Computes post-projection depth from linear depth
@@ -1374,14 +1422,25 @@ inline float compute_inverse_lineardepth(in float lin, in float near, in float f
 		return 1 - (lin - near) / (far - near);
 
 	// Perspective:
-	float z_n = ((lin - 2 * far) * near + far * lin) / (lin * near - far * lin);
-	float z = (z_n + 1) / 2;
-	return z;
+	return (((lin - 2 * far) * near + far * lin) / (lin * near - far * lin) + 1) * 0.5;
 }
 inline float compute_inverse_lineardepth(in float lin)
 {
 	return compute_inverse_lineardepth(lin, GetCamera().z_near, GetCamera().z_far, GetCamera().IsOrtho());
 }
+
+// This is a helper to allow using texture_lineardepth as if there was an existing texture with normalized lineardepth information in [0,1] range
+//	However now it's emulated with the regular depth buffer texture to save memory
+struct LinearDepthTextureEmulator
+{
+	float operator[](uint2 pixel) { return compute_lineardepth_normalized(texture_depth[pixel]); }
+	float Load(uint3 pixel_lod) { return compute_lineardepth_normalized(texture_depth.Load(pixel_lod)); }
+	float Sample(SamplerState sam, float2 uv) { return compute_lineardepth_normalized(texture_depth.Sample(sam, uv)); }
+	float SampleLevel(SamplerState sam, float2 uv, float lod) { return compute_lineardepth_normalized(texture_depth.SampleLevel(sam, uv, lod)); }
+	float4 GatherRed(SamplerState sam, float2 uv) { return compute_lineardepth_normalized(texture_depth.GatherRed(sam, uv)); }
+	void GetDimensions(out uint x, out uint y) { return texture_depth.GetDimensions(x, y); }
+};
+static const LinearDepthTextureEmulator texture_lineardepth;
 
 inline float3x3 get_tangentspace(in float3 normal)
 {
@@ -1463,6 +1522,16 @@ inline float caustic_pattern(float2 uv, float time)
 	float3 b = mul(a, m) * 0.4;
 	float3 c = mul(b, m) * 0.3;
 	return pow(min(min(length(0.5 - frac(a)), length(0.5 - frac(b))), length(0.5 - frac(c))), 7) * 25.;
+}
+inline float3 caustics(float2 uv)
+{
+	const float time = GetTime();
+	const float2 chromatic_offset = 1.0 / 256.0 * 8; // tweaked to old caustic shader that ran at 256x256 res
+	return float3(
+		caustic_pattern(uv + float2(0, 0), time),
+		caustic_pattern(uv + float2(chromatic_offset.x, 0), time),
+		caustic_pattern(uv + float2(0, chromatic_offset.y), time)
+	);
 }
 
 // Convert texture coordinates on a cubemap face to cubemap sampling coordinates:
@@ -1678,6 +1747,19 @@ half3 decode_oct(half2 e)
 	return normalize(v);
 }
 
+half2 encode_normal(in half3 v)
+{
+	return encode_oct(v) * 0.5 + 0.5;
+}
+half3 decode_normal(in half2 e)
+{
+	return decode_oct(e * 2 - 1);
+}
+half3 decode_normal(in half4 e)
+{
+	return decode_oct(e.xy * 2 - 1);
+}
+
 // Assume normalized input on +Z hemisphere.
 // Output is on [-1, 1].
 half2 encode_hemioct(in half3 v)
@@ -1713,6 +1795,21 @@ uint2 remap_lane_8x8(uint lane) {
 	return uint2(bitfield_insert(bitfield_extract(lane, 2u, 3u), lane, 1u)
 		, bitfield_insert(bitfield_extract(lane, 3u, 3u)
 			, bitfield_extract(lane, 1u, 2u), 2u));
+}
+
+// Similar to remap_lane_8x8 which remaps SV_GroupIndex to a 2D grid for QuadRead access, but this works with larger block sizes but it's laid out differently
+uint2 remap_lane_quads(uint groupIndex)
+{
+	uint idx = groupIndex | (groupIndex << 15);  // Pack for parallel x/y extraction
+	uint2 coord;
+	coord.x  = idx & 0x10001;
+	coord.x |= (idx >> 1) & 0x20002;
+	coord.x |= (idx >> 2) & 0x40004;
+	coord.x |= (idx >> 3) & 0x80008;   // extra bits for 32x32 support
+	coord.x |= (idx >> 4) & 0x100010;  // extra for larger groups
+	coord.y = coord.x >> 16;
+	coord.x &= 0x1F;  // Mask to 5 bits (covers up to 32)
+	return coord;
 }
 
 
@@ -1877,10 +1974,10 @@ inline half distance_squared(half3 a, half3 b)
 template <typename T>
 inline half get_angle(T a, T b)
 {
-    half ret = dot(a, b);
-    ret = clamp(ret, -1, 1);
-    ret = acos(ret);
-    return ret;
+	half ret = dot(a, b);
+	ret = clamp(ret, -1, 1);
+	ret = acos(ret);
+	return ret;
 }
 
 float plane_point_distance(float3 planeOrigin, float3 planeNormal, float3 P)
@@ -1890,14 +1987,14 @@ float plane_point_distance(float3 planeOrigin, float3 planeNormal, float3 P)
 // Projects a point onto a plane defined by a normal and a point on the plane
 float3 point_on_plane(float3 P, float3 planeOrigin, float3 planeNormal)
 {
-    // Ensure the plane normal is normalized
-    planeNormal = normalize(planeNormal);
+	// Ensure the plane normal is normalized
+	planeNormal = normalize(planeNormal);
 
-    // Compute the distance from the point to the plane
-    float distance = dot(P - planeOrigin, planeNormal);
+	// Compute the distance from the point to the plane
+	float distance = dot(P - planeOrigin, planeNormal);
 
-    // Project the point onto the plane
-    return P - distance * planeNormal;
+	// Project the point onto the plane
+	return P - distance * planeNormal;
 }
 
 // o		: ray origin
@@ -2319,189 +2416,189 @@ float3 random_color(uint index)
 
 // Matrix operations for HLSL: https://gist.github.com/mattatz/86fff4b32d198d0928d0fa4ff32cf6fa
 float4x4 inverse(float4x4 m) {
-    float n11 = m[0][0], n12 = m[1][0], n13 = m[2][0], n14 = m[3][0];
-    float n21 = m[0][1], n22 = m[1][1], n23 = m[2][1], n24 = m[3][1];
-    float n31 = m[0][2], n32 = m[1][2], n33 = m[2][2], n34 = m[3][2];
-    float n41 = m[0][3], n42 = m[1][3], n43 = m[2][3], n44 = m[3][3];
+	float n11 = m[0][0], n12 = m[1][0], n13 = m[2][0], n14 = m[3][0];
+	float n21 = m[0][1], n22 = m[1][1], n23 = m[2][1], n24 = m[3][1];
+	float n31 = m[0][2], n32 = m[1][2], n33 = m[2][2], n34 = m[3][2];
+	float n41 = m[0][3], n42 = m[1][3], n43 = m[2][3], n44 = m[3][3];
 
-    float t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44;
-    float t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44;
-    float t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44;
-    float t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
+	float t11 = n23 * n34 * n42 - n24 * n33 * n42 + n24 * n32 * n43 - n22 * n34 * n43 - n23 * n32 * n44 + n22 * n33 * n44;
+	float t12 = n14 * n33 * n42 - n13 * n34 * n42 - n14 * n32 * n43 + n12 * n34 * n43 + n13 * n32 * n44 - n12 * n33 * n44;
+	float t13 = n13 * n24 * n42 - n14 * n23 * n42 + n14 * n22 * n43 - n12 * n24 * n43 - n13 * n22 * n44 + n12 * n23 * n44;
+	float t14 = n14 * n23 * n32 - n13 * n24 * n32 - n14 * n22 * n33 + n12 * n24 * n33 + n13 * n22 * n34 - n12 * n23 * n34;
 
-    float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
-    float idet = 1.0f / det;
+	float det = n11 * t11 + n21 * t12 + n31 * t13 + n41 * t14;
+	float idet = 1.0f / det;
 
-    float4x4 ret;
+	float4x4 ret;
 
-    ret[0][0] = t11 * idet;
-    ret[0][1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * idet;
-    ret[0][2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * idet;
-    ret[0][3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * idet;
+	ret[0][0] = t11 * idet;
+	ret[0][1] = (n24 * n33 * n41 - n23 * n34 * n41 - n24 * n31 * n43 + n21 * n34 * n43 + n23 * n31 * n44 - n21 * n33 * n44) * idet;
+	ret[0][2] = (n22 * n34 * n41 - n24 * n32 * n41 + n24 * n31 * n42 - n21 * n34 * n42 - n22 * n31 * n44 + n21 * n32 * n44) * idet;
+	ret[0][3] = (n23 * n32 * n41 - n22 * n33 * n41 - n23 * n31 * n42 + n21 * n33 * n42 + n22 * n31 * n43 - n21 * n32 * n43) * idet;
 
-    ret[1][0] = t12 * idet;
-    ret[1][1] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * idet;
-    ret[1][2] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * idet;
-    ret[1][3] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * idet;
+	ret[1][0] = t12 * idet;
+	ret[1][1] = (n13 * n34 * n41 - n14 * n33 * n41 + n14 * n31 * n43 - n11 * n34 * n43 - n13 * n31 * n44 + n11 * n33 * n44) * idet;
+	ret[1][2] = (n14 * n32 * n41 - n12 * n34 * n41 - n14 * n31 * n42 + n11 * n34 * n42 + n12 * n31 * n44 - n11 * n32 * n44) * idet;
+	ret[1][3] = (n12 * n33 * n41 - n13 * n32 * n41 + n13 * n31 * n42 - n11 * n33 * n42 - n12 * n31 * n43 + n11 * n32 * n43) * idet;
 
-    ret[2][0] = t13 * idet;
-    ret[2][1] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * idet;
-    ret[2][2] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * idet;
-    ret[2][3] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * idet;
+	ret[2][0] = t13 * idet;
+	ret[2][1] = (n14 * n23 * n41 - n13 * n24 * n41 - n14 * n21 * n43 + n11 * n24 * n43 + n13 * n21 * n44 - n11 * n23 * n44) * idet;
+	ret[2][2] = (n12 * n24 * n41 - n14 * n22 * n41 + n14 * n21 * n42 - n11 * n24 * n42 - n12 * n21 * n44 + n11 * n22 * n44) * idet;
+	ret[2][3] = (n13 * n22 * n41 - n12 * n23 * n41 - n13 * n21 * n42 + n11 * n23 * n42 + n12 * n21 * n43 - n11 * n22 * n43) * idet;
 
-    ret[3][0] = t14 * idet;
-    ret[3][1] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * idet;
-    ret[3][2] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * idet;
-    ret[3][3] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * idet;
+	ret[3][0] = t14 * idet;
+	ret[3][1] = (n13 * n24 * n31 - n14 * n23 * n31 + n14 * n21 * n33 - n11 * n24 * n33 - n13 * n21 * n34 + n11 * n23 * n34) * idet;
+	ret[3][2] = (n14 * n22 * n31 - n12 * n24 * n31 - n14 * n21 * n32 + n11 * n24 * n32 + n12 * n21 * n34 - n11 * n22 * n34) * idet;
+	ret[3][3] = (n12 * n23 * n31 - n13 * n22 * n31 + n13 * n21 * n32 - n11 * n23 * n32 - n12 * n21 * n33 + n11 * n22 * n33) * idet;
 
-    return ret;
+	return ret;
 }
 
 // http://www.euclideanspace.com/maths/geometry/rotations/conversions/matrixToQuaternion/
 float4 matrix_to_quaternion(float4x4 m)
 {
-    float tr = m[0][0] + m[1][1] + m[2][2];
-    float4 q = float4(0, 0, 0, 0);
+	float tr = m[0][0] + m[1][1] + m[2][2];
+	float4 q = float4(0, 0, 0, 0);
 
-    if (tr > 0)
-    {
-        float s = sqrt(tr + 1.0) * 2; // S=4*qw
-        q.w = 0.25 * s;
-        q.x = (m[2][1] - m[1][2]) / s;
-        q.y = (m[0][2] - m[2][0]) / s;
-        q.z = (m[1][0] - m[0][1]) / s;
-    }
-    else if ((m[0][0] > m[1][1]) && (m[0][0] > m[2][2]))
-    {
-        float s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2; // S=4*qx
-        q.w = (m[2][1] - m[1][2]) / s;
-        q.x = 0.25 * s;
-        q.y = (m[0][1] + m[1][0]) / s;
-        q.z = (m[0][2] + m[2][0]) / s;
-    }
-    else if (m[1][1] > m[2][2])
-    {
-        float s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2; // S=4*qy
-        q.w = (m[0][2] - m[2][0]) / s;
-        q.x = (m[0][1] + m[1][0]) / s;
-        q.y = 0.25 * s;
-        q.z = (m[1][2] + m[2][1]) / s;
-    }
-    else
-    {
-        float s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2; // S=4*qz
-        q.w = (m[1][0] - m[0][1]) / s;
-        q.x = (m[0][2] + m[2][0]) / s;
-        q.y = (m[1][2] + m[2][1]) / s;
-        q.z = 0.25 * s;
-    }
+	if (tr > 0)
+	{
+		float s = sqrt(tr + 1.0) * 2; // S=4*qw
+		q.w = 0.25 * s;
+		q.x = (m[2][1] - m[1][2]) / s;
+		q.y = (m[0][2] - m[2][0]) / s;
+		q.z = (m[1][0] - m[0][1]) / s;
+	}
+	else if ((m[0][0] > m[1][1]) && (m[0][0] > m[2][2]))
+	{
+		float s = sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2; // S=4*qx
+		q.w = (m[2][1] - m[1][2]) / s;
+		q.x = 0.25 * s;
+		q.y = (m[0][1] + m[1][0]) / s;
+		q.z = (m[0][2] + m[2][0]) / s;
+	}
+	else if (m[1][1] > m[2][2])
+	{
+		float s = sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2; // S=4*qy
+		q.w = (m[0][2] - m[2][0]) / s;
+		q.x = (m[0][1] + m[1][0]) / s;
+		q.y = 0.25 * s;
+		q.z = (m[1][2] + m[2][1]) / s;
+	}
+	else
+	{
+		float s = sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2; // S=4*qz
+		q.w = (m[1][0] - m[0][1]) / s;
+		q.x = (m[0][2] + m[2][0]) / s;
+		q.y = (m[1][2] + m[2][1]) / s;
+		q.z = 0.25 * s;
+	}
 
-    return q;
+	return q;
 }
 
 float4x4 m_scale(float4x4 m, float3 v)
 {
-    float x = v.x, y = v.y, z = v.z;
+	float x = v.x, y = v.y, z = v.z;
 
-    m[0][0] *= x; m[1][0] *= y; m[2][0] *= z;
-    m[0][1] *= x; m[1][1] *= y; m[2][1] *= z;
-    m[0][2] *= x; m[1][2] *= y; m[2][2] *= z;
-    m[0][3] *= x; m[1][3] *= y; m[2][3] *= z;
+	m[0][0] *= x; m[1][0] *= y; m[2][0] *= z;
+	m[0][1] *= x; m[1][1] *= y; m[2][1] *= z;
+	m[0][2] *= x; m[1][2] *= y; m[2][2] *= z;
+	m[0][3] *= x; m[1][3] *= y; m[2][3] *= z;
 
-    return m;
+	return m;
 }
 
 float4x4 quaternion_to_matrix(float4 quat)
 {
-    float4x4 m = float4x4(float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0));
+	float4x4 m = float4x4(float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0), float4(0, 0, 0, 0));
 
-    float x = quat.x, y = quat.y, z = quat.z, w = quat.w;
-    float x2 = x + x, y2 = y + y, z2 = z + z;
-    float xx = x * x2, xy = x * y2, xz = x * z2;
-    float yy = y * y2, yz = y * z2, zz = z * z2;
-    float wx = w * x2, wy = w * y2, wz = w * z2;
+	float x = quat.x, y = quat.y, z = quat.z, w = quat.w;
+	float x2 = x + x, y2 = y + y, z2 = z + z;
+	float xx = x * x2, xy = x * y2, xz = x * z2;
+	float yy = y * y2, yz = y * z2, zz = z * z2;
+	float wx = w * x2, wy = w * y2, wz = w * z2;
 
-    m[0][0] = 1.0 - (yy + zz);
-    m[0][1] = xy - wz;
-    m[0][2] = xz + wy;
+	m[0][0] = 1.0 - (yy + zz);
+	m[0][1] = xy - wz;
+	m[0][2] = xz + wy;
 
-    m[1][0] = xy + wz;
-    m[1][1] = 1.0 - (xx + zz);
-    m[1][2] = yz - wx;
+	m[1][0] = xy + wz;
+	m[1][1] = 1.0 - (xx + zz);
+	m[1][2] = yz - wx;
 
-    m[2][0] = xz - wy;
-    m[2][1] = yz + wx;
-    m[2][2] = 1.0 - (xx + yy);
+	m[2][0] = xz - wy;
+	m[2][1] = yz + wx;
+	m[2][2] = 1.0 - (xx + yy);
 
-    m[3][3] = 1.0;
+	m[3][3] = 1.0;
 
-    return m;
+	return m;
 }
 
 float4x4 m_translate(float4x4 m, float3 v)
 {
-    float x = v.x, y = v.y, z = v.z;
-    m[0][3] = x;
-    m[1][3] = y;
-    m[2][3] = z;
-    return m;
+	float x = v.x, y = v.y, z = v.z;
+	m[0][3] = x;
+	m[1][3] = y;
+	m[2][3] = z;
+	return m;
 }
 
 float4x4 compose(float3 position, float4 quat, float3 scale)
 {
-    float4x4 m = quaternion_to_matrix(quat);
-    m = m_scale(m, scale);
-    m = m_translate(m, position);
-    return m;
+	float4x4 m = quaternion_to_matrix(quat);
+	m = m_scale(m, scale);
+	m = m_translate(m, position);
+	return m;
 }
 
 void decompose(in float4x4 m, out float3 position, out float4 rotation, out float3 scale)
 {
-    float sx = length(float3(m[0][0], m[0][1], m[0][2]));
-    float sy = length(float3(m[1][0], m[1][1], m[1][2]));
-    float sz = length(float3(m[2][0], m[2][1], m[2][2]));
+	float sx = length(float3(m[0][0], m[0][1], m[0][2]));
+	float sy = length(float3(m[1][0], m[1][1], m[1][2]));
+	float sz = length(float3(m[2][0], m[2][1], m[2][2]));
 
-    // if determine is negative, we need to invert one scale
-    float det = determinant(m);
-    if (det < 0) {
-        sx = -sx;
-    }
+	// if determine is negative, we need to invert one scale
+	float det = determinant(m);
+	if (det < 0) {
+		sx = -sx;
+	}
 
-    position.x = m[3][0];
-    position.y = m[3][1];
-    position.z = m[3][2];
+	position.x = m[3][0];
+	position.y = m[3][1];
+	position.z = m[3][2];
 
-    // scale the rotation part
+	// scale the rotation part
 
-    float invSX = 1.0 / sx;
-    float invSY = 1.0 / sy;
-    float invSZ = 1.0 / sz;
+	float invSX = 1.0 / sx;
+	float invSY = 1.0 / sy;
+	float invSZ = 1.0 / sz;
 
-    m[0][0] *= invSX;
-    m[0][1] *= invSX;
-    m[0][2] *= invSX;
+	m[0][0] *= invSX;
+	m[0][1] *= invSX;
+	m[0][2] *= invSX;
 
-    m[1][0] *= invSY;
-    m[1][1] *= invSY;
-    m[1][2] *= invSY;
+	m[1][0] *= invSY;
+	m[1][1] *= invSY;
+	m[1][2] *= invSY;
 
-    m[2][0] *= invSZ;
-    m[2][1] *= invSZ;
-    m[2][2] *= invSZ;
+	m[2][0] *= invSZ;
+	m[2][1] *= invSZ;
+	m[2][2] *= invSZ;
 
-    rotation = matrix_to_quaternion(m);
+	rotation = matrix_to_quaternion(m);
 
-    scale.x = sx;
-    scale.y = sy;
-    scale.z = sz;
+	scale.x = sx;
+	scale.y = sy;
+	scale.z = sz;
 }
 
 float4x4 axis_matrix(float3 right, float3 up, float3 forward)
 {
-    float3 xaxis = right;
-    float3 yaxis = up;
-    float3 zaxis = forward;
-    return float4x4(
+	float3 xaxis = right;
+	float3 yaxis = up;
+	float3 zaxis = forward;
+	return float4x4(
 		xaxis.x, yaxis.x, zaxis.x, 0,
 		xaxis.y, yaxis.y, zaxis.y, 0,
 		xaxis.z, yaxis.z, zaxis.z, 0,
@@ -2512,57 +2609,57 @@ float4x4 axis_matrix(float3 right, float3 up, float3 forward)
 // http://stackoverflow.com/questions/349050/calculating-a-lookat-matrix
 float4x4 look_at_matrix(float3 forward, float3 up)
 {
-    float3 xaxis = normalize(cross(forward, up));
-    float3 yaxis = up;
-    float3 zaxis = forward;
-    return axis_matrix(xaxis, yaxis, zaxis);
+	float3 xaxis = normalize(cross(forward, up));
+	float3 yaxis = up;
+	float3 zaxis = forward;
+	return axis_matrix(xaxis, yaxis, zaxis);
 }
 
 float4x4 look_at_matrix(float3 at, float3 eye, float3 up)
 {
-    float3 zaxis = normalize(at - eye);
-    float3 xaxis = normalize(cross(up, zaxis));
-    float3 yaxis = cross(zaxis, xaxis);
-    return axis_matrix(xaxis, yaxis, zaxis);
+	float3 zaxis = normalize(at - eye);
+	float3 xaxis = normalize(cross(up, zaxis));
+	float3 yaxis = cross(zaxis, xaxis);
+	return axis_matrix(xaxis, yaxis, zaxis);
 }
 
 float4x4 extract_rotation_matrix(float4x4 m)
 {
-    float sx = length(float3(m[0][0], m[0][1], m[0][2]));
-    float sy = length(float3(m[1][0], m[1][1], m[1][2]));
-    float sz = length(float3(m[2][0], m[2][1], m[2][2]));
+	float sx = length(float3(m[0][0], m[0][1], m[0][2]));
+	float sy = length(float3(m[1][0], m[1][1], m[1][2]));
+	float sz = length(float3(m[2][0], m[2][1], m[2][2]));
 
-    // if determine is negative, we need to invert one scale
-    float det = determinant(m);
-    if (det < 0) {
-        sx = -sx;
-    }
+	// if determine is negative, we need to invert one scale
+	float det = determinant(m);
+	if (det < 0) {
+		sx = -sx;
+	}
 
-    float invSX = 1.0 / sx;
-    float invSY = 1.0 / sy;
-    float invSZ = 1.0 / sz;
+	float invSX = 1.0 / sx;
+	float invSY = 1.0 / sy;
+	float invSZ = 1.0 / sz;
 
-    m[0][0] *= invSX;
-    m[0][1] *= invSX;
-    m[0][2] *= invSX;
-    m[0][3] = 0;
+	m[0][0] *= invSX;
+	m[0][1] *= invSX;
+	m[0][2] *= invSX;
+	m[0][3] = 0;
 
-    m[1][0] *= invSY;
-    m[1][1] *= invSY;
-    m[1][2] *= invSY;
-    m[1][3] = 0;
+	m[1][0] *= invSY;
+	m[1][1] *= invSY;
+	m[1][2] *= invSY;
+	m[1][3] = 0;
 
-    m[2][0] *= invSZ;
-    m[2][1] *= invSZ;
-    m[2][2] *= invSZ;
-    m[2][3] = 0;
+	m[2][0] *= invSZ;
+	m[2][1] *= invSZ;
+	m[2][2] *= invSZ;
+	m[2][3] = 0;
 
-    m[3][0] = 0;
-    m[3][1] = 0;
-    m[3][2] = 0;
-    m[3][3] = 1;
+	m[3][0] = 0;
+	m[3][1] = 0;
+	m[3][2] = 0;
+	m[3][3] = 1;
 
-    return m;
+	return m;
 }
 
 #endif // WI_SHADER_GLOBALS_HF

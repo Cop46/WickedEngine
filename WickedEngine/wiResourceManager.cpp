@@ -40,6 +40,9 @@ namespace wi
 	//static constexpr size_t streaming_texture_min_size = 4096; // 4KB is the minimum texture memory alignment
 	static constexpr size_t streaming_texture_min_size = 64 * 1024; // 64KB is the usual texture memory alignment, this allows higher base tex size than 4KB
 
+	// Texture resolution limit
+	static uint32_t max_texture_resolution = ~0u;
+
 	struct ResourceInternal
 	{
 		resourcemanager::Flags flags = resourcemanager::Flags::NONE;
@@ -105,6 +108,13 @@ namespace wi
 		const ResourceInternal* resourceinternal = (ResourceInternal*)internal_state.get();
 		return resourceinternal->video;
 	}
+	uint32_t Resource::GetTextureFullMipCount() const
+	{
+		const ResourceInternal* resourceinternal = (ResourceInternal*)internal_state.get();
+		if (resourceinternal->streaming_texture.mip_count > 0)
+			return resourceinternal->streaming_texture.mip_count;
+		return resourceinternal->texture.GetDesc().mip_levels;
+	}
 	int Resource::GetTextureSRGBSubresource() const
 	{
 		const ResourceInternal* resourceinternal = (ResourceInternal*)internal_state.get();
@@ -132,7 +142,7 @@ namespace wi
 			internal_state = wi::allocator::make_shared<ResourceInternal>();
 		}
 		ResourceInternal* resourceinternal = (ResourceInternal*)internal_state.get();
-		resourceinternal->filedata = data;
+		resourceinternal->filedata = std::move(data);
 	}
 	void Resource::SetTexture(const wi::graphics::Texture& texture, int srgb_subresource)
 	{
@@ -517,7 +527,20 @@ namespace wi
 							}
 						}
 
+
 						int mip_offset = 0;
+
+						// mipmap reduction for resolution limit:
+						while (desc.width > max_texture_resolution && desc.height > max_texture_resolution && desc.mip_levels > 1)
+						{
+							desc.width = std::max(desc.width >> 1, 1u);
+							desc.height = std::max(desc.height >> 1, 1u);
+							desc.depth = std::max(desc.depth >> 1, 1u);
+							desc.mip_levels -= 1;
+							mip_offset++;
+						}
+
+						// mipmap reduction for streaming resources:
 						if (has_flag(flags, Flags::STREAMING))
 						{
 							// Remember full mipcount for streaming:
@@ -536,8 +559,8 @@ namespace wi
 							// Reduce mip map count that will be uploaded to GPU:
 							while (desc.mip_levels > 1 && desc.depth == 1 && desc.array_size == 1 && ComputeTextureMemorySizeInBytes(desc) > streaming_texture_min_size)
 							{
-								desc.width >>= 1;
-								desc.height >>= 1;
+								desc.width = std::max(desc.width >> 1, 1u);
+								desc.height = std::max(desc.height >> 1, 1u);
 								desc.mip_levels -= 1;
 								mip_offset++;
 							}
@@ -1396,6 +1419,15 @@ namespace wi
 					continue;
 				out_resources[x.first].internal_state = resourceinternal;
 			}
+		}
+
+		void SetTextureResolutionLimit(uint32_t resolution)
+		{
+			max_texture_resolution = resolution;
+		}
+		uint32_t GetTextureResolutionLimit()
+		{
+			return max_texture_resolution;
 		}
 
 		void Serialize_READ(wi::Archive& archive, ResourceSerializer& seri)

@@ -92,7 +92,7 @@ namespace wi::graphics
 		// Create a buffer with a callback to initialize its data. Note: don't read from callback's dest pointer, reads will be very slow! Use memcpy to write to it to make sure only writes happen!
 		virtual bool CreateBuffer2(const GPUBufferDesc* desc, const std::function<void(void* dest)>& init_callback, GPUBuffer* buffer, const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const = 0;
 		virtual bool CreateTexture(const TextureDesc* desc, const SubresourceData* initial_data, Texture* texture, const GPUResource* alias = nullptr, uint64_t alias_offset = 0ull) const = 0;
-		virtual bool CreateShader(ShaderStage stage, const void* shadercode, size_t shadercode_size, Shader* shader) const = 0;
+		virtual bool CreateShader(ShaderStage stage, const void* shadercode, size_t shadercode_size, Shader* shader, const char* entrypoint = "main") const = 0;
 		virtual bool CreateSampler(const SamplerDesc* desc, Sampler* sampler) const = 0;
 		virtual bool CreateQueryHeap(const GPUQueryHeapDesc* desc, GPUQueryHeap* queryheap) const = 0;
 		// Creates a graphics pipeline state. If renderpass_info is specified, then it will be only compatible with that renderpass info, but it will be created immediately (it can also take longer to be created)
@@ -421,7 +421,18 @@ namespace wi::graphics
 			}
 		}
 
+		// Submits every queued GPU work so far and waits for GPU to finish to free up resources
+		void FlushDeallocations()
+		{
+			for (uint32_t i = 0; i < BUFFERCOUNT; ++i)
+			{
+				SubmitCommandLists();
+			}
+		}
+
+		WI_DISABLE_DEPRECATED_BEGIN
 		// Deprecated, kept for back-compat:
+		[[deprecated]]
 		bool CreateRenderPass(const RenderPassDesc* desc, RenderPass* renderpass) const
 		{
 			renderpass->valid = true;
@@ -429,6 +440,7 @@ namespace wi::graphics
 			return true;
 		}
 		// Deprecated, kept for back-compat:
+		[[deprecated]]
 		void RenderPassBegin(const RenderPass* renderpass, CommandList cmd)
 		{
 			RenderPassFlags flags = {};
@@ -443,6 +455,7 @@ namespace wi::graphics
 			}
 			RenderPassBegin(rp, (uint32_t)renderpass->desc.attachments.size(), cmd, flags);
 		}
+		WI_DISABLE_DEPRECATED_END
 	};
 
 

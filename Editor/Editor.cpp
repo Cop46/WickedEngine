@@ -29,6 +29,7 @@ enum class FileType
 	VRM,
 	VRMA,
 	FBX,
+	PLY,
 	IMAGE,
 	VIDEO,
 	SOUND,
@@ -45,6 +46,7 @@ static wi::unordered_map<std::string, FileType> filetypes = {
 	{"VRM", FileType::VRM},
 	{"VRMA", FileType::VRMA},
 	{"FBX", FileType::FBX},
+	{"PLY", FileType::PLY},
 	{"H", FileType::HEADER},
 	{"CPP", FileType::CPP},
 	{"TXT", FileType::TEXT},
@@ -85,7 +87,9 @@ enum class EditorActions
 
 	// Engine actions
 	SCREENSHOT,
+	SCREENSHOT_NOGUI,
 	SCREENSHOT_ALPHA,
+	SCREENSHOT_ALPHA_SELECTION,
 	INSPECTOR_MODE,
 	PLACE_INSTANCES,
 
@@ -142,7 +146,9 @@ HotkeyInfo hotkeyActions[size_t(EditorActions::COUNT)] = {
 	{wi::input::BUTTON('3'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCALE_TOGGLE_ACTION,
 	{wi::input::BUTTON('4'),					/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//LOCAL_GLOBAL_TOGGLE_ACTION,
 	{wi::input::BUTTON::KEYBOARD_BUTTON_F3,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT,
+	{wi::input::BUTTON::KEYBOARD_BUTTON_F3,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ true},	//SCREENSHOT_NOGUI,
 	{wi::input::BUTTON::KEYBOARD_BUTTON_F4,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ false},	//SCREENSHOT_ALPHA,
+	{wi::input::BUTTON::KEYBOARD_BUTTON_F4,		/*press=*/ true,		/*control=*/ false,		/*shift=*/ true},	//SCREENSHOT_ALPHA_SELECTION,
 	{wi::input::BUTTON('I'),					/*press=*/ false,		/*control=*/ false,		/*shift=*/ false},	//INSPECTOR_MODE,
 	{wi::input::BUTTON::MOUSE_BUTTON_LEFT,		/*press=*/ true,		/*control=*/ true,		/*shift=*/ true},	//PLACE_INSTANCES,
 	{wi::input::BUTTON('S'),					/*press=*/ true,		/*control=*/ true,		/*shift=*/ true},	//SAVE_SCENE_AS,
@@ -183,7 +189,7 @@ bool CheckInput(EditorActions action)
 std::string GetInputString(EditorActions action)
 {
 	const HotkeyInfo& hotkey = hotkeyActions[size_t(action)];
-	std::string ret = wi::input::ButtonToString(hotkey.button).text;
+	std::string ret = wi::input::ButtonToString(hotkey.button).chars;
 	if (hotkey.shift)
 	{
 		ret = "Shift + " + ret;
@@ -219,7 +225,9 @@ void HotkeyRemap(Editor* main)
 		{"SCALE_TOGGLE_ACTION", EditorActions::SCALE_TOGGLE_ACTION},
 		{"LOCAL_GLOBAL_TOGGLE_ACTION", EditorActions::LOCAL_GLOBAL_TOGGLE_ACTION},
 		{"MAKE_NEW_SCREENSHOT", EditorActions::SCREENSHOT},
+		{"MAKE_NEW_SCREENSHOT_NOGUI", EditorActions::SCREENSHOT_NOGUI},
 		{"MAKE_NEW_SCREENSHOT_ALPHA", EditorActions::SCREENSHOT_ALPHA},
+		{"MAKE_NEW_SCREENSHOT_ALPHA_SELECTION", EditorActions::SCREENSHOT_ALPHA_SELECTION},
 		{"INSPECTOR_MODE", EditorActions::INSPECTOR_MODE},
 		{"PLACE_INSTANCES", EditorActions::PLACE_INSTANCES},
 		{"SAVE_SCENE_AS", EditorActions::SAVE_SCENE_AS},
@@ -392,7 +400,6 @@ void Editor::SaveWindowSize()
 			{
 				config.Set("width", width);
 				config.Set("height", height);
-				config.Commit();
 			}
 		}
 #elif defined(SDL2)
@@ -405,14 +412,12 @@ void Editor::SaveWindowSize()
 			{
 				config.Set("width", width);
 				config.Set("height", height);
-				config.Commit();
 			}
 		}
 #elif defined(__APPLE__)
 		XMUINT2 size = wi::apple::GetWindowSizeNoScaling(window);
 		config.Set("width", size.x);
 		config.Set("height", size.y);
-		config.Commit();
 #endif
 	}
 }
@@ -499,7 +504,7 @@ void EditorComponent::ResizeBuffers()
 	desc.format = Format::R10G10B10A2_UNORM;
 	desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
 	GetDevice()->CreateTexture(&desc, nullptr, &gui_background_effect);
-	GetDevice()->SetName(&gui_background_effect, "gui_background_effect");
+	GetDevice()->SetName(&gui_background_effect, "editor.gui_background_effect");
 }
 void EditorComponent::ResizeLayout()
 {
@@ -531,6 +536,10 @@ void EditorComponent::ResizeLayout()
 }
 void EditorComponent::Load()
 {
+	wi::Timer timer;
+
+	is_2D_mode = main->config.GetBool("2D_mode");
+
 	//Load hotkeys here
 	HotkeyRemap(main);
 
@@ -1042,7 +1051,6 @@ void EditorComponent::Load()
 		{
 			wi::physics::SetSimulationEnabled(!wi::physics::IsSimulationEnabled());
 			main->config.GetSection("options").Set("physics", wi::physics::IsSimulationEnabled());
-			main->config.Commit();
 		}
 	});
 	GetGUI().AddWidget(&physicsButton);
@@ -1155,7 +1163,7 @@ void EditorComponent::Load()
 		const uint64_t target_scene_id = GetCurrentEditorScene().id;
 		wi::helper::FileDialogParams params;
 		params.type = wi::helper::FileDialogParams::OPEN;
-		params.description = ".wiscene, .obj, .gltf, .glb, .vrm, .fbx, .lua, .mp4, .png, ...";
+		params.description = ".wiscene, .obj, .gltf, .glb, .vrm, .fbx, .ply, .lua, .mp4, .png, ...";
 		params.extensions.push_back("wiscene");
 		params.extensions.push_back("obj");
 		params.extensions.push_back("gltf");
@@ -1163,6 +1171,7 @@ void EditorComponent::Load()
 		params.extensions.push_back("vrm");
 		params.extensions.push_back("vrma");
 		params.extensions.push_back("fbx");
+		params.extensions.push_back("ply");
 		params.extensions.push_back("lua");
 		params.extensions.push_back("txt");
 		const auto ext_video = wi::resourcemanager::GetSupportedVideoExtensions();
@@ -1285,7 +1294,6 @@ void EditorComponent::Load()
 	});
 	GetGUI().AddWidget(&cinemaButton);
 
-
 	fullscreenButton.Create("Full screen");
 	fullscreenButton.SetLocalizationEnabled(wi::gui::LocalizationEnabled::Tooltip);
 	fullscreenButton.SetShadowRadius(2);
@@ -1297,7 +1305,6 @@ void EditorComponent::Load()
 		bool fullscreen = main->config.GetBool("fullscreen");
 		fullscreen = !fullscreen;
 		main->config.Set("fullscreen", fullscreen);
-		main->config.Commit();
 
 		wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=](uint64_t) {
 
@@ -1374,7 +1381,9 @@ void EditorComponent::Load()
 		ss += "Reload terrain props: " + GetInputString(EditorActions::RELOAD_TERRAIN_PROPS) + "\n";
 		ss += "Wireframe mode: " + GetInputString(EditorActions::WIREFRAME_MODE) + "\n";
 		ss += "Screenshot (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT) + "\n";
-		ss += "Screenshot with background as alpha (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_ALPHA) + "\n";
+		ss += "Screenshot without GUI (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_NOGUI) + "\n";
+		ss += "Screenshot with background as transparency (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_ALPHA) + "\n";
+		ss += "Screenshot selection with everything else as transparency (saved into Editor's screenshots folder): " + GetInputString(EditorActions::SCREENSHOT_ALPHA_SELECTION) + "\n";
 		ss += "Depth of field refocus to point: " + GetInputString(EditorActions::DEPTH_OF_FIELD_REFOCUS_TO_POINT) + " + left mouse button" + "\n";
 		ss += "Color grading reference: " + GetInputString(EditorActions::COLOR_GRADING_REFERENCE) + " (color grading palette reference will be displayed in top left corner)\n";
 		ss += "Focus on selected: " + GetInputString(EditorActions::FOCUS_ON_SELECTION) + " button, this will make the camera jump to selection.\n";
@@ -1388,7 +1397,7 @@ void EditorComponent::Load()
 		ss += "\nTips\n";
 		ss += "-------\n";
 		ss += "You can find sample scenes in the Content/models directory. Try to load one.\n";
-		ss += "You can also import models from .OBJ, .GLTF, .GLB, .VRM, .FBX files.\n";
+		ss += "You can also import models from .OBJ, .GLTF, .GLB, .VRM, .FBX, .PLY files.\n";
 		ss += "You can find a program configuration file at Editor/config.ini\n";
 		ss += "You can find sample LUA scripts in the Content/scripts directory. Try to load one.\n";
 		ss += "You can find a startup script in startup.lua (this will be executed on program start, if exists)\n";
@@ -1484,6 +1493,14 @@ void EditorComponent::Load()
 	});
 	GetGUI().AddWidget(&guiScalingCombo);
 
+	is2DModeButton.Create("is2DModeButton");
+	is2DModeButton.SetTooltip("Switch between 3D and 2D editor workflows. 2D mode will lock the camera and controls to the XY axes.");
+	is2DModeButton.SetShadowRadius(2);
+	is2DModeButton.OnClick([this](wi::gui::EventArgs args) {
+		Set2DMode(!is_2D_mode);
+	});
+	GetGUI().AddWidget(&is2DModeButton);
+
 	componentsWnd.Create(this);
 	GetGUI().AddWidget(&componentsWnd);
 
@@ -1508,7 +1525,7 @@ void EditorComponent::Load()
 		font_datas.emplace_back().name = filename;
 		wi::helper::FileRead(filename, font_datas.back().filedata);
 	};
-	wi::helper::GetFileNamesInDirectory("fonts/", load_font, "TTF");
+	wi::helper::GetFileNamesInDirectory(wi::helper::GetCurrentPath() + "/fonts/", load_font, "TTF");
 
 	{
 		size_t current_recent = 0;
@@ -1529,6 +1546,8 @@ void EditorComponent::Load()
 		}
 	}
 
+	GraphicsDevice* device = GetDevice();
+
 	// Set up gradients for the spline visualizer:
 	uint8_t spline_gradient[4096];
 	for (int i = 0; i < arraysize(spline_gradient); ++i)
@@ -1547,6 +1566,7 @@ void EditorComponent::Load()
 		SwizzleFromString("111r")
 	);
 	assert(success);
+	device->SetName(&spline_renderer.texture, "editor.spline_renderer.texture");
 
 	for (int i = 0; i < arraysize(spline_gradient); ++i)
 	{
@@ -1564,8 +1584,11 @@ void EditorComponent::Load()
 		SwizzleFromString("111r")
 	);
 	assert(success);
+	device->SetName(&spline_renderer.texture2, "editor.spline_renderer.texture2");
 
 	RenderPath2D::Load();
+
+	wilog_success("Editor loaded in %d ms", (int)std::round(timer.elapsed()));
 }
 void EditorComponent::Start()
 {
@@ -1599,8 +1622,10 @@ void EditorComponent::Update(float dt)
 
 	main->canvas.scaling = float(guiScalingCombo.GetSelectedUserdata()) / 100.0f;
 
-	if (CheckInput(EditorActions::SCREENSHOT))
+	wi::renderer::SetDebugDrawEnabled(true);
+	if (screenshot)
 	{
+		screenshot = false;
 		std::string filename = wi::helper::screenshot(main->swapChain);
 		PostSaveText(filename);
 		if (filename.empty())
@@ -1612,8 +1637,23 @@ void EditorComponent::Update(float dt)
 			PostSaveText("Screenshot saved: ", filename);
 		}
 	}
-	if (CheckInput(EditorActions::SCREENSHOT_ALPHA))
+	if (screenshot_nogui)
 	{
+		screenshot_nogui = false;
+		std::string filename = wi::helper::screenshot(renderPath->GetRenderResult3D());
+		PostSaveText(filename);
+		if (filename.empty())
+		{
+			PostSaveText("Error! Screenshot was not successful!");
+		}
+		else
+		{
+			PostSaveText("Screenshot saved: ", filename);
+		}
+	}
+	if (screenshot_alpha)
+	{
+		screenshot_alpha = false;
 		std::string filename = wi::helper::screenshot(renderPath->CreateScreenshotWithAlphaBackground());
 		PostSaveText(filename);
 		if (filename.empty())
@@ -1624,6 +1664,41 @@ void EditorComponent::Update(float dt)
 		{
 			PostSaveText("Screenshot saved: ", filename);
 		}
+	}
+	if (screenshot_alpha_selection)
+	{
+		screenshot_alpha_selection = false;
+		std::string filename = wi::helper::screenshot(renderPath->CreateScreenshotWithAlphaBackground(EDITORSTENCILREF_HIGHLIGHT_OBJECT, wi::image::STENCILMODE_EQUAL, wi::image::STENCILREFMODE_USER));
+		PostSaveText(filename);
+		if (filename.empty())
+		{
+			PostSaveText("Error! Screenshot was not successful!");
+		}
+		else
+		{
+			PostSaveText("Screenshot saved: ", filename);
+		}
+	}
+
+	// screenshot is done next frame update to capture current frame render and the alpha modes also disable debug draw for just this frame
+	if (CheckInput(EditorActions::SCREENSHOT_NOGUI)) // shift priority
+	{
+		screenshot_nogui = true;
+		wi::renderer::SetDebugDrawEnabled(false);
+	}
+	else if (CheckInput(EditorActions::SCREENSHOT_ALPHA_SELECTION)) // shift priority
+	{
+		screenshot_alpha_selection = true;
+		wi::renderer::SetDebugDrawEnabled(false);
+	}
+	else if (CheckInput(EditorActions::SCREENSHOT))
+	{
+		screenshot = true;
+	}
+	else if (CheckInput(EditorActions::SCREENSHOT_ALPHA))
+	{
+		screenshot_alpha = true;
+		wi::renderer::SetDebugDrawEnabled(false);
 	}
 
 	loadmodel_font.SetHidden(!wi::jobsystem::IsBusy(loadmodel_workload));
@@ -1652,6 +1727,8 @@ void EditorComponent::Update(float dt)
 	CameraComponent& camera = editorscene.camera;
 
 	translator.scene = &scene;
+	translator.is2D = is_2D_mode;
+	wi::renderer::SetGridHelper2D(is_2D_mode);
 
 	if (scene.forces.Contains(grass_interaction_entity))
 	{
@@ -1921,17 +1998,24 @@ void EditorComponent::Update(float dt)
 		currentMouse.x -= renderPath->PhysicalToLogical((uint32_t)viewport3D.top_left_x);
 		currentMouse.y -= renderPath->PhysicalToLogical((uint32_t)viewport3D.top_left_y);
 
+		static constexpr float tweak60 = 0.1f / 60.0f;
 		float xDif = 0, yDif = 0;
+		const wi::input::MouseState& mouse = wi::input::GetMouseState();
+		const wi::input::Pinch pinch = wi::input::GetTouchPinch();
+		const XMFLOAT2& pan = wi::input::GetTouchPan();
 
 		if (wi::input::Down(wi::input::MOUSE_BUTTON_RIGHT))
 		{
 			camControlStart = false;
-			xDif = wi::input::GetMouseState().delta_position.x;
-			yDif = wi::input::GetMouseState().delta_position.y;
-			xDif = 0.1f * xDif * (1.0f / 60.0f);
-			yDif = 0.1f * yDif * (1.0f / 60.0f);
-			wi::input::SetPointer(originalMouse);
-			wi::input::HidePointer(true);
+			xDif = mouse.delta_position.x;
+			yDif = mouse.delta_position.y;
+			xDif *= tweak60;
+			yDif *= tweak60;
+			if (!is_2D_mode)
+			{
+				wi::input::SetPointer(originalMouse);
+				wi::input::HidePointer(true);
+			}
 		}
 		else
 		{
@@ -1964,6 +2048,12 @@ void EditorComponent::Update(float dt)
 		const float joystickrotspeed = 0.05f;
 		xDif += rightStick.x * joystickrotspeed;
 		yDif += rightStick.y * joystickrotspeed;
+		
+		if (translator.state == Translator::TRANSLATOR_IDLE)
+		{
+			xDif += pan.x * tweak60;
+			yDif += pan.y * tweak60;
+		}
 
 		xDif *= cameraWnd.rotationspeedSlider.GetValue();
 		yDif *= cameraWnd.rotationspeedSlider.GetValue();
@@ -1999,7 +2089,73 @@ void EditorComponent::Update(float dt)
 			ReloadTerrainProps();
 		}
 
-		if (cameraWnd.fpsCheckBox.GetCheck())
+		if (is_2D_mode)
+		{
+			// 2D camera
+			const float clampedDT = std::min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
+
+			const float speed = ((wi::input::Down(wi::input::KEYBOARD_BUTTON_LSHIFT) ? 10.0f : 1.0f) + rightTrigger.x * 10.0f) * cameraWnd.movespeedSlider.GetValue() * clampedDT;
+			XMVECTOR move = XMLoadFloat3(&editorscene.cam_move);
+			XMVECTOR moveNew = XMVectorSet(rightStick.x, rightStick.y, 0, 0);
+
+			if (!wi::input::Down(wi::input::KEYBOARD_BUTTON_LCONTROL))
+			{
+				// Only move camera if control not pressed
+				if (CheckInput(EditorActions::MOVE_CAMERA_LEFT) || wi::input::Down(wi::input::GAMEPAD_BUTTON_LEFT)) { moveNew += XMVectorSet(-1, 0, 0, 0); }
+				if (CheckInput(EditorActions::MOVE_CAMERA_RIGHT) || wi::input::Down(wi::input::GAMEPAD_BUTTON_RIGHT)) { moveNew += XMVectorSet(1, 0, 0, 0); }
+				if (CheckInput(EditorActions::MOVE_CAMERA_FORWARD) || wi::input::Down(wi::input::GAMEPAD_BUTTON_UP)) { moveNew += XMVectorSet(0, 1, 0, 0); }
+				if (CheckInput(EditorActions::MOVE_CAMERA_BACKWARD) || wi::input::Down(wi::input::GAMEPAD_BUTTON_DOWN)) { moveNew += XMVectorSet(0, -1, 0, 0); }
+				if (CheckInput(EditorActions::MOVE_CAMERA_UP) || wi::input::Down(wi::input::GAMEPAD_BUTTON_2)) { moveNew += XMVectorSet(0, 1, 0, 0); }
+				if (CheckInput(EditorActions::MOVE_CAMERA_DOWN) || wi::input::Down(wi::input::GAMEPAD_BUTTON_1)) { moveNew += XMVectorSet(0, -1, 0, 0); }
+				moveNew = XMVector3Normalize(moveNew);
+			}
+			moveNew += XMVectorSet(leftStick.x, 0, leftStick.y, 0);
+			moveNew *= speed;
+
+			move = XMVectorLerp(move, moveNew, std::min(1.0f, cameraWnd.accelerationSlider.GetValue() * clampedDT / 0.0166f)); // smooth the movement a bit
+			float moveLength = XMVectorGetX(XMVector3Length(move));
+			float moveNewLength = XMVectorGetX(XMVector3Length(moveNew));
+
+			// Only zero out movement when there is no input
+			if (moveLength < 0.0001f && moveNewLength < 0.0001f)
+			{
+				move = XMVectorSet(0, 0, 0, 0);
+			}
+
+			// Mouse pan works completely differently in 2D mode, it "grabs canvas"
+			XMFLOAT2 grabdiff = XMFLOAT2(0, 0);
+			const float units_per_pixel = camera.ortho_vertical_size / viewport3D.height * 0.5f;
+			if (wi::input::Down(wi::input::MOUSE_BUTTON_RIGHT))
+			{
+				wi::input::SetCursor(wi::input::CURSOR_RESIZEALL);
+				grabdiff = XMFLOAT2(-mouse.delta_position.x * units_per_pixel, mouse.delta_position.y * units_per_pixel);
+				move = XMVectorZero();
+			}
+			else if(std::abs(pan.x) > 0.0001f || std::abs(pan.y) > 0.0001f)
+			{
+				grabdiff = XMFLOAT2(pan.x * units_per_pixel, -pan.y * units_per_pixel);
+				move = XMVectorZero();
+			}
+
+			if (std::abs(grabdiff.x) > 0.0001f || std::abs(grabdiff.y) > 0.0001f || moveLength > 0.0001f)
+			{
+				editorscene.camera_transform.Translate(move + XMVectorSet(grabdiff.x, grabdiff.y, 0, 0));
+				camera.SetDirty();
+			}
+
+			editorscene.camera_transform.rotation_local = XMFLOAT4(0, 0, 0, 1);
+			editorscene.camera_transform.UpdateTransform();
+			XMStoreFloat3(&editorscene.cam_move, move);
+
+			if (!paintToolWnd.IsVisible() && std::abs(currentMouse.z) > 0.25f)
+			{
+				camera.ortho_vertical_size -= currentMouse.z;
+			}
+			camera.ortho_vertical_size *= 1.0f + pinch.delta_scale;
+
+			camera.ortho_vertical_size = std::max(0.01f, camera.ortho_vertical_size);
+		}
+		else if (cameraWnd.fpsCheckBox.GetCheck())
 		{
 			// FPS Camera
 			const float clampedDT = std::min(dt, 0.1f); // if dt > 100 millisec, don't allow the camera to jump too far...
@@ -2017,6 +2173,7 @@ void EditorComponent::Update(float dt)
 				if (CheckInput(EditorActions::MOVE_CAMERA_BACKWARD) || wi::input::Down(wi::input::GAMEPAD_BUTTON_DOWN)) { moveNew += XMVectorSet(0, 0, -1, 0); camera.ortho_vertical_size += 0.1f; }
 				if (CheckInput(EditorActions::MOVE_CAMERA_UP) || wi::input::Down(wi::input::GAMEPAD_BUTTON_2)) { moveNew += XMVectorSet(0, 1, 0, 0); }
 				if (CheckInput(EditorActions::MOVE_CAMERA_DOWN) || wi::input::Down(wi::input::GAMEPAD_BUTTON_1)) { moveNew += XMVectorSet(0, -1, 0, 0); }
+				moveNew += XMVectorSet(0, 0, pinch.delta_scale, 0);
 				moveNew = XMVector3Normalize(moveNew);
 			}
 			moveNew += XMVectorSet(leftStick.x, 0, leftStick.y, 0);
@@ -2116,6 +2273,15 @@ void EditorComponent::Update(float dt)
 		{
 			hovered = wi::scene::PickResult();
 
+			const float required_dist = camera.IsOrtho() ? (camera.ortho_vertical_size * 0.025f) : 0.05f;
+			auto dist_check = [&](float dis, const XMFLOAT3& position) {
+				if (camera.IsOrtho())
+				{
+					return dis > 0.01f && dis < required_dist && dis < hovered.distance;
+				}
+				return dis > 0.01f && dis < wi::math::Distance(position, pickRay.origin) * required_dist && dis < hovered.distance;
+			};
+
 			if (has_flag(componentsWnd.filter, ComponentsWindow::Filter::Light))
 			{
 				for (size_t i = 0; i < scene.lights.GetCount(); ++i)
@@ -2125,7 +2291,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), XMLoadFloat3(&light.position));
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(light.position, pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, light.position))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2177,7 +2343,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2195,7 +2361,7 @@ void EditorComponent::Update(float dt)
 						const TransformComponent& transform = scene.splines[i].spline_node_transforms[j];
 						XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 						float dis = XMVectorGetX(disV);
-						if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.025f && dis < hovered.distance)
+						if (dist_check(dis, transform.GetPosition()))
 						{
 							hovered = wi::scene::PickResult();
 							hovered.entity = scene.splines[i].spline_node_entities[j];
@@ -2210,7 +2376,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2229,7 +2395,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2248,7 +2414,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2267,7 +2433,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2286,7 +2452,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2326,7 +2492,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2345,7 +2511,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2364,7 +2530,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2383,7 +2549,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2402,7 +2568,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2421,7 +2587,7 @@ void EditorComponent::Update(float dt)
 
 					XMVECTOR disV = XMVector3LinePointDistance(XMLoadFloat3(&pickRay.origin), XMLoadFloat3(&pickRay.origin) + XMLoadFloat3(&pickRay.direction), transform.GetPositionV());
 					float dis = XMVectorGetX(disV);
-					if (dis > 0.01f && dis < wi::math::Distance(transform.GetPosition(), pickRay.origin) * 0.05f && dis < hovered.distance)
+					if (dist_check(dis, transform.GetPosition()))
 					{
 						hovered = wi::scene::PickResult();
 						hovered.entity = entity;
@@ -2472,6 +2638,7 @@ void EditorComponent::Update(float dt)
 		}
 
 		// Interactions:
+		bool interact_pick_allowed = true;
 		{
 			// Interact:
 			if (CheckInput(EditorActions::RAGDOLL_AND_PHYSICS_IMPULSE_TESTER))
@@ -2503,6 +2670,7 @@ void EditorComponent::Update(float dt)
 								wi::physics::ApplyImpulseAt(*rigidbody, impulse, result.position_local);
 							}
 						}
+						interact_pick_allowed = false;
 					}
 				}
 			}
@@ -2512,6 +2680,7 @@ void EditorComponent::Update(float dt)
 				if (wi::input::Down(wi::input::MOUSE_BUTTON_MIDDLE))
 				{
 					wi::physics::PickDrag(scene, pickRay, physicsDragOp);
+					interact_pick_allowed = !physicsDragOp.IsValid();
 				}
 				else
 				{
@@ -2550,7 +2719,7 @@ void EditorComponent::Update(float dt)
 			}
 
 			// Other:
-			if (wi::input::Down(wi::input::MOUSE_BUTTON_MIDDLE))
+			if (interact_pick_allowed && wi::input::Down(wi::input::MOUSE_BUTTON_MIDDLE))
 			{
 				hovered = wi::scene::Pick(pickRay, wi::enums::FILTER_OBJECT_ALL, ~0u, scene);
 				if (hovered.entity != INVALID_ENTITY)
@@ -2972,6 +3141,7 @@ void EditorComponent::Update(float dt)
 		componentsWnd.voxelGridWnd.SetEntity(INVALID_ENTITY);
 		componentsWnd.metadataWnd.SetEntity(INVALID_ENTITY);
 		componentsWnd.constraintWnd.SetEntity(INVALID_ENTITY);
+		componentsWnd.gaussiansplatWnd.SetEntity(INVALID_ENTITY);
 	}
 	else
 	{
@@ -3008,6 +3178,7 @@ void EditorComponent::Update(float dt)
 		componentsWnd.voxelGridWnd.SetEntity(picked.entity);
 		componentsWnd.metadataWnd.SetEntity(picked.entity);
 		componentsWnd.constraintWnd.SetEntity(picked.entity);
+		componentsWnd.gaussiansplatWnd.SetEntity(picked.entity);
 
 		bool found_object = false;
 		bool found_mesh = false;
@@ -3757,6 +3928,12 @@ void EditorComponent::Render() const
 					wi::font::Draw("Vehicle", fp, cmd);
 					dummy::draw_vehicle(XMLoadFloat4x4(&transform.world) * VP, fp.color, true, cmd);
 					break;
+				case MetadataComponent::Preset::PointOfInterest:
+					fp.position.y += 1.0f;
+					fp.color = wi::Color(176, 91, 255, 255);
+					wi::font::Draw("Point of interest", fp, cmd);
+					dummy::draw_poi(XMMatrixScaling(sca, sca, sca) * XMLoadFloat4x4(&transform.world) * VP, fp.color, true, cmd);
+					break;
 				}
 			}
 
@@ -3766,7 +3943,7 @@ void EditorComponent::Render() const
 
 		// Full resolution:
 		{
-			const Texture& render_result = renderPath->GetRenderResult();
+			const Texture& render_result_2D = renderPath->GetRenderResult2D();
 			if (getMSAASampleCount() > 1)
 			{
 				RenderPassImage rp[] = {
@@ -3777,7 +3954,7 @@ void EditorComponent::Render() const
 						ResourceState::RENDERTARGET,
 						ResourceState::RENDERTARGET
 					),
-					RenderPassImage::Resolve(&render_result),
+					RenderPassImage::Resolve(&render_result_2D),
 					RenderPassImage::DepthStencil(
 						&editor_depthbuffer,
 						RenderPassImage::LoadOp::CLEAR,
@@ -3790,7 +3967,7 @@ void EditorComponent::Render() const
 			{
 				RenderPassImage rp[] = {
 					RenderPassImage::RenderTarget(
-						&render_result,
+						&render_result_2D,
 						RenderPassImage::LoadOp::CLEAR
 					),
 					RenderPassImage::DepthStencil(
@@ -3846,6 +4023,11 @@ void EditorComponent::Render() const
 
 			const XMMATRIX R = XMLoadFloat3x3(&cam.rotationMatrix);
 
+			const float ortho_dist = camera.ortho_vertical_size * 0.5f;
+			auto camera_scaling = [&](const XMFLOAT3& position) {
+				return camera.IsOrtho() ? ortho_dist : wi::math::Distance(position, camera.Eye);;
+			};
+
 			wi::font::Params fp;
 			fp.customRotation = &R;
 			fp.customProjection = &VP;
@@ -3865,7 +4047,7 @@ void EditorComponent::Render() const
 					if (!scene.transforms.Contains(entity))
 						continue;
 
-					const float dist = wi::math::Distance(light.position, camera.Eye);
+					const float dist = camera_scaling(light.position);
 
 					fp.position = light.position;
 					fp.scaling = scaling * dist;
@@ -4017,7 +4199,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4049,7 +4231,7 @@ void EditorComponent::Render() const
 						const TransformComponent& transform = scene.splines[i].spline_node_transforms[j];
 
 						fp.position = transform.GetPosition();
-						fp.scaling = 0.5f * scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+						fp.scaling = 0.5f * scaling * camera_scaling(transform.GetPosition());
 						fp.color = inactiveEntityColor;
 
 						if (hovered.entity == entity)
@@ -4073,7 +4255,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4102,7 +4284,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4134,7 +4316,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4165,7 +4347,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4196,7 +4378,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4227,7 +4409,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4258,7 +4440,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4289,7 +4471,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4319,7 +4501,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4349,7 +4531,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4391,7 +4573,7 @@ void EditorComponent::Render() const
 					const TransformComponent& transform = *scene.transforms.GetComponent(entity);
 
 					fp.position = transform.GetPosition();
-					fp.scaling = scaling * wi::math::Distance(transform.GetPosition(), camera.Eye);
+					fp.scaling = scaling * camera_scaling(transform.GetPosition());
 					fp.color = inactiveEntityColor;
 
 					if (hovered.entity == entity)
@@ -4713,6 +4895,7 @@ void EditorComponent::Render() const
 
 	RenderPath2D::Render();
 
+	wi::renderer::SetDebugDrawEnabled(true);
 }
 void EditorComponent::Compose(CommandList cmd) const
 {
@@ -4842,6 +5025,7 @@ void EditorComponent::ResizeViewport3D()
 				desc.sample_count = renderPath->getMSAASampleCount();
 				success = device->CreateTexture(&desc, nullptr, &rt_selectionOutline_MSAA);
 				assert(success);
+				device->SetName(&rt_selectionOutline_MSAA, "editor.rt_selectionOutline_MSAA");
 				desc.sample_count = 1;
 			}
 			else
@@ -4850,11 +5034,13 @@ void EditorComponent::ResizeViewport3D()
 			}
 			success = device->CreateTexture(&desc, nullptr, &rt_selectionOutline[0]);
 			assert(success);
+			device->SetName(&rt_selectionOutline[0], "editor.rt_selectionOutline[0]");
 			success = device->CreateTexture(&desc, nullptr, &rt_selectionOutline[1]);
 			assert(success);
+			device->SetName(&rt_selectionOutline[1], "editor.rt_selectionOutline[1]");
 		}
 
-		const TextureDesc& renderResultDesc = renderPath->GetRenderResult().GetDesc();
+		const TextureDesc& renderResultDesc = renderPath->GetRenderResult2D().GetDesc();
 		{
 			TextureDesc desc;
 			desc.width = renderResultDesc.width;
@@ -4866,7 +5052,7 @@ void EditorComponent::ResizeViewport3D()
 			desc.swizzle.b = ComponentSwizzle::R;
 			desc.swizzle.a = ComponentSwizzle::R;
 			device->CreateTexture(&desc, nullptr, &rt_dummyOutline);
-			device->SetName(&rt_dummyOutline, "rt_dummyOutline");
+			device->SetName(&rt_dummyOutline, "editor.rt_dummyOutline");
 		}
 
 		{
@@ -4880,7 +5066,7 @@ void EditorComponent::ResizeViewport3D()
 			desc.bind_flags = BindFlag::DEPTH_STENCIL;
 			desc.layout = ResourceState::DEPTHSTENCIL;
 			device->CreateTexture(&desc, nullptr, &editor_depthbuffer);
-			device->SetName(&editor_depthbuffer, "editor_depthbuffer");
+			device->SetName(&editor_depthbuffer, "editor.editor_depthbuffer");
 
 			if (getMSAASampleCount() > 1)
 			{
@@ -4888,7 +5074,7 @@ void EditorComponent::ResizeViewport3D()
 				desc.bind_flags = BindFlag::RENDER_TARGET;
 				desc.layout = ResourceState::RENDERTARGET;
 				device->CreateTexture(&desc, nullptr, &editor_rendertarget);
-				device->SetName(&editor_rendertarget, "editor_rendertarget");
+				device->SetName(&editor_rendertarget, "editor.editor_rendertarget");
 			}
 		}
 
@@ -4899,7 +5085,7 @@ void EditorComponent::ResizeViewport3D()
 			desc.format = renderResultDesc.format;
 			desc.bind_flags = BindFlag::RENDER_TARGET | BindFlag::SHADER_RESOURCE;
 			device->CreateTexture(&desc, nullptr, &rt_metadataDummies);
-			device->SetName(&rt_metadataDummies, "rt_metadataDummies");
+			device->SetName(&rt_metadataDummies, "editor.rt_metadataDummies");
 
 			if (renderPath->getMSAASampleCount() > 1)
 			{
@@ -4908,7 +5094,7 @@ void EditorComponent::ResizeViewport3D()
 				desc.misc_flags = ResourceMiscFlag::TRANSIENT_ATTACHMENT;
 				desc.layout = ResourceState::RENDERTARGET;
 				device->CreateTexture(&desc, nullptr, &rt_metadataDummies_MSAA);
-				device->SetName(&rt_metadataDummies_MSAA, "rt_metadataDummies_MSAA");
+				device->SetName(&rt_metadataDummies_MSAA, "editor.rt_metadataDummies_MSAA");
 			}
 		}
 	}
@@ -4965,7 +5151,7 @@ void EditorComponent::AddSelected(const PickResult& picked, bool allow_refocus)
 		translator.selected.push_back(picked);
 		if (allow_refocus)
 		{
-			componentsWnd.entityTree.FocusOnItemByUserdata(picked.entity);
+			componentsWnd.entitytree_pending_focus = picked.entity;
 		}
 	}
 }
@@ -5473,6 +5659,10 @@ void EditorComponent::Open(std::string filename)
 		{
 			ImportModel_FBX(filename, *scene);
 		}
+		else if (type == FileType::PLY)
+		{
+			ImportModel_PLY(filename, *scene);
+		}
 
 		wi::eventhandler::Subscribe_Once(wi::eventhandler::EVENT_THREAD_SAFE_POINT, [=] (uint64_t userdata) {
 
@@ -5683,10 +5873,6 @@ void EditorComponent::SaveAs()
 Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width, uint32_t target_height, bool mipmaps) const
 {
 	GraphicsDevice* device = GetDevice();
-	// Ensure GPU has finished rendering before creating thumbnail
-	device->SubmitCommandLists();
-	device->WaitForGPU();
-
 	CommandList cmd = device->BeginCommandList();
 	Texture thumbnail = texture;
 
@@ -5716,6 +5902,7 @@ Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width,
 		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::RENDER_TARGET | BindFlag::UNORDERED_ACCESS;
 		Texture upsized;
 		device->CreateTexture(&desc, nullptr, &upsized);
+		device->SetName(&upsized, "editor.crop.upsized");
 
 		Viewport vp;
 		vp.width = (float)desc.width;
@@ -5772,6 +5959,7 @@ Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width,
 		desc.bind_flags = BindFlag::SHADER_RESOURCE | BindFlag::RENDER_TARGET | BindFlag::UNORDERED_ACCESS;
 		Texture downsized;
 		device->CreateTexture(&desc, nullptr, &downsized);
+		device->SetName(&downsized, "editor.crop.downsized");
 		wi::renderer::Postprocess_Downsample4x(thumbnail, downsized, cmd);
 		thumbnail = downsized;
 	}
@@ -5781,6 +5969,10 @@ Texture EditorComponent::CreateThumbnail(Texture texture, uint32_t target_width,
 		device->CreateMipgenSubresources(thumbnail);
 		wi::renderer::GenerateMipChain(thumbnail, wi::renderer::MIPGENFILTER_LINEAR, cmd);
 	}
+
+	// Ensure GPU has finished rendering
+	device->SubmitCommandLists();
+	device->WaitForGPU();
 
 	return thumbnail;
 }
@@ -5815,7 +6007,7 @@ bool EditorComponent::SetupThumbnailCamera(wi::RenderPath3D& thumbnailRenderPath
 
 	auto add_entity_bounds = [&](const Entity entity) {
 		const ObjectComponent* object = scene.objects.GetComponent(entity);
-		if (object != nullptr && object->meshID != INVALID_ENTITY)
+		if (object != nullptr && object->IsRenderable() && object->meshID != INVALID_ENTITY)
 		{
 			const MeshComponent* mesh = scene.meshes.GetComponent(object->meshID);
 			const TransformComponent* transform = scene.transforms.GetComponent(entity);
@@ -6390,9 +6582,8 @@ void EditorComponent::UpdateDynamicWidgets()
 		logButton.sprites[wi::gui::FOCUS].params.gradient = wi::image::Params::Gradient::None;
 	}
 
-
-
 	ofs = padding;
+	
 	if (generalWnd.IsVisible())
 	{
 		generalWnd.SetPos(XMFLOAT2(0, topmenuWnd.scale_local.y + topmenuWnd.GetShadowRadius()));
@@ -6450,6 +6641,8 @@ void EditorComponent::UpdateDynamicWidgets()
 	}
 	y = padding + topmenuWnd.GetSize().y + topmenuWnd.GetShadowRadius();
 	hei = 40;
+	
+	ofs = std::max(ofs, GetSafeInsetLeftLogical());
 
 	generalButton.SetPos(XMFLOAT2(ofs, y));
 	generalButton.SetSize(XMFLOAT2(hei, hei));
@@ -6479,6 +6672,18 @@ void EditorComponent::UpdateDynamicWidgets()
 
 	guiScalingCombo.SetSize(XMFLOAT2(50, 18));
 	guiScalingCombo.SetPos(XMFLOAT2(ofs, screenH - guiScalingCombo.GetSize().y - padding));
+
+	if (is_2D_mode)
+	{
+		is2DModeButton.SetText("2D");
+	}
+	else
+	{
+		is2DModeButton.SetText("3D");
+	}
+	is2DModeButton.SetSize(XMFLOAT2(50, 18));
+	is2DModeButton.SetPos(XMFLOAT2(guiScalingCombo.GetPos().x + guiScalingCombo.GetSize().x + 10, guiScalingCombo.GetPos().y));
+	is2DModeButton.Update(*this, 0);
 }
 
 void EditorComponent::SetCurrentScene(int index)
@@ -6579,6 +6784,7 @@ void EditorComponent::RefreshSceneList()
 			componentsWnd.metadataWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 			componentsWnd.constraintWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 			componentsWnd.splineWnd.SetEntity(wi::ecs::INVALID_ENTITY);
+			componentsWnd.gaussiansplatWnd.SetEntity(wi::ecs::INVALID_ENTITY);
 
 			componentsWnd.RefreshEntityTree();
 			ResetHistory();
@@ -6676,6 +6882,11 @@ bool EditorComponent::CheckUnsavedChanges(int scene_index)
 		// User doesn't want to save, proceed
 		return true;
 	}
+	else if (result == wi::helper::MessageBoxResult::OK)
+	{
+		// IOS default OK return since we don't have messagebox yet
+		return true;
+	}
 	else // Cancel or closed dialog
 	{
 		// User cancelled, don't proceed
@@ -6745,7 +6956,7 @@ void EditorComponent::FocusCameraOnSelected()
 		centerV = XMLoadFloat3(&aabb_center);
 	}
 
-	XMVECTOR target_forward = XMVector3Normalize(XMVectorNegate(camera.GetAt()));
+	XMVECTOR target_forward = XMVector3Normalize(camera.GetAt());
 	XMVECTOR up = XMVectorSet(0, 1, 0, 0);
 	XMVECTOR right = XMVector3Normalize(XMVector3Cross(up, target_forward));
 	up = XMVector3Cross(target_forward, right);
@@ -6769,6 +6980,10 @@ XMFLOAT3 EditorComponent::GetPositionInFrontOfCamera() const
 	const CameraComponent& camera = editorscene.camera;
 	XMFLOAT3 in_front_of_camera;
 	XMStoreFloat3(&in_front_of_camera, XMVectorAdd(camera.GetEye(), camera.GetAt() * 4));
+	if (is_2D_mode)
+	{
+		in_front_of_camera.z = 0;
+	}
 	return in_front_of_camera;
 }
 
@@ -6833,4 +7048,26 @@ void EditorComponent::SetLocalization(wi::Localization& loc)
 void EditorComponent::ReloadLanguage()
 {
 	generalWnd.languageCombo.SetSelected(generalWnd.languageCombo.GetSelected());
+}
+
+void EditorComponent::Set2DMode(bool value)
+{
+	is_2D_mode = value;
+
+	EditorScene& editorscene = GetCurrentEditorScene();
+	if (is_2D_mode)
+	{
+		editorscene.camera_transform.translation_local.z = -10;
+		editorscene.camera_transform.rotation_local = XMFLOAT4(0, 0, 0, 1);
+		editorscene.camera_transform.UpdateTransform();
+		editorscene.camera.SetOrtho(true);
+		editorscene.camera.ortho_vertical_size = editorscene.camera.ComputeOrthoVerticalSizeFromPerspective(editorscene.camera_transform.translation_local.z); // camera distance from origin
+	}
+	else
+	{
+		editorscene.camera.SetOrtho(false);
+		cameraWnd.orthoCheckBox.SetCheck(false);
+	}
+
+	main->config.Set("2D_mode", is_2D_mode);
 }

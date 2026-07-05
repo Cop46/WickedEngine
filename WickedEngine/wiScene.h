@@ -15,6 +15,7 @@
 #include "wiUnorderedSet.h"
 #include "wiVoxelGrid.h"
 #include "wiPathQuery.h"
+#include "wiGaussianSplatModel.h"
 
 #include <string>
 #include <memory>
@@ -45,7 +46,7 @@ namespace wi::scene
 		wi::ecs::ComponentManager<DecalComponent>& decals = componentLibrary.Register<DecalComponent>("wi::scene::Scene::decals", 1); // version = 1
 		wi::ecs::ComponentManager<AnimationComponent>& animations = componentLibrary.Register<AnimationComponent>("wi::scene::Scene::animations", 2); // version = 2
 		wi::ecs::ComponentManager<AnimationDataComponent>& animation_datas = componentLibrary.Register<AnimationDataComponent>("wi::scene::Scene::animation_datas");
-		wi::ecs::ComponentManager<EmittedParticleSystem>& emitters = componentLibrary.Register<EmittedParticleSystem>("wi::scene::Scene::emitters", 2); // version = 2
+		wi::ecs::ComponentManager<EmittedParticleSystem>& emitters = componentLibrary.Register<EmittedParticleSystem>("wi::scene::Scene::emitters", 3); // version = 3
 		wi::ecs::ComponentManager<HairParticleSystem>& hairs = componentLibrary.Register<HairParticleSystem>("wi::scene::Scene::hairs", 3); // version = 3
 		wi::ecs::ComponentManager<WeatherComponent>& weathers = componentLibrary.Register<WeatherComponent>("wi::scene::Scene::weathers", 6); // version = 6
 		wi::ecs::ComponentManager<SoundComponent>& sounds = componentLibrary.Register<SoundComponent>("wi::scene::Scene::sounds", 1); // version = 1
@@ -64,6 +65,7 @@ namespace wi::scene
 		wi::ecs::ComponentManager<CharacterComponent>& characters = componentLibrary.Register<CharacterComponent>("wi::scene::Scene::characters");
 		wi::ecs::ComponentManager<PhysicsConstraintComponent>& constraints = componentLibrary.Register<PhysicsConstraintComponent>("wi::scene::Scene::constraints", 6); // version = 6
 		wi::ecs::ComponentManager<SplineComponent>& splines = componentLibrary.Register<SplineComponent>("wi::scene::Scene::splines", 4); // version = 4
+		wi::ecs::ComponentManager<wi::GaussianSplatModel>& gaussian_splats = componentLibrary.Register<wi::GaussianSplatModel>("wi::scene::Scene::gaussian_splats");
 
 		// Non-serialized attributes:
 		float dt = 0;
@@ -236,6 +238,8 @@ namespace wi::scene
 			wi::graphics::Texture sdf_temp;
 			mutable bool pre_clear = true;
 		} vxgi;
+
+		wi::GaussianSplatScene gaussian_scene;
 
 		EnvironmentProbeComponent global_dynamic_probe; // when no envprobes are placed, this will be the fallback
 
@@ -713,6 +717,4 @@ namespace wi::scene
 }
 
 template<>
-struct enable_bitmask_operators<wi::scene::Scene::EntitySerializeFlags> {
-	static constexpr bool enable = true;
-};
+struct enable_bitmask_operators<wi::scene::Scene::EntitySerializeFlags> : std::true_type {};

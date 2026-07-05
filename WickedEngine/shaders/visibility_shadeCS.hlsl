@@ -1,5 +1,9 @@
+#define SURFACE_LOAD_QUAD_DERIVATIVES
+#define SURFACE_LOAD_ENABLE_WIND
+#define SVT_FEEDBACK
+#define TEXTURE_SLOT_NONUNIFORM
 #define SHADOW_MASK_ENABLED
-#define DISABLE_DECALS // decals were applied in surface shader
+#define PRIMITIVEID_FROM_MESHLET_OPTIMIZED
 //#define DISABLE_VOXELGI
 //#define DISABLE_ENVMAPS
 //#define DISABLE_SOFT_SHADOWMAP
@@ -16,6 +20,8 @@
 #include "brdf.hlsli"
 #include "shadingHF.hlsli"
 
+// This shader computes per-pixel lighting based on primitiveID
+
 struct VisibilityPushConstants
 {
 	uint global_tile_offset;
@@ -23,8 +29,7 @@ struct VisibilityPushConstants
 PUSHCONSTANT(push, VisibilityPushConstants);
 
 StructuredBuffer<VisibilityTile> binned_tiles : register(t0);
-Texture2D<uint4> input_payload_0 : register(t2);
-Texture2D<uint4> input_payload_1 : register(t3);
+StructuredBuffer<PrimitiveVisibilityTile> primitive_binned_tiles : register(t1);
 
 RWTexture2D<float4> output : register(u0);
 
@@ -33,57 +38,43 @@ void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 {
 	const uint tile_offset = push.global_tile_offset + Gid.x;
 	VisibilityTile tile = binned_tiles[tile_offset];
-	[branch] if (!tile.check_thread_valid(groupIndex)) return;
-	const uint2 GTid = remap_lane_8x8(groupIndex);
-	const uint2 pixel = unpack_pixel(tile.visibility_tile_id) * VISIBILITY_BLOCKSIZE + GTid;
+	const uint2 GTid = remap_lane_quads(groupIndex);
+	const uint2 tileID = unpack_pixel(tile.visibility_tile_id);
+	const uint2 pixel = tileID * VISIBILITY_BLOCKSIZE + GTid;
 
-	const float2 uv = ((float2)pixel + 0.5) * GetCamera().internal_resolution_rcp;
+	ShaderCamera camera = GetCamera();
+	const uint entity_flat_tile_index = flatten2D(tileID / VISIBILITY_TILED_CULLING_GRANULARITY, camera.entity_culling_tilecount.xy) * SHADER_ENTITY_TILE_BUCKET_COUNT;
+
+	const float2 uv = ((float2)pixel + 0.5) * camera.internal_resolution_rcp;
 	RayDesc ray = CreateCameraRay(pixel);
+	float3 rayDirection_quad_x = QuadReadAcrossX(ray.Direction);
+	float3 rayDirection_quad_y = QuadReadAcrossY(ray.Direction);
 
-	uint primitiveID = texture_primitiveID[pixel];
+#ifdef PRIMITIVEID_UNIFORM
+	const uint primitiveID = tile.shaderType_or_primitiveID;
+#else
+	const uint primitiveID = texture_primitiveID[pixel];
+	[branch] if (primitiveID == 0) return;
+#endif // PRIMITIVEID_UNIFORM
+
 	PrimitiveID prim;
 	prim.init();
 	prim.unpack(primitiveID);
 
+#ifndef PRIMITIVEID_UNIFORM
+	[branch] if (prim.shaderType != tile.shaderType_or_primitiveID) return;
+#endif // PRIMITIVEID_UNIFORM
+
 	Surface surface;
 	surface.init();
-
-	[branch]
-	if (!surface.load(prim, ray.Origin, ray.Direction))
-	{
-		return;
-	}
 	surface.pixel = pixel.xy;
 	surface.screenUV = uv;
 
-	// Unpack primary payload:
-	uint4 payload_0 = input_payload_0[pixel];
-	half4 data0 = unpack_rgba(payload_0.x);
-	surface.albedo = RemoveSRGBCurve_Fast(data0.rgb);
-	surface.occlusion = data0.a;
-	half4 data1 = unpack_rgba(payload_0.y);
-	surface.f0 = RemoveSRGBCurve_Fast(data1.rgb);
-	surface.roughness = data1.a;
-	surface.N = decode_oct(unpack_half2(payload_0.z));
-	surface.emissiveColor = Unpack_R11G11B10_FLOAT(payload_0.w);
-
-	surface.opacity = 1;
-	surface.baseColor = half4(surface.albedo, surface.opacity);
-
-#ifdef ANISOTROPIC
-	surface.T = unpack_half4(input_payload_1[pixel].xy);
-#endif // ANISOTROPIC
-
-#ifdef SHEEN
-	float4 data_sheen = unpack_rgba(input_payload_1[pixel].x);
-	surface.sheen.color = data_sheen.rgb;
-	surface.sheen.roughness = data_sheen.a;
-#endif // SHEEN
-
-#ifdef CLEARCOAT
-	surface.clearcoat.N = decode_oct(unpack_half2(input_payload_1[pixel].y));
-	surface.clearcoat.roughness = unpack_rgba(input_payload_1[pixel].z).r;
-#endif // CLEARCOAT
+	[branch]
+	if (!surface.load(prim, ray.Origin, ray.Direction, rayDirection_quad_x, rayDirection_quad_y, entity_flat_tile_index))
+	{
+		return;
+	}
 
 	surface.update();
 
@@ -96,30 +87,24 @@ void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 	Lighting lighting;
 	lighting.create(0, 0, surface.gi, 0);
 
-
-#ifdef PLANARREFLECTION
-	float2 bumpColor = unpack_half2(input_payload_1[pixel].x);
-	lighting.indirect.specular += PlanarReflection(surface, bumpColor) * surface.F;
-#endif // PLANARREFLECTION
-
-	TiledLighting(surface, lighting, tile.entity_flat_tile_index);
+	TiledLighting(surface, lighting, entity_flat_tile_index, camera);
 
 #ifndef CARTOON
 	[branch]
-	if (GetCamera().texture_ssr_index >= 0)
+	if (camera.texture_ssr_index >= 0)
 	{
-		half4 ssr = bindless_textures_half4[descriptor_index(GetCamera().texture_ssr_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0);
+		half4 ssr = bindless_textures_half4[descriptor_index(camera.texture_ssr_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0);
 		lighting.indirect.specular = lerp(lighting.indirect.specular, ssr.rgb * surface.F, ssr.a);
 	}
 	[branch]
-	if (GetCamera().texture_ssgi_index >= 0)
+	if (camera.texture_ssgi_index >= 0)
 	{
-		surface.ssgi = bindless_textures_half4[descriptor_index(GetCamera().texture_ssgi_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0).rgb;
+		surface.ssgi = bindless_textures_half4[descriptor_index(camera.texture_ssgi_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0).rgb;
 	}
 	[branch]
-	if (GetCamera().texture_ao_index >= 0)
+	if (camera.texture_ao_index >= 0)
 	{
-		surface.occlusion *= bindless_textures_half4[descriptor_index(GetCamera().texture_ao_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0).r;
+		surface.occlusion *= bindless_textures_half4[descriptor_index(camera.texture_ao_index)].SampleLevel(sampler_linear_clamp, surface.screenUV, 0).r;
 	}
 #endif // CARTOON
 
@@ -129,6 +114,15 @@ void main(uint Gid : SV_GroupID, uint groupIndex : SV_GroupIndex)
 
 	half4 rimHighlight = surface.inst.GetRimHighlight();
 	color.rgb += rimHighlight.rgb * pow(1 - surface.NdotV, rimHighlight.w);
+
+#ifdef INTERIORMAPPING
+	surface.baseColor.rgb += surface.emissiveColor;
+	surface.baseColor *= InteriorMapping(surface.P, surface.N, surface.V, surface.material, surface.inst);
+#endif // INTERIORMAPPING
+
+#if defined(UNLIT) || defined(INTERIORMAPPING)
+	color = surface.baseColor;
+#endif // UNLIT
 
 	ApplyFog(surface.hit_depth, surface.V, color);
 

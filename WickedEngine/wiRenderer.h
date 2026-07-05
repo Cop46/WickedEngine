@@ -37,6 +37,7 @@ namespace wi::renderer
 
 	constexpr uint8_t raytracing_inclusion_mask_shadow = 1 << 0;
 	constexpr uint8_t raytracing_inclusion_mask_reflection = 1 << 1;
+	constexpr uint8_t raytracing_inclusion_mask_diffuse = 1 << 2;
 
 	constexpr uint32_t CombineStencilrefs(wi::enums::STENCILREF engineStencilRef, uint8_t userStencilRef)
 	{
@@ -113,7 +114,8 @@ namespace wi::renderer
 		wi::graphics::Shader& shader,
 		const std::string& filename,
 		wi::graphics::ShaderModel minshadermodel = wi::graphics::ShaderModel::SM_6_0,
-		const wi::vector<std::string>& permutation_defines = {}
+		const wi::vector<std::string>& permutation_defines = {},
+		const std::string& entrypoint = "main"
 	);
 
 	// Whether background pipeline compilations are active (returns number of active jobs)
@@ -328,6 +330,18 @@ namespace wi::renderer
 		bool distortion, 
 		wi::graphics::CommandList cmd
 	);
+	// Does the gaussian splat culling and sorting for a single camera
+	void UpdateGaussianSplatsForCamera(
+		const wi::scene::Scene& scene,
+		const wi::scene::CameraComponent& camera,
+		wi::graphics::CommandList cmd
+	);
+	// Draw gaussian splats inside a render pass, the UpdateGaussianSplatsForCamera must have been called for this camera before this outside of render pass
+	void DrawGaussianSplats(
+		const wi::scene::Scene& scene,
+		const wi::scene::CameraComponent& camera,
+		wi::graphics::CommandList cmd
+	);
 	// Draw the sprites and fonts from the scene
 	void DrawSpritesAndFonts(
 		const wi::scene::Scene& scene,
@@ -370,9 +384,10 @@ namespace wi::renderer
 	struct TiledLightResources
 	{
 		XMUINT2 tileCount = {};
+		uint32_t camera_count = 1;
 		wi::graphics::GPUBuffer entityTiles; // culled entity indices
 	};
-	void CreateTiledLightResources(TiledLightResources& res, XMUINT2 resolution);
+	void CreateTiledLightResources(TiledLightResources& res, XMUINT2 resolution, uint32_t camera_count = 1);
 	// Compute light grid tiles
 	void ComputeTiledLightCulling(
 		const TiledLightResources& res,
@@ -418,20 +433,26 @@ namespace wi::renderer
 	struct VisibilityResources
 	{
 		XMUINT2 tile_count = {};
-		wi::graphics::GPUBuffer bins;
-		wi::graphics::GPUBuffer binned_tiles;
-		wi::graphics::Texture texture_payload_0;
-		wi::graphics::Texture texture_payload_1;
-		wi::graphics::Texture texture_normals;
-		wi::graphics::Texture texture_roughness;
+		wi::graphics::GPUBuffer primitive_bins;			 // primitiveID uniformity binning
+		wi::graphics::GPUBuffer primitive_binned_tiles;	 // primitiveID uniformity binning
+		wi::graphics::GPUBuffer bins;					 // material type binning
+		wi::graphics::GPUBuffer binned_tiles;			 // material type binning
+		wi::graphics::Texture texture_normal_roughness;
 
 		// You can request any of these extra outputs to be written by VisibilityResolve:
 		const wi::graphics::Texture* depthbuffer = nullptr; // depth buffer that matches with post projection
-		const wi::graphics::Texture* lineardepth = nullptr; // depth buffer in linear space in [0,1] range
 		const wi::graphics::Texture* primitiveID_resolved = nullptr; // resolved from MSAA texture_visibility input
 
+		inline bool IsValidSimple() const { return primitive_bins.IsValid(); }
 		inline bool IsValid() const { return bins.IsValid(); }
+		void DeleteOptionalResources()
+		{
+			bins = {};
+			binned_tiles = {};
+			texture_normal_roughness = {};
+		}
 	};
+	void CreateVisibilityResourcesSimple(VisibilityResources& res, XMUINT2 resolution);
 	void CreateVisibilityResources(VisibilityResources& res, XMUINT2 resolution);
 	void Visibility_Prepare(
 		const VisibilityResources& res,
@@ -439,11 +460,6 @@ namespace wi::renderer
 		wi::graphics::CommandList cmd
 	);
 	void Visibility_Surface(
-		const VisibilityResources& res,
-		const wi::graphics::Texture& output,
-		wi::graphics::CommandList cmd
-	);
-	void Visibility_Surface_Reduced(
 		const VisibilityResources& res,
 		wi::graphics::CommandList cmd
 	);
@@ -453,6 +469,7 @@ namespace wi::renderer
 		wi::graphics::CommandList cmd
 	);
 	void Visibility_Velocity(
+		const VisibilityResources& res,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd
 	);
@@ -488,7 +505,7 @@ namespace wi::renderer
 	void SurfelGI_Coverage(
 		const SurfelGIResources& res,
 		const wi::scene::Scene& scene,
-		const wi::graphics::Texture& lineardepth,
+		const wi::graphics::Texture& depth,
 		const wi::graphics::Texture& debugUAV,
 		wi::graphics::CommandList cmd
 	);
@@ -522,7 +539,6 @@ namespace wi::renderer
 	void VXGI_Resolve(
 		const VXGIResources& res,
 		const wi::scene::Scene& scene,
-		const wi::graphics::Texture& texture_lineardepth,
 		wi::graphics::CommandList cmd
 	);
 
@@ -537,7 +553,6 @@ namespace wi::renderer
 	);
 	void Postprocess_Blur_Bilateral(
 		const wi::graphics::Texture& input,
-		const wi::graphics::Texture& lineardepth,
 		const wi::graphics::Texture& temp,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
@@ -554,7 +569,6 @@ namespace wi::renderer
 	void Postprocess_SSAO(
 		const SSAOResources& res,
 		const wi::graphics::Texture& output,
-		const wi::graphics::Texture& lineardepth,
 		wi::graphics::CommandList cmd,
 		float range = 1.0f,
 		uint32_t samplecount = 16,
@@ -563,7 +577,6 @@ namespace wi::renderer
 	void Postprocess_HBAO(
 		const SSAOResources& res,
 		const wi::scene::CameraComponent& camera,
-		const wi::graphics::Texture& lineardepth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
 		float power = 1.0f
@@ -595,7 +608,6 @@ namespace wi::renderer
 	void Postprocess_MSAO(
 		const MSAOResources& res,
 		const wi::scene::CameraComponent& camera,
-		const wi::graphics::Texture& lineardepth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
 		float power = 1.0f
@@ -615,7 +627,7 @@ namespace wi::renderer
 	void Postprocess_RTAO(
 		const RTAOResources& res,
 		const wi::scene::Scene& scene,
-		const wi::graphics::Texture& lineardepth,
+		const wi::graphics::Texture& depth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
 		float range = 1.0f,
@@ -725,8 +737,6 @@ namespace wi::renderer
 	void Postprocess_RTShadow(
 		const RTShadowResources& res,
 		const wi::scene::Scene& scene,
-		const wi::graphics::GPUBuffer& entityTiles_Opaque,
-		const wi::graphics::Texture& lineardepth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd
 	);
@@ -737,8 +747,6 @@ namespace wi::renderer
 	void CreateScreenSpaceShadowResources(ScreenSpaceShadowResources& res, XMUINT2 resolution);
 	void Postprocess_ScreenSpaceShadow(
 		const ScreenSpaceShadowResources& res,
-		const wi::graphics::GPUBuffer& entityTiles_Opaque,
-		const wi::graphics::Texture& lineardepth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
 		float range = 1,
@@ -987,7 +995,7 @@ namespace wi::renderer
 	);
 	void Postprocess_Upsample_Bilateral(
 		const wi::graphics::Texture& input,
-		const wi::graphics::Texture& lineardepth,
+		const wi::graphics::Texture& depth,
 		const wi::graphics::Texture& output,
 		wi::graphics::CommandList cmd,
 		bool is_pixelshader = false,
@@ -1196,6 +1204,8 @@ namespace wi::renderer
 	void SetToDrawGridHelper(bool value);
 	void SetGridHelperColor(const XMFLOAT4& value);
 	XMFLOAT4 GetGridHelperColor();
+	void SetGridHelper2D(bool value);
+	bool IsGridHelper2D();
 	bool GetToDrawVoxelHelper();
 	void SetToDrawVoxelHelper(bool value, int clipmap_level);
 	void SetDebugLightCulling(bool enabled);
@@ -1265,6 +1275,10 @@ namespace wi::renderer
 	float GetCapsuleShadowFade();
 	void SetShadowLODOverrideEnabled(bool value); // Allow shadowmap rendering to request custom LOD for objects (can result in shadow mismatch, but increased GPU performance)
 	bool IsShadowLODOverrideEnabled();
+
+	// Switch all debug rendering on/off globally
+	void SetDebugDrawEnabled(bool value);
+	bool IsDebugDrawEnabled();
 
 	// Gets pick ray according to the current screen resolution and pointer coordinates. Can be used as input into RayIntersectWorld()
 	wi::primitive::Ray GetPickRay(long cursorX, long cursorY, const wi::Canvas& canvas, const wi::scene::CameraComponent& camera = wi::scene::GetCamera());

@@ -105,9 +105,6 @@
     <None Include="$(MSBuildThisFileDirectory)cylinder.hlsli">
       <Filter>HF</Filter>
     </None>
-    <None Include="$(MSBuildThisFileDirectory)cullingShaderHF.hlsli">
-      <Filter>HF</Filter>
-    </None>
     <None Include="$(MSBuildThisFileDirectory)cube.hlsli">
       <Filter>HF</Filter>
     </None>
@@ -323,31 +320,10 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)lightShaftsCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_ADVANCED_DEBUG.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_DEBUG.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightCullingCS_ADVANCED.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)hbaoCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortInnerCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortStepCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_kickoffSortCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)gpusortlib_sortCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)fxaaCS.hlsl">
@@ -473,9 +449,6 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)volumetricLight_DirectionalPS.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)voxelPS.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)vertexcolorPS.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
@@ -492,9 +465,6 @@
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)shadowPS_transparent.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)shadowPS_water.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)shadowPS_alphatest.hlsl">
@@ -519,15 +489,6 @@
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_paintradius.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_simple.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)objectPS_debug.hlsl">
-      <Filter>PS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)lightVisualizerPS.hlsl">
       <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)lensFlarePS.hlsl">
@@ -815,9 +776,6 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_resolveCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_resolveCS_MSAA.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)surfel_gridoffsetsCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
@@ -832,9 +790,6 @@
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)ddgi_debugVS.hlsl">
       <Filter>VS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)ddgi_debugPS.hlsl">
-      <Filter>PS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)ddgi_raytraceCS.hlsl">
       <Filter>CS</Filter>
@@ -879,12 +834,6 @@
       <Filter>CS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_shadeCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_indirect_prepareCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_skyCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)visibility_surfaceCS.hlsl">
@@ -1058,9 +1007,6 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)wetmap_updateCS.hlsl">
       <Filter>CS</Filter>
     </FxCompile>
-    <FxCompile Include="$(MSBuildThisFileDirectory)causticsCS.hlsl">
-      <Filter>CS</Filter>
-    </FxCompile>
     <FxCompile Include="$(MSBuildThisFileDirectory)objectAS.hlsl">
       <Filter>AS</Filter>
     </FxCompile>
@@ -1142,6 +1088,30 @@
     <FxCompile Include="$(MSBuildThisFileDirectory)emittedparticleVS_shadow.hlsl">
       <Filter>VS</Filter>
     </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatVS.hlsl">
+      <Filter>VS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splatPS.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)gaussian_splat_indirectCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)radix_sortCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)visibility_analyzeCS.hlsl">
+      <Filter>CS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)oceanSurfacePS_shadowmap.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
+    <FxCompile Include="$(MSBuildThisFileDirectory)voidPS.hlsl">
+      <Filter>PS</Filter>
+    </FxCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop.h">
@@ -1157,9 +1127,6 @@
       <Filter>interop</Filter>
     </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_Font.h">
-      <Filter>interop</Filter>
-    </ClInclude>
-    <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_GPUSortLib.h">
       <Filter>interop</Filter>
     </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_HairParticle.h">
@@ -1295,6 +1262,9 @@
       <Filter>interop</Filter>
     </ClInclude>
     <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_VoxelGrid.h">
+      <Filter>interop</Filter>
+    </ClInclude>
+    <ClInclude Include="$(MSBuildThisFileDirectory)ShaderInterop_GaussianSplat.h">
       <Filter>interop</Filter>
     </ClInclude>
   </ItemGroup>
