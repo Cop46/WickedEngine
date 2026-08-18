@@ -459,8 +459,6 @@ void PaintToolWindow::UpdateData(float dt)
 	int substep_count = (int)std::ceil(wi::math::Distance(pos, posNew) / (radius * pressureNew));
 	substep_count = std::max(1, std::min(100, substep_count));
 
-	wi::jobsystem::context ctx;
-
 	for (int substep = 0; substep < substep_count; ++substep)
 	{
 		const float t = float(substep) / float(substep_count);
@@ -763,30 +761,28 @@ void PaintToolWindow::UpdateData(float dt)
 
 				bool rebuild = false;
 
-				switch (mode)
-				{
-				case MODE_VERTEXCOLOR:
-					if (mesh->vertex_colors.empty())
-					{
-						mesh->vertex_colors.resize(mesh->vertex_positions.size());
-						std::fill(mesh->vertex_colors.begin(), mesh->vertex_colors.end(), wi::Color::White().rgba); // fill white
-						rebuild = true;
-					}
-					break;
-				case MODE_WIND:
-					if (mesh->vertex_windweights.empty())
-					{
-						mesh->vertex_windweights.resize(mesh->vertex_positions.size());
-						std::fill(mesh->vertex_windweights.begin(), mesh->vertex_windweights.end(), 0xFF); // fill max affection
-						rebuild = true;
-					}
-					break;
-				default:
-					break;
-				}
-
 				if (painting)
 				{
+					switch (mode)
+					{
+					case MODE_VERTEXCOLOR:
+						if (mesh->vertex_colors.empty())
+						{
+							mesh->vertex_colors.resize(mesh->vertex_positions.size(), wi::Color::White().rgba); // fill white
+							rebuild = true;
+						}
+						break;
+					case MODE_WIND:
+						if (mesh->vertex_windweights.empty())
+						{
+							mesh->vertex_windweights.resize(mesh->vertex_positions.size(), 0xFF); // fill max affection
+							rebuild = true;
+						}
+						break;
+					default:
+						break;
+					}
+
 					for (size_t j = 0; j < mesh->vertex_positions.size(); ++j)
 					{
 						XMVECTOR P, N;
@@ -861,17 +857,23 @@ void PaintToolWindow::UpdateData(float dt)
 							XMStoreFloat3(&tri.positionA, P[0]);
 							XMStoreFloat3(&tri.positionB, P[1]);
 							XMStoreFloat3(&tri.positionC, P[2]);
-							if (mode == MODE_WIND)
+							if (mode == MODE_WIND && !mesh->vertex_windweights.empty())
 							{
-								tri.colorA = wi::Color(mesh->vertex_windweights[triangle[0]], 0, 0, 255);
-								tri.colorB = wi::Color(mesh->vertex_windweights[triangle[1]], 0, 0, 255);
-								tri.colorC = wi::Color(mesh->vertex_windweights[triangle[2]], 0, 0, 255);
+								tri.colorA = wi::Color::lerp(wi::Color::Black(), wi::Color::White(), float(mesh->vertex_windweights[triangle[0]]) / 255.0f);
+								tri.colorB = wi::Color::lerp(wi::Color::Black(), wi::Color::White(), float(mesh->vertex_windweights[triangle[1]]) / 255.0f);
+								tri.colorC = wi::Color::lerp(wi::Color::Black(), wi::Color::White(), float(mesh->vertex_windweights[triangle[2]]) / 255.0f);
+							}
+							else if (mode == MODE_VERTEXCOLOR && !mesh->vertex_colors.empty())
+							{
+								tri.colorA = wi::Color(mesh->vertex_colors[triangle[0]]);
+								tri.colorB = wi::Color(mesh->vertex_colors[triangle[1]]);
+								tri.colorC = wi::Color(mesh->vertex_colors[triangle[2]]);
 							}
 							else
 							{
-								tri.colorA.w = 0.8f;
-								tri.colorB.w = 0.8f;
-								tri.colorC.w = 0.8f;
+								tri.colorA = wi::Color::White();
+								tri.colorB = wi::Color::White();
+								tri.colorC = wi::Color::White();
 							}
 							wi::renderer::DrawTriangle(tri, true);
 						}
@@ -1026,18 +1028,16 @@ void PaintToolWindow::UpdateData(float dt)
 							}
 						}
 
-						wi::jobsystem::Execute(ctx, [=](wi::jobsystem::JobArgs args) {
-							if (mesh->bvh.IsValid())
-							{
-								mesh->BuildBVH();
-							}
+						if (mesh->bvh.IsValid())
+						{
+							mesh->BuildBVH();
+						}
 
-							if (chunk_data != nullptr)
-							{
-								chunk_data->heightmap = {};
-								terrain->CreateChunkRegionTexture(*chunk_data);
-							}
-						});
+						if (chunk_data != nullptr)
+						{
+							chunk_data->heightmap = {};
+							terrain->CreateChunkRegionTexture(*chunk_data);
+						}
 					}
 				}
 
@@ -1087,9 +1087,7 @@ void PaintToolWindow::UpdateData(float dt)
 
 				if (rebuild)
 				{
-					wi::jobsystem::Execute(ctx, [=](wi::jobsystem::JobArgs args) {
-						mesh->ComputeNormals(MeshComponent::COMPUTE_NORMALS_SMOOTH_FAST);
-					});
+					mesh->ComputeNormals(MeshComponent::COMPUTE_NORMALS_SMOOTH_FAST);
 				}
 			}
 		}
@@ -1344,8 +1342,6 @@ void PaintToolWindow::UpdateData(float dt)
 		break;
 
 		}
-
-		wi::jobsystem::Wait(ctx);
 	}
 
 	while (strokes.size() > stabilizer)

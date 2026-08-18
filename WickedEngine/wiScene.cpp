@@ -242,11 +242,9 @@ namespace wi::scene
 
 			wi::jobsystem::Execute(ctx, [&](wi::jobsystem::JobArgs args) {
 				// Must not keep inactive instances, so init them for safety:
-				ShaderMeshInstance inst;
-				inst.init();
 				for (uint32_t i = 0; i < instanceArraySize; ++i)
 				{
-					std::memcpy(instanceArrayMapped + i, &inst, sizeof(inst));
+					std::memcpy(instanceArrayMapped + i, &shader_mesh_instance_null, sizeof(shader_mesh_instance_null));
 				}
 			});
 		}
@@ -549,7 +547,7 @@ namespace wi::scene
 				device->SetName(&surfelgi.indirectBuffer, "surfelgi.indirectBuffer");
 
 				buf.stride = sizeof(SurfelGridCell);
-				buf.size = buf.stride * SURFEL_TABLE_SIZE;
+				buf.size = buf.stride * SURFEL_TOTAL_TABLE_SIZE; // one hash table per cascaded grid level
 				buf.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
 				device->CreateBufferZeroed(&buf, &surfelgi.gridBuffer);
 				device->SetName(&surfelgi.gridBuffer, "surfelgi.gridBuffer");
@@ -565,6 +563,19 @@ namespace wi::scene
 				buf.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
 				device->CreateBufferZeroed(&buf, &surfelgi.rayBuffer);
 				device->SetName(&surfelgi.rayBuffer, "surfelgi.rayBuffer");
+
+#ifdef SURFEL_RAY_SORTING
+				// Ray-sort key + payload: one uint per ray slot (gpusortlib
+				// sorts uint32 structured buffers). Payload (SHADER_RESOURCE)
+				// is read by the raytrace to remap thread -> original ray slot.
+				buf.stride = sizeof(uint32_t);
+				buf.size = buf.stride * SURFEL_RAY_BUDGET;
+				buf.misc_flags = ResourceMiscFlag::BUFFER_STRUCTURED;
+				device->CreateBufferZeroed(&buf, &surfelgi.raySortKeyBuffer);
+				device->SetName(&surfelgi.raySortKeyBuffer, "surfelgi.raySortKeyBuffer");
+				device->CreateBufferZeroed(&buf, &surfelgi.raySortPayloadBuffer);
+				device->SetName(&surfelgi.raySortPayloadBuffer, "surfelgi.raySortPayloadBuffer");
+#endif // SURFEL_RAY_SORTING
 
 				TextureDesc tex;
 				tex.width = SURFEL_MOMENT_ATLAS_TEXELS;
@@ -983,6 +994,23 @@ namespace wi::scene
 		shaderscene.ddgi.cell_size_rcp.y = 1.0f / shaderscene.ddgi.cell_size.y;
 		shaderscene.ddgi.cell_size_rcp.z = 1.0f / shaderscene.ddgi.cell_size.z;
 		shaderscene.ddgi.max_distance = std::max(shaderscene.ddgi.cell_size.x, std::max(shaderscene.ddgi.cell_size.y, shaderscene.ddgi.cell_size.z)) * 1.5f;
+
+		// Expose the surfel GI cache to shaders that gather it outside the
+		// surfel passes (the forward transparent/water path via
+		// SampleSurfelGI). Only the read side of the cache is needed here; -1
+		// when surfel GI is inactive so the sampler's guard skips it.
+		if (surfelgi.surfelBuffer.IsValid())
+		{
+			shaderscene.surfelgi.buffer = device->GetDescriptorIndex(&surfelgi.surfelBuffer, SubresourceType::SRV);
+			shaderscene.surfelgi.gridbuffer = device->GetDescriptorIndex(&surfelgi.gridBuffer, SubresourceType::SRV);
+			shaderscene.surfelgi.cellbuffer = device->GetDescriptorIndex(&surfelgi.cellBuffer, SubresourceType::SRV);
+		}
+		else
+		{
+			shaderscene.surfelgi.buffer = -1;
+			shaderscene.surfelgi.gridbuffer = -1;
+			shaderscene.surfelgi.cellbuffer = -1;
+		}
 
 		shaderscene.terrain.init();
 		if (terrains.GetCount() > 0)
@@ -4389,8 +4417,7 @@ namespace wi::scene
 
 		if (impostors.GetCount() > 0)
 		{
-			ShaderMaterial material;
-			material.init();
+			ShaderMaterial material = shader_material_null;
 			material.shaderType_meshblend = 0xFFFF;
 			std::memcpy(materialArrayMapped + impostorMaterialOffset, &material, sizeof(material));
 
@@ -5102,8 +5129,7 @@ namespace wi::scene
 			size_t geometryAllocation = geometryAllocator.fetch_add(1);
 			std::memcpy(geometryArrayMapped + geometryAllocation, &geometry, sizeof(geometry));
 
-			ShaderMeshInstance inst;
-			inst.init();
+			ShaderMeshInstance inst = shader_mesh_instance_null;
 			inst.uid = entity;
 			inst.layerMask = hair.layerMask;
 			inst.emissive = wi::math::pack_half3(XMFLOAT3(1, 1, 1));
@@ -5122,10 +5148,6 @@ namespace wi::scene
 			{
 				XMStoreFloat4x4(&remapMatrix, hair.aabb.getUnormRemapMatrix());
 				inst.transform.Create(remapMatrix);
-			}
-			else
-			{
-				inst.transform.init();
 			}
 			inst.transformPrev = inst.transform;
 
@@ -5222,8 +5244,7 @@ namespace wi::scene
 			size_t geometryAllocation = geometryAllocator.fetch_add(1);
 			std::memcpy(geometryArrayMapped + geometryAllocation, &geometry, sizeof(geometry));
 
-			ShaderMeshInstance inst;
-			inst.init();
+			ShaderMeshInstance inst = shader_mesh_instance_null;
 			inst.uid = entity;
 			inst.layerMask = emitter.layerMask;
 			inst.emissive = wi::math::pack_half3(XMFLOAT3(1, 1, 1));
@@ -5401,8 +5422,7 @@ namespace wi::scene
 			rainEmitter.UpdateCPU(transform, dt);
 			rain_blocker_dummy_light.cascade_distances[0] = transform.scale_local.x;
 
-			ShaderMaterial material;
-			material.init();
+			ShaderMaterial material = shader_material_null;
 			rainMaterial.WriteShaderMaterial(&material);
 			std::memcpy(materialArrayMapped + rainMaterialOffset, &material, sizeof(material));
 
@@ -5419,8 +5439,7 @@ namespace wi::scene
 
 			std::memcpy(geometryArrayMapped + rainGeometryOffset, &geometry, sizeof(geometry));
 
-			ShaderMeshInstance inst;
-			inst.init();
+			ShaderMeshInstance inst = shader_mesh_instance_null;
 			inst.uid = 0;
 			inst.layerMask = ~0u;
 			inst.emissive = wi::math::pack_half3(XMFLOAT3(1, 1, 1));
@@ -8880,12 +8899,45 @@ namespace wi::scene
 
 	uint32_t Scene::ComputeObjectLODForView(const ObjectComponent& object, const AABB& aabb, const MeshComponent& mesh, const XMMATRIX& ViewProjection) const
 	{
-		XMFLOAT4 rect = aabb.ProjectToScreen(ViewProjection);
-		float width = rect.z - rect.x;
-		float height = rect.w - rect.y;
-		float maxdim = std::max(width, height);
-		float lod_max = float(mesh.GetLODCount() - 1);
-		float lod = clamp(std::log2(1.0f / maxdim) + object.lod_bias, 0.0f, lod_max);
+		const float lod_max = float(mesh.GetLODCount() - 1);
+
+		// Estimate the object's projected screen-space size to pick a LOD by
+		// coverage. The perspective divide (x/w) explodes as an AABB corner
+		// approaches the camera plane (w -> 0), and flips sign behind it (w <
+		// 0). The old code (ProjectToScreen) divided unconditionally, so any
+		// object straddling or touching the camera plane -- very common for
+		// large terrain chunks near the camera -- produced a huge bogus extent
+		// and was forced to LOD 0 (max density) regardless of lod_bias, with
+		// the result flipping as the view angle changed.
+		//
+		// Fix: guard w away from zero and clamp each projected corner to a
+		// bounded box around the screen. This keeps the extent (and therefore
+		// the LOD) finite and stable even when the AABB crosses the camera
+		// plane, so lod_bias is honored.
+		const XMVECTOR MUL = XMVectorSet(0.5f, -0.5f, 1, 1);
+		const XMVECTOR ADD = XMVectorSet(0.5f, 0.5f, 0, 0);
+		// One screen of margin each side, so partially off-screen objects still
+		// read as large without the near-plane blowup running away to infinity:
+		const XMVECTOR UV_MIN = XMVectorReplicate(-1.0f);
+		const XMVECTOR UV_MAX = XMVectorReplicate(2.0f);
+		XMVECTOR screen_min = XMVectorReplicate(1000000.0f);
+		XMVECTOR screen_max = XMVectorReplicate(-1000000.0f);
+		for (int i = 0; i < 8; ++i)
+		{
+			XMFLOAT3 c = aabb.corner(i);
+			XMVECTOR C = XMVector3Transform(XMLoadFloat3(&c), ViewProjection);	// world -> clip (keep w)
+			const float w = std::max(XMVectorGetW(C), 1e-4f);					// guard against w -> 0 / behind camera
+			C = XMVectorDivide(C, XMVectorReplicate(w));						// clip -> NDC (perspective divide)
+			C = XMVectorMultiplyAdd(C, MUL, ADD);								// NDC -> uv
+			C = XMVectorClamp(C, UV_MIN, UV_MAX);								// bound the near-plane blowup
+			screen_min = XMVectorMin(screen_min, C);
+			screen_max = XMVectorMax(screen_max, C);
+		}
+
+		const float width = XMVectorGetX(screen_max) - XMVectorGetX(screen_min);
+		const float height = XMVectorGetY(screen_max) - XMVectorGetY(screen_min);
+		const float maxdim = std::max(width, height);
+		const float lod = clamp(std::log2(1.0f / maxdim) + object.lod_bias, 0.0f, lod_max);
 		return uint32_t(lod);
 	}
 
